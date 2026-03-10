@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@mzon7/zon-incubator-sdk/auth";
 
 export default function LoginPage() {
-  const { signIn, registrationError } = useAuth();
+  const { signIn } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -19,11 +19,11 @@ export default function LoginPage() {
     if (err) {
       setError(err);
     } else {
-      navigate("/home", { replace: true });
+      navigate("/", { replace: true });
     }
   };
 
-  const displayError = error || registrationError;
+  const displayError = error;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
