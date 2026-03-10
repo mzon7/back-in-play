@@ -225,16 +225,28 @@ def get_or_create_player(name, team_id, position="Unknown"):
     if key in _player_cache:
         return _player_cache[key]
     slug = slugify(name)
-    existing = sb_get("back_in_play_players", "team_id=eq.%s&slug=eq.%s&select=player_id" % (team_id, slug))
+    # Players table has globally unique slug -- first check if player exists anywhere
+    existing = sb_get("back_in_play_players", "slug=eq.%s&select=player_id,team_id" % slug)
     if existing:
-        _player_cache[key] = existing[0]["player_id"]
-        return existing[0]["player_id"]
+        # Player exists -- use them (may be on different team in different season)
+        pid = existing[0]["player_id"]
+        _player_cache[key] = pid
+        # Update team if different (player traded)
+        if existing[0]["team_id"] != team_id:
+            sb_request("PATCH", "back_in_play_players?player_id=eq.%s" % pid,
+                       {"team_id": team_id})
+        return pid
     result = sb_request("POST", "back_in_play_players", {
         "player_name": name, "team_id": team_id, "position": position, "slug": slug
     })
     if result and isinstance(result, list):
         _player_cache[key] = result[0]["player_id"]
         return result[0]["player_id"]
+    # If 409 conflict, slug already exists -- look it up
+    existing2 = sb_get("back_in_play_players", "slug=eq.%s&select=player_id" % slug)
+    if existing2:
+        _player_cache[key] = existing2[0]["player_id"]
+        return existing2[0]["player_id"]
     return None
 
 
@@ -410,7 +422,7 @@ def ingest_mlb(checkpoint):
                 })
 
             if injuries:
-                count = sb_upsert("back_in_play_injuries", injuries, "player_id,date_injured")
+                count = sb_upsert("back_in_play_injuries", injuries, "player_id,date_injured,injury_type_slug")
                 year_count += count
 
             time.sleep(0.5)
@@ -550,7 +562,7 @@ def ingest_espn_league(checkpoint, league_key):
                         })
 
                 if injuries:
-                    count = sb_upsert("back_in_play_injuries", injuries, "player_id,date_injured")
+                    count = sb_upsert("back_in_play_injuries", injuries, "player_id,date_injured,injury_type_slug")
                     year_count += count
 
                 page_count = data.get("pageCount", 1)
@@ -737,7 +749,7 @@ def ingest_epl(checkpoint):
                     })
 
                 if injuries:
-                    count = sb_upsert("back_in_play_injuries", injuries, "player_id,date_injured")
+                    count = sb_upsert("back_in_play_injuries", injuries, "player_id,date_injured,injury_type_slug")
                     club_count += count
 
                 time.sleep(2)  # Be respectful of TM rate limits
