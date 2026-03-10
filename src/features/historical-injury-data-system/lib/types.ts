@@ -55,3 +55,28 @@ export function getSeverityColor(injuryType: string): string {
     minor: "#3DFF8F",
   }[severity];
 }
+
+/**
+ * Prediction model: estimate return date from injury date + median recovery days.
+ * expected_return_date = injury_date + median_recovery_days
+ *
+ * @param injuryDate  ISO date string (YYYY-MM-DD)
+ * @param medianDays  Median recovery days for this injury type in this league
+ * @returns           ISO date string (YYYY-MM-DD) for predicted return
+ */
+export function predictReturnDate(injuryDate: string, medianDays: number): string {
+  const ms = new Date(injuryDate).getTime() + Math.round(medianDays) * 24 * 60 * 60 * 1000;
+  return new Date(ms).toISOString().split("T")[0];
+}
+
+/**
+ * Look up the best-matching RecoveryStat for a given injury description and league,
+ * then return the predicted return date (or null if no stat found).
+ */
+export function predictReturnDateFromStat(
+  injuryDate: string,
+  stat: RecoveryStat | null | undefined
+): string | null {
+  if (!stat || stat.median_recovery_days == null) return null;
+  return predictReturnDate(injuryDate, stat.median_recovery_days);
+}
