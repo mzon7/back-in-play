@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* PWA native-feel: prevent zoom, bounce, accidental selection */
+html {
+  touch-action: manipulation;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+body {
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Allow text selection in inputs, textareas, and content areas */
+input, textarea, [contenteditable="true"], pre, code, .selectable {
+  -webkit-user-select: auto;
+  user-select: auto;
+  -webkit-touch-callout: default;
+}
+
+/* Hide scrollbars on mobile (touch devices scroll natively without needing visible scrollbars) */
+@media (pointer: coarse) {
+  * {
+    scrollbar-width: none;
+  }
+  *::-webkit-scrollbar {
+    display: none;
+  }
+}
