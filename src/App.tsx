@@ -1,11 +1,20 @@
+import { useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { AuthCallback } from "@mzon7/zon-incubator-sdk/auth";
 import { supabase } from "./lib/supabase";
+import { installFrontendErrorCapture } from "./lib/errorReporting";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
 import HomePage from "./features/home-page-injury-snapshots/components/HomePage";
 
 export default function App() {
+  useEffect(() => {
+    // Secondary error capture registration (primary is in main.tsx).
+    // useEffect gives a cleanup handle for React strict-mode compatibility.
+    const cleanup = installFrontendErrorCapture(supabase, "back_in_play_");
+    return cleanup;
+  }, []);
+
   return (
     <Routes>
       {/* Public routes */}
