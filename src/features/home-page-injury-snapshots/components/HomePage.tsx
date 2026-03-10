@@ -1,7 +1,8 @@
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useLatestInjuries, useCurrentlyInjured, useReturningSoon } from "../lib/queries";
 import { InjuryTable } from "./InjuryTable";
 import { SectionCard } from "./SectionCard";
+import { config } from "../../../config";
 
 const LEAGUES = [
   { label: "NFL", slug: "nfl" },
@@ -12,9 +13,19 @@ const LEAGUES = [
 ];
 
 export default function HomePage() {
+  const [searchParams] = useSearchParams();
+
+  // Allow ?windowDays=<n> to override the default for quick tuning
+  const paramRaw = searchParams.get("windowDays");
+  const paramNum = Number(paramRaw);
+  const windowDays =
+    paramRaw !== null && Number.isFinite(paramNum) && paramNum > 0
+      ? paramNum
+      : config.returningSoonWindowDays;
+
   const latest = useLatestInjuries({ limit: 10 });
   const current = useCurrentlyInjured({ limit: 10 });
-  const returning = useReturningSoon({ limit: 10, windowDays: 14 });
+  const returning = useReturningSoon({ limit: 10, windowDays });
 
   return (
     <div className="min-h-screen bg-[#0A0E1A] text-white">
@@ -108,7 +119,7 @@ export default function HomePage() {
           <InjuryTable
             rows={returning.data ?? []}
             isLoading={returning.isLoading}
-            emptyMessage="No players returning in the next 14 days."
+            emptyMessage={`No players returning in the next ${windowDays} days.`}
           />
         </SectionCard>
       </main>
