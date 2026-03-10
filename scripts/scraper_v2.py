@@ -321,6 +321,31 @@ def extract_players_from_espn(desc):
     return players
 
 
+def extract_players_from_espn_return(desc):
+    """Extract player names from ESPN return/activation descriptions."""
+    names = []
+    # "activated QB Patrick Mahomes from injured reserve"
+    m = re.search(r"activated\s+(.*?)\s+from\s+", desc, re.I)
+    if m:
+        text = m.group(1)
+        text = text.replace(" and ", ", ")
+        for seg in text.split(","):
+            seg = seg.strip()
+            name = POS_PATTERN.sub("", seg).strip()
+            name = re.sub(r"\s+", " ", name).strip()
+            if name and len(name) > 2 and " " in name:
+                names.append(name)
+    # Also try "reinstated ... from"
+    m2 = re.search(r"reinstated\s+(.*?)\s+from\s+", desc, re.I)
+    if m2:
+        text = m2.group(1)
+        name = POS_PATTERN.sub("", text).strip()
+        name = re.sub(r"\s+", " ", name).strip()
+        if name and len(name) > 2 and " " in name:
+            names.append(name)
+    return names
+
+
 # =============================================================================
 # MLB -- statsapi.mlb.com
 # =============================================================================
@@ -338,6 +363,9 @@ def ingest_mlb(checkpoint):
             continue
 
         year_count = 0
+        # Collect returns to match with placements later
+        returns = []  # (player_slug, return_date)
+
         for month in range(1, 13):
             start = "%d-%02d-01" % (year, month)
             if month == 12:
@@ -345,7 +373,6 @@ def ingest_mlb(checkpoint):
             else:
                 end = "%d-%02d-01" % (year, month + 1)
 
-            # Skip future months
             if start > date.today().isoformat():
                 continue
 
@@ -361,39 +388,33 @@ def ingest_mlb(checkpoint):
                 desc = txn.get("description", "")
                 desc_lower = desc.lower()
 
+                person = txn.get("person", {})
+                pname = person.get("fullName", "")
+                team_data = txn.get("toTeam") or txn.get("fromTeam")
+                txn_date = (txn.get("effectiveDate") or txn.get("date", ""))[:10]
+
+                # Capture returns/activations for recovery tracking
+                if any(kw in desc_lower for kw in [
+                    "activated from", "reinstated from", "recalled from"
+                ]):
+                    if pname and txn_date:
+                        returns.append((slugify(pname), txn_date))
+                    continue
+
                 # Filter for IL/DL placements
                 if not any(kw in desc_lower for kw in [
                     "placed on", "transferred to the", "injured list", "disabled list",
                     "10-day", "15-day", "60-day", "7-day"
                 ]):
                     continue
-                # Skip activations/returns
-                if any(kw in desc_lower for kw in [
-                    "activated from", "reinstated from", "recalled from",
-                    "returned from", "transferred to the 60-day"
-                ]):
-                    # Keep "transferred to the 60-day" -- that's a placement
-                    if "transferred to the 60-day" not in desc_lower:
-                        continue
 
-                team_data = txn.get("toTeam") or txn.get("fromTeam")
-                if not team_data:
+                if not team_data or not txn_date:
                     continue
 
                 team_name = team_data.get("name", "Unknown")
-                txn_date = (txn.get("effectiveDate") or txn.get("date", ""))[:10]
-                if not txn_date:
-                    continue
-
-                # Extract player name -- MLB descriptions are structured:
-                # "Team placed Player Name on the 10-day injured list..."
-                # Try to get from the person field first
-                person = txn.get("person", {})
-                pname = person.get("fullName", "")
 
                 if not pname:
-                    # Fallback: parse from description
-                    m = re.search(r"(?:placed|transferred)\s+(?:OF|IF|SS|1B|2B|3B|C|P|SP|RP|LHP|RHP|DH)?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z'.]+)+)", desc)
+                    m = re.search(r"(?:placed|transferred)\s+(?:OF|IF|SS|1B|2B|3B|C|P|SP|RP|LHP|RHP|DH)?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z\'.]+)+)", desc)
                     if m:
                         pname = m.group(1)
                     else:
@@ -409,6 +430,7 @@ def ingest_mlb(checkpoint):
                     continue
                 player_id = get_or_create_player(pname, team_id, position)
                 if not player_id:
+                    print("    [WARN] Could not create player: %s" % pname, flush=True)
                     continue
 
                 injuries.append({
@@ -424,8 +446,14 @@ def ingest_mlb(checkpoint):
             if injuries:
                 count = sb_upsert("back_in_play_injuries", injuries, "player_id,date_injured,injury_type_slug")
                 year_count += count
+                print("    %d-%02d: %d placements (%d upserted)" % (year, month, len(injuries), count), flush=True)
 
-            time.sleep(0.5)
+            time.sleep(0.3)
+
+        # Match returns to injuries to set return_date + recovery_days
+        if returns:
+            matched = match_returns(league_id, returns, year)
+            print("    Matched %d returns to injuries" % matched, flush=True)
 
         print("  [%d] %d IL placements" % (year, year_count), flush=True)
         mark_done(checkpoint, "mlb", year, year_count)
@@ -433,6 +461,49 @@ def ingest_mlb(checkpoint):
 
     print("\n  MLB TOTAL: %d" % total, flush=True)
     return total
+
+
+def match_returns(league_id, returns, year):
+    """Match return/activation transactions to open injuries to set return_date."""
+    matched = 0
+    for player_slug, return_date in returns:
+        # Find the player
+        players = sb_get("back_in_play_players", "slug=eq.%s&select=player_id" % player_slug)
+        if not players:
+            continue
+        pid = players[0]["player_id"]
+
+        # Find latest open injury for this player before return date
+        injuries = sb_get(
+            "back_in_play_injuries",
+            "player_id=eq.%s&date_injured=lt.%s&return_date=is.null&status=eq.out"
+            "&order=date_injured.desc&limit=1" % (pid, return_date)
+        )
+        if not injuries:
+            continue
+
+        inj = injuries[0]
+        inj_date = inj.get("date_injured", "")
+        if not inj_date:
+            continue
+
+        # Calculate recovery days
+        try:
+            d1 = datetime.strptime(inj_date, "%Y-%m-%d")
+            d2 = datetime.strptime(return_date, "%Y-%m-%d")
+            days = (d2 - d1).days
+            if days < 0 or days > 365:
+                continue
+        except Exception:
+            continue
+
+        # Update the injury
+        sb_request("PATCH",
+                   "back_in_play_injuries?injury_id=eq.%s" % inj["injury_id"],
+                   {"return_date": return_date, "recovery_days": days, "status": "recovered"})
+        matched += 1
+
+    return matched
 
 
 # =============================================================================
@@ -472,6 +543,7 @@ def ingest_espn_league(checkpoint, league_key):
             continue
 
         year_count = 0
+        returns = []  # (player_slug, return_date) for recovery tracking
 
         # Scrape in seasonal windows
         if league_key == "nfl":
@@ -525,12 +597,19 @@ def ingest_espn_league(checkpoint, league_key):
                 for txn in txns:
                     desc = txn.get("description", "")
                     desc_lower = desc.lower()
+                    txn_date = txn.get("date", "")[:10]
+
+                    # Capture returns for recovery tracking
+                    is_return = any(kw in desc_lower for kw in SKIP_KEYWORDS)
+                    if is_return:
+                        ret_players = extract_players_from_espn_return(desc)
+                        for rp in ret_players:
+                            if rp and txn_date:
+                                returns.append((slugify(rp), txn_date))
+                        continue
 
                     is_injury = any(kw in desc_lower for kw in IR_KEYWORDS)
                     if not is_injury:
-                        continue
-                    is_return = any(kw in desc_lower for kw in SKIP_KEYWORDS)
-                    if is_return:
                         continue
 
                     team_data = txn.get("team", {})
@@ -572,6 +651,11 @@ def ingest_espn_league(checkpoint, league_key):
                 time.sleep(RATE_LIMIT_DELAY)
 
             time.sleep(0.5)
+
+        # Match returns to injuries
+        if returns:
+            matched = match_returns(league_id, returns, year)
+            print("    Matched %d returns" % matched, flush=True)
 
         print("  [%d] %d injuries" % (year, year_count), flush=True)
         mark_done(checkpoint, league_key, year, year_count)
