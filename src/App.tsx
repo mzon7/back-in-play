@@ -6,6 +6,7 @@ import { installFrontendErrorCapture } from "./lib/errorReporting";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
 import HomePage from "./features/home-page-injury-snapshots/components/HomePage";
+import { RecoveryStatsPage } from "./features/historical-injury-data-system/components/RecoveryStatsPage";
 
 export default function App() {
   useEffect(() => {
@@ -25,6 +26,8 @@ export default function App() {
         path="/auth/callback"
         element={<AuthCallback supabase={supabase} redirectTo="/" />}
       />
+
+      <Route path="/recovery-stats" element={<RecoveryStatsPage />} />
 
       {/* Placeholder routes — will be filled in subsequent feature steps */}
       <Route path="/latest-injuries" element={<HomePage />} />
