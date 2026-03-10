@@ -75,8 +75,8 @@ def sb_upsert(table, rows, conflict=""):
     if conflict:
         url += "?on_conflict=" + conflict
     total = 0
-    for i in range(0, len(rows), 500):
-        batch = rows[i:i + 500]
+    for i in range(0, len(rows), 100):
+        batch = rows[i:i + 100]
         data = json.dumps(batch).encode()
         for attempt in range(MAX_RETRIES):
             try:
@@ -85,6 +85,28 @@ def sb_upsert(table, rows, conflict=""):
                 result = json.loads(resp.read().decode())
                 total += len(result) if isinstance(result, list) else 1
                 break
+            except urllib.error.HTTPError as e:
+                body = ""
+                try:
+                    body = e.read().decode()[:300]
+                except Exception:
+                    pass
+                if attempt < MAX_RETRIES - 1:
+                    wait = 2 ** attempt
+                    print("    [upsert retry %d] %s %s" % (attempt + 1, e, body), flush=True)
+                    time.sleep(wait)
+                else:
+                    # Try inserting one by one to find the bad row
+                    print("    [batch fail] trying row-by-row for %d rows" % len(batch), flush=True)
+                    for row in batch:
+                        try:
+                            req2 = urllib.request.Request(url, data=json.dumps([row]).encode(), headers=hdrs, method="POST")
+                            resp2 = urllib.request.urlopen(req2, timeout=30)
+                            resp2.read()
+                            total += 1
+                        except Exception as e2:
+                            pass  # skip bad rows silently
+                    break
             except Exception as e:
                 if attempt < MAX_RETRIES - 1:
                     wait = 2 ** attempt
