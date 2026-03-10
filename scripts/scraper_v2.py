@@ -70,6 +70,17 @@ def sb_request(method, path, body=None):
 def sb_upsert(table, rows, conflict=""):
     if not rows:
         return 0
+    # Deduplicate rows by conflict keys to avoid "cannot affect row a second time"
+    if conflict:
+        conflict_keys = conflict.split(",")
+        seen = set()
+        unique_rows = []
+        for r in rows:
+            key = tuple(r.get(k) for k in conflict_keys)
+            if key not in seen:
+                seen.add(key)
+                unique_rows.append(r)
+        rows = unique_rows
     hdrs = sb_headers("return=representation,resolution=merge-duplicates")
     url = SUPABASE_URL + "/rest/v1/" + table
     if conflict:
@@ -522,7 +533,7 @@ def match_returns(league_id, returns, year):
         # Update the injury
         sb_request("PATCH",
                    "back_in_play_injuries?injury_id=eq.%s" % inj["injury_id"],
-                   {"return_date": return_date, "recovery_days": days, "status": "recovered"})
+                   {"return_date": return_date, "recovery_days": days, "status": "returned"})
         matched += 1
 
     return matched
@@ -850,7 +861,7 @@ def ingest_epl(checkpoint):
                         "return_date": return_date,
                         "recovery_days": recovery_days,
                         "games_missed": gm,
-                        "status": "recovered" if return_date else "out",
+                        "status": "returned" if return_date else "out",
                         "source": "transfermarkt.co.uk",
                     })
 
