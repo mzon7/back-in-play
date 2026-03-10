@@ -47,3 +47,47 @@
   - `import { createProjectClient, dbTable, validateEnv, callEdgeFunction } from '@mzon7/zon-incubator-sdk'`
   - `import { AuthProvider, useAuth, ProtectedRoute, AuthCallback } from '@mzon7/zon-incubator-sdk/auth'`
 - The Supabase client and dbTable helper are already configured in `src/lib/supabase.ts`
+
+## Project Context
+
+## Back In Play — Project Context for Coding AI (Claude)
+
+### Domain + Core Entities (Supabase Postgres)
+- **leagues**
+  - `league_id` (PK), `league_name`, `slug` (unique; e.g., `nfl`)
+- **teams**
+  - `team_id` (PK), `team_name`, `league_id` (FK → leagues)
+- **players**
+  - `player_id` (PK), `player_name`, `team_id` (FK → teams), `position`, `slug` (unique; stable = name + id)
+- **injuries**
+  - `injury_id` (PK), `player_id` (FK → players), `injury_type`, `injury_type_slug`,
+  - `injury_description`, `date_injured`, `expected_recovery_range`, `expected_return_date`,
+  - `status` enum: `out|doubtful|questionable|probable|returned`
+- **Indexes (expected)**
+  - `players(player_name)`, `players(slug)`, `teams(league_id)`
+  - `injuries(player_id, date_injured desc)`, `injuries(status)`, `injuries(expected_return_date)`, `injuries(injury_type_slug)`
+  - `leagues(slug)`
+
+### Non-obvious Query Logic
+- **“Current injury”** = latest injury per player where `status != 'returned'`
+  - Prefer DB **view** `current_injuries`:
+    - `SELECT DISTINCT ON (player_id) * FROM injuries WHERE status != 'returned' ORDER BY player_id, date_injured DESC, injury_id DESC;`
+  - If view absent, emulate in repository (not in UI components).
+
+### Routing + SEO (SPA-first)
+- React Router routes:
+  - `/`, `/latest-injuries`, `/league/:leagueSlug`, `/player/:playerSlug`, `/injury-type/:injuryTypeSlug`, `/return-tracker`, `/search`
+- SEO requirements:
+  - Set `<title>`/meta + **JSON-LD** per page.
+  - Lightweight **pre-render** on Vercel for known leagues + common injury types (MVP); dynamic otherwise.
+
+### Data Access + State
+- Use a **repository layer** (`src/data/`) encapsulating Supabase queries + “current injury” logic.
+- **TanStack Query** for server-state caching/pagination/deduping.
+- UI filters/sorts in component state; **sync to URL query params** for shareable links.
+
+### Integrations / Server-side
+- **Supabase Edge Function** via `callEdgeFunction` for ingestion (admin-key protected):
+  - transactional upserts (leagues/teams/players) + inserts (injuries)
+  - Zod-validated payloads
+- **Sentry** enabled (frontend + edge functions).
