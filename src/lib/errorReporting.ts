@@ -7,7 +7,8 @@
  * exports if the SDK adds them in future.
  */
 
-import { supabase } from "./supabase";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { supabase as defaultSupabase } from "./supabase";
 
 export const PROJECT_PREFIX = "back_in_play_";
 
@@ -22,7 +23,10 @@ export interface SelfHealErrorPayload {
  * Report an error to the incubator self-heal monitoring table (fire-and-forget).
  * Errors here are swallowed so reporting never breaks the calling code.
  */
-export function reportSelfHealError(payload: SelfHealErrorPayload): void {
+export function reportSelfHealError(
+  supabase: SupabaseClient,
+  payload: SelfHealErrorPayload,
+): void {
   if (import.meta.env.DEV) {
     console.error(
       `[self-heal:${payload.category}] ${payload.source}: ${payload.errorMessage}`,
@@ -48,40 +52,49 @@ export function reportSelfHealError(payload: SelfHealErrorPayload): void {
  * still handle it normally (throw, retry, etc.).
  */
 export async function withDbErrorCapture<T>(
+  supabase: SupabaseClient,
+  tableName: string,
   query: PromiseLike<{ data: T | null; error: unknown }>,
-  source: string,
+  projectPrefix = PROJECT_PREFIX,
 ): Promise<{ data: T | null; error: unknown }> {
   const result = await query;
   if (result.error) {
-    reportSelfHealError({
+    reportSelfHealError(supabase, {
       category: "database",
-      source,
+      source: tableName,
       errorMessage:
         (result.error as { message?: string })?.message ?? String(result.error),
+      projectPrefix,
     });
   }
   return result;
 }
 
 /**
- * Installs a global unhandledrejection + error listener that pipes uncaught
+ * Installs global error + unhandledrejection listeners that pipe uncaught
  * frontend errors into the self-heal monitoring system.
- * Call once in main.tsx; returns a cleanup function suitable for useEffect.
+ * Call once in main.tsx with the supabase client and project prefix.
+ * Returns a cleanup function suitable for useEffect.
  */
-export function installFrontendErrorCapture(): () => void {
+export function installFrontendErrorCapture(
+  supabase: SupabaseClient,
+  projectPrefix = PROJECT_PREFIX,
+): () => void {
   const onError = (event: ErrorEvent) => {
-    reportSelfHealError({
+    reportSelfHealError(supabase, {
       category: "frontend",
       source: event.filename ?? "window.onerror",
       errorMessage: event.message,
+      projectPrefix,
     });
   };
 
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
-    reportSelfHealError({
+    reportSelfHealError(supabase, {
       category: "frontend",
       source: "unhandledrejection",
       errorMessage: String(event.reason),
+      projectPrefix,
     });
   };
 
@@ -93,3 +106,6 @@ export function installFrontendErrorCapture(): () => void {
     window.removeEventListener("unhandledrejection", onUnhandledRejection);
   };
 }
+
+// Re-export a convenience singleton bound to the default client for internal use
+export { defaultSupabase };

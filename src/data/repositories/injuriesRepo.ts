@@ -1,6 +1,6 @@
 import { supabase, dbTable } from "../../lib/supabase";
 import { todayUTC, futureDateUTC } from "../../lib/dates";
-import { withDbErrorCapture } from "../../lib/errorReporting";
+import { withDbErrorCapture, PROJECT_PREFIX } from "../../lib/errorReporting";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -75,12 +75,14 @@ const INJURY_SELECT = `
  */
 export async function getLatestInjuries(limit = 10): Promise<InjuryWithPlayer[]> {
   const { data, error } = await withDbErrorCapture(
+    supabase,
+    dbTable("injuries"),
     supabase
       .from(dbTable("injuries"))
       .select(INJURY_SELECT)
       .order("date_injured", { ascending: false })
       .limit(limit),
-    "injuriesRepo.getLatestInjuries",
+    PROJECT_PREFIX,
   );
 
   if (error) throw error;
@@ -93,27 +95,29 @@ export async function getLatestInjuries(limit = 10): Promise<InjuryWithPlayer[]>
  * Falls back to client-side deduplication if the view join cannot be resolved.
  */
 export async function getCurrentlyInjured(limit = 10): Promise<InjuryWithPlayer[]> {
-  // Query from the current_injuries view — PostgREST resolves FK joins through
-  // view columns when the underlying FK constraints are present on the source table.
   const { data, error } = await withDbErrorCapture(
+    supabase,
+    "current_injuries",
     supabase
       .from("current_injuries")
       .select(INJURY_SELECT)
       .order("date_injured", { ascending: false })
       .limit(limit),
-    "injuriesRepo.getCurrentlyInjured",
+    PROJECT_PREFIX,
   );
 
   if (error) {
     // Fallback: emulate the view client-side using the base table
     const fallback = await withDbErrorCapture(
+      supabase,
+      dbTable("injuries"),
       supabase
         .from(dbTable("injuries"))
         .select(INJURY_SELECT)
         .neq("status", "returned")
         .order("date_injured", { ascending: false })
         .limit(limit * 3),
-      "injuriesRepo.getCurrentlyInjured.fallback",
+      PROJECT_PREFIX,
     );
 
     if (fallback.error) throw fallback.error;
@@ -148,6 +152,8 @@ export async function getReturningSoon(
   const future = futureDateUTC(windowDays);
 
   const { data, error } = await withDbErrorCapture(
+    supabase,
+    "current_injuries",
     supabase
       .from("current_injuries")
       .select(INJURY_SELECT)
@@ -156,12 +162,14 @@ export async function getReturningSoon(
       .lte("expected_return_date", future)
       .order("expected_return_date", { ascending: true })
       .limit(limit),
-    "injuriesRepo.getReturningSoon",
+    PROJECT_PREFIX,
   );
 
   if (error) {
     // Fallback: query base table directly
     const fallback = await withDbErrorCapture(
+      supabase,
+      dbTable("injuries"),
       supabase
         .from(dbTable("injuries"))
         .select(INJURY_SELECT)
@@ -171,7 +179,7 @@ export async function getReturningSoon(
         .lte("expected_return_date", future)
         .order("expected_return_date", { ascending: true })
         .limit(limit),
-      "injuriesRepo.getReturningSoon.fallback",
+      PROJECT_PREFIX,
     );
 
     if (fallback.error) throw fallback.error;

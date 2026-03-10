@@ -4,8 +4,13 @@ import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider } from "@mzon7/zon-incubator-sdk/auth";
 import { supabase } from "./lib/supabase";
+import { installFrontendErrorCapture } from "./lib/errorReporting";
 import App from "./App";
 import "./index.css";
+
+// Install global error capture for the self-heal monitoring system.
+// Returns a cleanup function — called once at module load (not in a component).
+installFrontendErrorCapture(supabase, "back_in_play_");
 
 const queryClient = new QueryClient({
   defaultOptions: {
