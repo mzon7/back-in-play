@@ -27,11 +27,19 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GROK_API_KEY = process.env.GROK_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-if (!SUPABASE_URL || !SUPABASE_KEY || !GROK_API_KEY) {
-  console.error("Missing env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, GROK_API_KEY");
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error("Missing env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY");
   process.exit(1);
 }
+if (!GROK_API_KEY && !OPENAI_API_KEY) {
+  console.error("Missing env: GROK_API_KEY or OPENAI_API_KEY (need at least one)");
+  process.exit(1);
+}
+
+// Prefer Grok if available, fall back to OpenAI
+const USE_OPENAI = !GROK_API_KEY || process.env.USE_OPENAI === "1";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const P = "back_in_play_";
@@ -50,10 +58,10 @@ const FROM_YEAR    = parseInt(arg("--from") || "2015");
 const TO_YEAR      = parseInt(arg("--to")   || "2024");
 const SKIP_THRESHOLD = parseInt(arg("--threshold") || "300");
 
-const BATCH_SIZE         = 35;  // records per Grok call (fits grok-3 at 6000 tokens)
-const BATCHES_PER_SEASON = 10;  // ~350 records / season
-const CONCURRENT_BATCHES = 3;   // parallel Grok calls per season
-const CONCURRENT_LEAGUES = 3;   // parallel league processing
+const BATCH_SIZE         = 40;  // records per Grok call
+const BATCHES_PER_SEASON = parseInt(arg("--batches") || "12");  // records/season = BATCH_SIZE × BATCHES_PER_SEASON
+const CONCURRENT_BATCHES = parseInt(arg("--concurrent") || "1");  // parallel Grok calls per season
+const CONCURRENT_LEAGUES = 1;   // parallel league processing
 
 // ─── League definitions ───────────────────────────────────────────────────────
 const ALL_LEAGUES = [
@@ -387,18 +395,25 @@ async function importEspnLeague(league) {
   return inserted;
 }
 
-// ─── Grok-3 API (fast, accurate) ─────────────────────────────────────────────
+// ─── AI API call (Grok or OpenAI fallback) ────────────────────────────────────
 async function callGrok(prompt, retries = 3) {
+  const useOpenAI = USE_OPENAI || !GROK_API_KEY;
+  const apiUrl = useOpenAI
+    ? "https://api.openai.com/v1/chat/completions"
+    : "https://api.x.ai/v1/chat/completions";
+  const apiKey = useOpenAI ? OPENAI_API_KEY : GROK_API_KEY;
+  const model  = useOpenAI ? "gpt-4o-mini" : "grok-4-0709";
+
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const res = await fetch("https://api.x.ai/v1/chat/completions", {
+      const res = await fetch(apiUrl, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${GROK_API_KEY}`,
+          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "grok-3",
+          model,
           messages: [
             {
               role: "system",
@@ -445,8 +460,9 @@ async function callGrok(prompt, retries = 3) {
       return parsed;
     } catch (err) {
       if (attempt === retries) throw err;
-      const delay = 2000 * attempt;
-      process.stdout.write(` [retry ${attempt}]`);
+      const jitter = Math.random() * 3000;
+      const delay = 5000 * attempt + jitter;
+      process.stdout.write(` [retry ${attempt} (${Math.round(delay/1000)}s)]`);
       await sleep(delay);
     }
   }
