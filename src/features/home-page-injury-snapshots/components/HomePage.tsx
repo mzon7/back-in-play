@@ -2,6 +2,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useLatestInjuries, useCurrentlyInjured, useReturningSoon } from "../lib/queries";
 import { InjuryTable } from "./InjuryTable";
 import { SectionCard } from "./SectionCard";
+import { EmptyState } from "../../../components/EmptyState";
 import { config } from "../../../config";
 
 const LEAGUES = [
@@ -103,7 +104,14 @@ export default function HomePage() {
           <InjuryTable
             rows={latest.data ?? []}
             isLoading={latest.isLoading}
-            emptyMessage="No recent injuries found."
+            emptyState={
+              <EmptyState
+                icon="📋"
+                title="No injuries reported yet"
+                description="Injury data is updated regularly. Check back soon for the latest reports across all leagues."
+                action={{ label: "View all leagues", to: "/latest-injuries" }}
+              />
+            }
           />
         </SectionCard>
 
@@ -111,7 +119,13 @@ export default function HomePage() {
           <InjuryTable
             rows={current.data ?? []}
             isLoading={current.isLoading}
-            emptyMessage="No active injuries found."
+            emptyState={
+              <EmptyState
+                icon="✅"
+                title="No active injuries"
+                description="All tracked players are currently healthy — or injury data hasn't been loaded yet."
+              />
+            }
           />
         </SectionCard>
 
@@ -119,7 +133,14 @@ export default function HomePage() {
           <InjuryTable
             rows={returning.data ?? []}
             isLoading={returning.isLoading}
-            emptyMessage={`No players returning in the next ${windowDays} days.`}
+            emptyState={
+              <EmptyState
+                icon="📅"
+                title={`No returns expected in ${windowDays} days`}
+                description="Try a wider window by adding ?windowDays=30 to the URL, or check the Return Tracker for all timelines."
+                action={{ label: "Return Tracker", to: "/return-tracker" }}
+              />
+            }
           />
         </SectionCard>
       </main>

@@ -1,4 +1,5 @@
 import { supabase, dbTable } from "../../lib/supabase";
+import { todayUTC, futureDateUTC } from "../../lib/dates";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -130,10 +131,11 @@ export async function getReturningSoon(
   limit = 10,
   windowDays = 14,
 ): Promise<InjuryWithPlayer[]> {
-  const today = new Date().toISOString().split("T")[0];
-  const future = new Date(Date.now() + windowDays * 86_400_000)
-    .toISOString()
-    .split("T")[0];
+  // Boundaries are computed in UTC so the window is consistent regardless of
+  // the user's timezone (date columns in Postgres store calendar dates, not
+  // timestamps, so comparing UTC date strings is the correct approach).
+  const today = todayUTC();
+  const future = futureDateUTC(windowDays);
 
   const { data, error } = await supabase
     .from("current_injuries")
@@ -157,8 +159,15 @@ export async function getReturningSoon(
       .limit(limit);
 
     if (fallback.error) throw fallback.error;
-    return (fallback.data ?? []) as unknown as InjuryWithPlayer[];
+    // Explicit null guard: exclude any rows that slipped through without a
+    // return date (the DB filter should already prevent this, but safety-first).
+    return ((fallback.data ?? []) as unknown as InjuryWithPlayer[]).filter(
+      (r) => r.expected_return_date !== null,
+    );
   }
 
-  return (data ?? []) as unknown as InjuryWithPlayer[];
+  // Client-side null guard for the view path as well
+  return ((data ?? []) as unknown as InjuryWithPlayer[]).filter(
+    (r) => r.expected_return_date !== null,
+  );
 }

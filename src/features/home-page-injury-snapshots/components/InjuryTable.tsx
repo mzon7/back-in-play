@@ -1,8 +1,10 @@
+import type { ReactNode } from "react";
 import type { InjuryWithPlayer } from "../lib/types";
 import { StatusBadge } from "../../../components/StatusBadge";
 import { PlayerLink } from "../../../components/PlayerLink";
 import { InjuryTypeLink } from "../../../components/InjuryTypeLink";
 import { DateCell } from "../../../components/DateCell";
+import { EmptyState } from "../../../components/EmptyState";
 
 export type InjuryTableVariant = "compact" | "full";
 
@@ -10,7 +12,10 @@ export interface InjuryTableProps {
   rows: InjuryWithPlayer[];
   isLoading: boolean;
   variant?: InjuryTableVariant;
+  /** Plain-text fallback shown inside a default EmptyState. */
   emptyMessage?: string;
+  /** Full custom empty state node; takes precedence over emptyMessage. */
+  emptyState?: ReactNode;
 }
 
 function SkeletonRow({ variant }: { variant: InjuryTableVariant }) {
@@ -119,6 +124,7 @@ export function InjuryTable({
   isLoading,
   variant = "compact",
   emptyMessage = "No injuries to display.",
+  emptyState,
 }: InjuryTableProps) {
   if (isLoading) {
     return (
@@ -132,9 +138,11 @@ export function InjuryTable({
 
   if (rows.length === 0) {
     return (
-      <div className="py-10 text-center text-sm text-white/40 italic">
-        {emptyMessage}
-      </div>
+      <>
+        {emptyState ?? (
+          <EmptyState icon="📭" title={emptyMessage} />
+        )}
+      </>
     );
   }
 

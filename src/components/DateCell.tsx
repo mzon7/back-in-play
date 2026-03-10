@@ -1,3 +1,5 @@
+import { formatDateUTC } from "../lib/dates";
+
 interface DateCellProps {
   value: string | null | undefined;
   /** Label prepended before the date, e.g. "Ret:" */
@@ -5,19 +7,10 @@ interface DateCellProps {
   className?: string;
 }
 
-function formatDate(dateStr: string): string {
-  // Parse as UTC to avoid timezone-shift off-by-one
-  const [year, month, day] = dateStr.split("-").map(Number);
-  const d = new Date(Date.UTC(year, month - 1, day));
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-}
-
 export function DateCell({ value, label, className }: DateCellProps) {
-  const display = value ? formatDate(value) : "TBD";
+  // Null/undefined → "TBD". Dates parsed as UTC calendar dates to avoid
+  // timezone-driven off-by-one display errors (see src/lib/dates.ts).
+  const display = value ? formatDateUTC(value) : "TBD";
   const muted = !value;
 
   return (

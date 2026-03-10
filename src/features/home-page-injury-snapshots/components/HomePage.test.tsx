@@ -75,9 +75,10 @@ describe("HomePage", () => {
 
     render(<HomePage />, { wrapper: Wrapper });
 
-    expect(screen.getByText(/No recent injuries found/i)).toBeTruthy();
-    expect(screen.getByText(/No active injuries found/i)).toBeTruthy();
-    expect(screen.getByText(/No players returning/i)).toBeTruthy();
+    // EmptyState titles rendered by each section
+    expect(screen.getByText(/No injuries reported yet/i)).toBeTruthy();
+    expect(screen.getByText(/No active injuries/i)).toBeTruthy();
+    expect(screen.getByText(/No returns expected/i)).toBeTruthy();
   });
 
   it("renders player rows from useLatestInjuries data", () => {
