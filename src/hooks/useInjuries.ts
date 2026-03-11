@@ -170,12 +170,12 @@ export function useCurrentInjuries(leagueSlug: string) {
     queryKey: ["bip-injuries", leagueSlug],
     enabled: !!leagueSlug,
     queryFn: async () => {
+      // 1. Get league → teams (small set, ~30 per league)
       const { data: leagues } = await supabase
         .from("back_in_play_leagues")
         .select("league_id")
         .eq("slug", leagueSlug)
         .limit(1);
-
       if (!leagues || leagues.length === 0) return [];
       const leagueId = leagues[0].league_id;
 
@@ -183,53 +183,48 @@ export function useCurrentInjuries(leagueSlug: string) {
         .from("back_in_play_teams")
         .select("team_id, team_name")
         .eq("league_id", leagueId);
-
       const teamMap = new Map<string, string>();
       (teams ?? []).forEach((t) => teamMap.set(t.team_id, t.team_name));
       const teamIds = Array.from(teamMap.keys());
       if (teamIds.length === 0) return [];
 
+      // 2. Get players for this league's teams (~30 team IDs, fits easily in URL)
       const { data: players } = await supabase
         .from("back_in_play_players")
         .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id")
         .in("team_id", teamIds);
+      const playerMap = new Map<string, any>();
+      (players ?? []).forEach((p: any) => playerMap.set(p.player_id, p));
+      const playerIdSet = new Set(playerMap.keys());
+      if (playerIdSet.size === 0) return [];
 
-      const playerMap = new Map<string, typeof players extends (infer T)[] | null ? T : never>();
-      (players ?? []).forEach((p) => playerMap.set(p.player_id, p));
-      const playerIds = Array.from(playerMap.keys());
-      if (playerIds.length === 0) return [];
-
+      // 3. Fetch ALL recent injuries (no player filter), then filter client-side
       const cutoff = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+      const { data: allInjuries, error } = await supabase
+        .from("back_in_play_injuries")
+        .select("*")
+        .gte("date_injured", cutoff)
+        .neq("status", "cleared")
+        .order("date_injured", { ascending: false });
+      if (error) throw error;
 
-      // Chunk player IDs to avoid URL length limits
-      const allInjuries: any[] = [];
-      for (let i = 0; i < playerIds.length; i += 100) {
-        const chunk = playerIds.slice(i, i + 100);
-        const { data: chunkInjuries, error } = await supabase
-          .from("back_in_play_injuries")
-          .select("*")
-          .in("player_id", chunk)
-          .gte("date_injured", cutoff)
-          .neq("status", "cleared")
-          .order("date_injured", { ascending: false });
-        if (error) throw error;
-        if (chunkInjuries) allInjuries.push(...chunkInjuries);
-      }
-
-      return allInjuries.map((inj) => {
-        const player = playerMap.get(inj.player_id);
-        return {
-          ...inj,
-          player_name: player?.player_name ?? "Unknown",
-          position: player?.position ?? "",
-          team_name: player ? (teamMap.get(player.team_id) ?? "") : "",
-          league_slug: leagueSlug,
-          league_rank: player?.league_rank ?? null,
-          preseason_rank: player?.preseason_rank ?? null,
-          headshot_url: player?.headshot_url ?? espnHeadshot(player?.espn_id) ?? null,
-          pre_injury_avg_minutes: player?.pre_injury_avg_minutes ?? null,
-        };
-      });
+      // 4. Filter to only this league's players and enrich
+      return (allInjuries ?? [])
+        .filter((inj) => playerIdSet.has(inj.player_id))
+        .map((inj) => {
+          const player = playerMap.get(inj.player_id);
+          return {
+            ...inj,
+            player_name: player?.player_name ?? "Unknown",
+            position: player?.position ?? "",
+            team_name: player ? (teamMap.get(player.team_id) ?? "") : "",
+            league_slug: leagueSlug,
+            league_rank: player?.league_rank ?? null,
+            preseason_rank: player?.preseason_rank ?? null,
+            headshot_url: player?.headshot_url ?? espnHeadshot(player?.espn_id) ?? null,
+            pre_injury_avg_minutes: player?.pre_injury_avg_minutes ?? null,
+          };
+        });
     },
     staleTime: 5 * 60 * 1000,
   });

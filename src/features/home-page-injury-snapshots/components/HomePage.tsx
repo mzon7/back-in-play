@@ -84,7 +84,9 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
           </div>
 
           <div className="flex items-center gap-2 mt-0.5">
-            <p className="text-xs text-white/40 truncate">{inj.team_name}</p>
+            {inj.team_name && inj.team_name !== "Unknown" && (
+              <p className="text-xs text-white/40 truncate">{inj.team_name}</p>
+            )}
             {showLeague && inj.league_slug && (
               <span className="flex items-center gap-1 text-[10px] text-white/30">
                 <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[inj.league_slug] ?? "bg-white/30"}`} />
@@ -352,7 +354,7 @@ function LeagueInjuries({ slug }: { slug: string }) {
   }
 
   // Extract unique teams sorted alphabetically
-  const teams = Array.from(new Set(injuries.map((i) => i.team_name ?? "").filter(Boolean))).sort();
+  const teams = Array.from(new Set(injuries.map((i) => i.team_name ?? "").filter((t) => t && t !== "Unknown"))).sort();
 
   const filtered = teamFilter
     ? injuries.filter((i) => i.team_name === teamFilter)
