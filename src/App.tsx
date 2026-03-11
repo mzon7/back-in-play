@@ -10,8 +10,6 @@ import { RecoveryStatsPage } from "./features/historical-injury-data-system/comp
 
 export default function App() {
   useEffect(() => {
-    // Secondary error capture registration (primary is in main.tsx).
-    // useEffect gives a cleanup handle for React strict-mode compatibility.
     const cleanup = installFrontendErrorCapture(supabase, "back_in_play_");
     return cleanup;
   }, []);
@@ -29,11 +27,10 @@ export default function App() {
 
       <Route path="/recovery-stats" element={<RecoveryStatsPage />} />
 
-      {/* Placeholder routes — will be filled in subsequent feature steps */}
-      <Route path="/latest-injuries" element={<HomePage />} />
-      <Route path="/return-tracker" element={<HomePage />} />
-      <Route path="/search" element={<HomePage />} />
+      {/* League-specific view (pre-selects the league tab) */}
       <Route path="/league/:leagueSlug" element={<HomePage />} />
+
+      {/* Placeholder routes */}
       <Route path="/player/:playerSlug" element={<HomePage />} />
       <Route path="/injury-type/:injuryTypeSlug" element={<HomePage />} />
 
