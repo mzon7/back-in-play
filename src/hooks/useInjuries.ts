@@ -38,6 +38,20 @@ export interface LeagueRow {
   slug: string;
 }
 
+export interface StatusChangeRow {
+  id: string;
+  player_id: string;
+  injury_id: string | null;
+  old_status: string | null;
+  new_status: string;
+  change_type: string;
+  summary: string;
+  changed_at: string;
+  player_name?: string;
+  team_name?: string;
+  league_slug?: string;
+}
+
 export function useLeagues() {
   return useQuery<LeagueRow[]>({
     queryKey: ["bip-leagues"],
@@ -54,13 +68,11 @@ export function useLeagues() {
 
 /**
  * Landing page: injuries for TOP 50 players across ALL leagues.
- * A player qualifies if preseason_rank <= 50 OR rank_at_injury <= 50.
  */
 export function useTopPlayerInjuries() {
   return useQuery<InjuryRow[]>({
     queryKey: ["bip-top-injuries"],
     queryFn: async () => {
-      // Step 1: Get all leagues
       const { data: leagues } = await supabase
         .from("back_in_play_leagues")
         .select("league_id, league_name, slug");
@@ -69,14 +81,12 @@ export function useTopPlayerInjuries() {
       const leagueMap = new Map<string, { name: string; slug: string }>();
       leagues.forEach((l) => leagueMap.set(l.league_id, { name: l.league_name, slug: l.slug }));
 
-      // Step 2: Get all teams (for team name lookup)
       const { data: teams } = await supabase
         .from("back_in_play_teams")
         .select("team_id, team_name, league_id");
       const teamMap = new Map<string, { name: string; leagueId: string }>();
       (teams ?? []).forEach((t) => teamMap.set(t.team_id, { name: t.team_name, leagueId: t.league_id }));
 
-      // Step 3: Get players with preseason_rank or league_rank <= 50
       const { data: rankedPlayers } = await supabase
         .from("back_in_play_players")
         .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes")
@@ -88,10 +98,7 @@ export function useTopPlayerInjuries() {
       rankedPlayers.forEach((p) => playerMap.set(p.player_id, p));
       const playerIds = Array.from(playerMap.keys());
 
-      // Step 4: Get recent injuries for these ranked players
-      const sixtyDaysAgo = new Date();
-      sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
-      const cutoff = sixtyDaysAgo.toISOString().slice(0, 10);
+      const cutoff = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
 
       const { data: injuries, error } = await supabase
         .from("back_in_play_injuries")
@@ -102,7 +109,6 @@ export function useTopPlayerInjuries() {
 
       if (error) throw error;
 
-      // Also include injuries where rank_at_injury <= 50
       const { data: rankedInjuries } = await supabase
         .from("back_in_play_injuries")
         .select("*")
@@ -110,21 +116,13 @@ export function useTopPlayerInjuries() {
         .gte("date_injured", cutoff)
         .order("date_injured", { ascending: false });
 
-      // Merge and deduplicate
       const injMap = new Map<string, typeof injuries extends (infer T)[] ? T : never>();
-      for (const inj of (injuries ?? [])) {
-        injMap.set(inj.injury_id, inj);
-      }
-      for (const inj of (rankedInjuries ?? [])) {
-        injMap.set(inj.injury_id, inj);
-      }
+      for (const inj of (injuries ?? [])) injMap.set(inj.injury_id, inj);
+      for (const inj of (rankedInjuries ?? [])) injMap.set(inj.injury_id, inj);
 
-      // Fetch missing players from rankedInjuries
       const missingPlayerIds = new Set<string>();
       for (const inj of injMap.values()) {
-        if (!playerMap.has(inj.player_id)) {
-          missingPlayerIds.add(inj.player_id);
-        }
+        if (!playerMap.has(inj.player_id)) missingPlayerIds.add(inj.player_id);
       }
       if (missingPlayerIds.size > 0) {
         const { data: extraPlayers } = await supabase
@@ -134,7 +132,6 @@ export function useTopPlayerInjuries() {
         (extraPlayers ?? []).forEach((p) => playerMap.set(p.player_id, p));
       }
 
-      // Enrich
       return Array.from(injMap.values()).map((inj) => {
         const player = playerMap.get(inj.player_id);
         const team = player ? teamMap.get(player.team_id) : undefined;
@@ -179,7 +176,6 @@ export function useCurrentInjuries(leagueSlug: string) {
       const teamMap = new Map<string, string>();
       (teams ?? []).forEach((t) => teamMap.set(t.team_id, t.team_name));
       const teamIds = Array.from(teamMap.keys());
-
       if (teamIds.length === 0) return [];
 
       const { data: players } = await supabase
@@ -188,16 +184,11 @@ export function useCurrentInjuries(leagueSlug: string) {
         .in("team_id", teamIds);
 
       const playerMap = new Map<string, typeof players extends (infer T)[] | null ? T : never>();
-      (players ?? []).forEach((p) =>
-        playerMap.set(p.player_id, p),
-      );
+      (players ?? []).forEach((p) => playerMap.set(p.player_id, p));
       const playerIds = Array.from(playerMap.keys());
-
       if (playerIds.length === 0) return [];
 
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      const cutoff = thirtyDaysAgo.toISOString().slice(0, 10);
+      const cutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
 
       const { data: injuries, error } = await supabase
         .from("back_in_play_injuries")
@@ -225,5 +216,61 @@ export function useCurrentInjuries(leagueSlug: string) {
       });
     },
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useStatusChanges(limit = 30) {
+  return useQuery<StatusChangeRow[]>({
+    queryKey: ["bip-status-changes", limit],
+    queryFn: async () => {
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+      const { data: changes, error } = await supabase
+        .from("back_in_play_status_changes")
+        .select("*")
+        .gte("changed_at", cutoff)
+        .order("changed_at", { ascending: false })
+        .limit(limit);
+
+      if (error) throw error;
+      if (!changes || changes.length === 0) return [];
+
+      const playerIds = Array.from(new Set(changes.map((c) => c.player_id)));
+      const { data: players } = await supabase
+        .from("back_in_play_players")
+        .select("player_id, player_name, team_id")
+        .in("player_id", playerIds);
+
+      const playerMap = new Map<string, { name: string; teamId: string }>();
+      (players ?? []).forEach((p) =>
+        playerMap.set(p.player_id, { name: p.player_name, teamId: p.team_id }),
+      );
+
+      const teamIds = Array.from(new Set([...playerMap.values()].map((p) => p.teamId).filter(Boolean)));
+      const { data: teams } = await supabase
+        .from("back_in_play_teams")
+        .select("team_id, team_name, league_id")
+        .in("team_id", teamIds);
+      const teamMap = new Map<string, { name: string; leagueId: string }>();
+      (teams ?? []).forEach((t) => teamMap.set(t.team_id, { name: t.team_name, leagueId: t.league_id }));
+
+      const { data: leagues } = await supabase
+        .from("back_in_play_leagues")
+        .select("league_id, slug");
+      const leagueMap = new Map<string, string>();
+      (leagues ?? []).forEach((l) => leagueMap.set(l.league_id, l.slug));
+
+      return changes.map((c) => {
+        const player = playerMap.get(c.player_id);
+        const team = player ? teamMap.get(player.teamId) : undefined;
+        return {
+          ...c,
+          player_name: player?.name ?? "Unknown",
+          team_name: team?.name ?? "",
+          league_slug: team ? (leagueMap.get(team.leagueId) ?? "") : "",
+        };
+      });
+    },
+    staleTime: 60 * 1000,
   });
 }

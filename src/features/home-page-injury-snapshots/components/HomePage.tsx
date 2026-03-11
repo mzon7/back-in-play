@@ -4,6 +4,7 @@ import {
   useLeagues,
   useCurrentInjuries,
   useTopPlayerInjuries,
+  useStatusChanges,
   type InjuryRow,
 } from "../../../hooks/useInjuries";
 import { StatusBadge } from "../../../components/StatusBadge";
@@ -17,12 +18,11 @@ const LEAGUE_LABELS: Record<string, string> = {
   "premier-league": "EPL",
 };
 
-type Section = "today" | "back" | "out" | "reduced" | "active";
+type Section = "out" | "back" | "reduced" | "active";
 
 const SECTIONS: { key: Section; label: string; emoji: string; color: string; desc: string }[] = [
-  { key: "today", label: "Back In Play Today!", emoji: "\uD83D\uDD25", color: "text-orange-400", desc: "Playing right now" },
+  { key: "out", label: "Injuries", emoji: "\u26A0\uFE0F", color: "text-red-400", desc: "Currently sidelined" },
   { key: "back", label: "Back In Play", emoji: "\u26A1", color: "text-cyan-400", desc: "Back to full usual minutes" },
-  { key: "out", label: "Out / Injured", emoji: "\u26A0\uFE0F", color: "text-red-400", desc: "Currently sidelined" },
   { key: "reduced", label: "Reduced Load", emoji: "\uD83D\uDCCA", color: "text-amber-400", desc: "Minutes below 80% pre-injury" },
   { key: "active", label: "Active", emoji: "\u2705", color: "text-green-400", desc: "Cleared from injury report" },
 ];
@@ -37,10 +37,9 @@ const LEAGUE_DOT: Record<string, string> = {
 
 function classifySection(inj: InjuryRow): Section {
   const s = (inj.status ?? "").toLowerCase().replace(/-/g, "_");
-  if (s === "active_today") return "today";
   if (s === "back_in_play") return "back";
   if (s === "reduced_load") return "reduced";
-  if (["active", "probable", "returned"].includes(s)) return "active";
+  if (["active", "probable", "returned", "active_today"].includes(s)) return "active";
   return "out";
 }
 
@@ -206,6 +205,90 @@ function EmptyBox({ message, hint }: { message: string; hint?: string }) {
   );
 }
 
+const CHANGE_TYPE_STYLE: Record<string, string> = {
+  status_change: "text-amber-400",
+  new_injury: "text-red-400",
+  activated: "text-green-400",
+  updated: "text-white/50",
+};
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function StatusUpdatesBlock({ showLeague }: { showLeague?: boolean }) {
+  const { data: changes = [], isLoading } = useStatusChanges(20);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <span>{"\uD83D\uDCE2"}</span>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-[#1C7CFF]">Player Status Updates</h3>
+        </div>
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-12 rounded-xl bg-white/10 animate-pulse" />
+        ))}
+      </div>
+    );
+  }
+
+  if (changes.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span>{"\uD83D\uDCE2"}</span>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-[#1C7CFF]">
+          Player Status Updates
+        </h3>
+        <span className="text-[10px] text-white/30">({changes.length})</span>
+        <span className="text-[10px] text-white/20 ml-1 hidden sm:inline">Last 24 hours</span>
+      </div>
+      <div className="space-y-1">
+        {changes.map((c) => (
+          <div
+            key={c.id}
+            className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-white truncate">{c.player_name}</span>
+                <span className={`text-xs font-semibold ${CHANGE_TYPE_STYLE[c.change_type] ?? "text-white/50"}`}>
+                  — {c.summary}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-[10px] text-white/30">{c.team_name}</span>
+                {showLeague && c.league_slug && (
+                  <span className="flex items-center gap-1 text-[10px] text-white/25">
+                    <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[c.league_slug] ?? "bg-white/30"}`} />
+                    {LEAGUE_LABELS[c.league_slug] ?? ""}
+                  </span>
+                )}
+                <span className="text-[10px] text-white/20">{timeAgo(c.changed_at)}</span>
+              </div>
+            </div>
+            {c.old_status && c.new_status && c.old_status !== c.new_status && (
+              <div className="flex items-center gap-1 shrink-0">
+                <StatusBadge status={c.old_status} />
+                <span className="text-white/30 text-xs">{"\u2192"}</span>
+                <StatusBadge status={c.new_status} />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* -- Landing: Top 50 players across all leagues -- */
 function TopPlayersView() {
   const { data: injuries = [], isLoading } = useTopPlayerInjuries();
@@ -215,13 +298,14 @@ function TopPlayersView() {
     return <EmptyBox message="No top player injury data yet." />;
   }
 
-  const grouped: Record<Section, InjuryRow[]> = { today: [], out: [], active: [], reduced: [], back: [] };
+  const grouped: Record<Section, InjuryRow[]> = { out: [], active: [], reduced: [], back: [] };
   for (const inj of injuries) {
     grouped[classifySection(inj)].push(inj);
   }
 
   return (
     <div className="space-y-6">
+      <StatusUpdatesBlock showLeague />
       <div className="flex items-center gap-2 text-white/40">
         <span className="text-amber-400/60">{"\uD83D\uDC51"}</span>
         <span className="text-xs">
@@ -255,13 +339,14 @@ function LeagueInjuries({ slug }: { slug: string }) {
     ? injuries.filter((i) => i.team_name === teamFilter)
     : injuries;
 
-  const grouped: Record<Section, InjuryRow[]> = { today: [], out: [], active: [], reduced: [], back: [] };
+  const grouped: Record<Section, InjuryRow[]> = { out: [], active: [], reduced: [], back: [] };
   for (const inj of filtered) {
     grouped[classifySection(inj)].push(inj);
   }
 
   return (
     <div className="space-y-6">
+      <StatusUpdatesBlock />
       {/* Team filter */}
       {teams.length > 1 && (
         <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
