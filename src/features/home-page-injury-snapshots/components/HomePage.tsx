@@ -9,6 +9,7 @@ import {
   type StatusChangeRow,
 } from "../../../hooks/useInjuries";
 import { StatusBadge } from "../../../components/StatusBadge";
+import { SEO } from "../../../components/seo/SEO";
 import { supabase } from "../../../lib/supabase";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
@@ -164,7 +165,11 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm font-medium text-white truncate">{inj.player_name}</span>
+              <Link
+                to={`/player/${(inj.player_name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
+                className="text-sm font-medium text-white truncate hover:text-cyan-400 transition-colors"
+                onClick={(e) => e.stopPropagation()}
+              >{inj.player_name}</Link>
               {inj.is_star && (
                 <span className="shrink-0 text-[11px]" title="Star player">{"\u2B50"}</span>
               )}
@@ -733,8 +738,17 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
     ...orderedSlugs.map((s) => ({ key: s, label: LEAGUE_LABELS[s] ?? s.toUpperCase() })),
   ];
 
+  const year = new Date().getFullYear();
+  const seoTitle = activeTab === "top"
+    ? `Sports Injury Tracker (${year}) - Live Updates & Return Dates`
+    : `${LEAGUE_LABELS[activeTab] ?? activeTab.toUpperCase()} Injuries (${year}) - Status & Return Dates`;
+  const seoDesc = activeTab === "top"
+    ? `Live injury updates for NBA, NFL, MLB, NHL, and EPL. Track player injuries, expected return dates, and status changes.`
+    : `${LEAGUE_LABELS[activeTab] ?? activeTab.toUpperCase()} injury report - latest player injuries, return dates, and status updates.`;
+
   return (
     <div className="min-h-screen bg-[#0A0E1A] text-white">
+      <SEO title={seoTitle} description={seoDesc} path={activeTab === "top" ? "/" : `/league/${activeTab}`} />
       {/* Top Nav */}
       <nav className="sticky top-0 z-50 border-b border-white/10 bg-[#0A0E1A]/90 backdrop-blur-md">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
