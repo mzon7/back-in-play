@@ -440,40 +440,66 @@ type HeadlineCard = {
   type: "injury" | "return" | "status_change";
 };
 
+/** Star rating: 10 for is_star, 8 for top-10 rank, 6 for starter, scale by rank, 1 for unranked */
+function starRating(inj: InjuryRow): number {
+  if (inj.is_star) return 10;
+  const rank = Math.min(inj.preseason_rank ?? 999, inj.league_rank ?? 999, inj.rank_at_injury ?? 999);
+  if (rank <= 10) return 9;
+  if (rank <= 20) return 7;
+  if (rank <= 30) return 6;
+  if (inj.is_starter) return 5;
+  if (rank <= 50) return 4;
+  return 1;
+}
+
+/** Recency factor: today=1.0, yesterday=0.9, last week=0.7, older decays */
+function recencyFactor(dateStr: string | null | undefined): number {
+  const days = daysAgo(dateStr);
+  if (days <= 0) return 1.0;
+  if (days <= 1) return 0.9;
+  if (days <= 3) return 0.8;
+  if (days <= 7) return 0.7;
+  if (days <= 14) return 0.5;
+  return 0.3;
+}
+
+function headlineScore(inj: InjuryRow): number {
+  return starRating(inj) * recencyFactor(inj.date_injured);
+}
+
+function impactFromScore(score: number): HeadlineCard["impact"] {
+  if (score >= 7) return "Critical";
+  if (score >= 4) return "High";
+  return "Medium";
+}
+
+const IMPACT_COLORS: Record<string, string> = {
+  Critical: "text-red-400 bg-red-400/10 border-red-400/30",
+  High: "text-amber-400 bg-amber-400/10 border-amber-400/30",
+  Medium: "text-cyan-400 bg-cyan-400/10 border-cyan-400/30",
+};
+
 function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[]): HeadlineCard[] {
   const cards: HeadlineCard[] = [];
+  const seenPlayers = new Set<string>();
 
-  // Star/starter injuries (new or recent)
-  for (const inj of injuries) {
-    if (!inj.is_star && !inj.is_starter) continue;
-    const days = daysAgo(inj.date_injured);
-    if (days > 3) continue; // only last 3 days
+  // Score all injuries and pick top ones
+  const scored = injuries
+    .map((inj) => ({ inj, score: headlineScore(inj) }))
+    .filter(({ score }) => score >= 3) // threshold: only notable players
+    .sort((a, b) => b.score - a.score);
 
-    const isStar = inj.is_star;
-    const status = (inj.status ?? "out").toLowerCase();
-    const isOut = ["out", "ir", "il_10", "il_15", "il_60"].includes(status.replace(/-/g, "_"));
-    const isReturning = ["active", "active_today", "back_in_play", "probable"].includes(status.replace(/-/g, "_"));
+  for (const { inj, score } of scored) {
+    if (seenPlayers.has(inj.player_id)) continue;
+    seenPlayers.add(inj.player_id);
 
-    let impact: HeadlineCard["impact"] = "Medium";
-    let type: HeadlineCard["type"] = "injury";
-    let summary = `${inj.injury_type ?? "Injury"}`;
+    const status = (inj.status ?? "out").toLowerCase().replace(/-/g, "_");
+    const isReturning = ["active", "active_today", "back_in_play", "probable"].includes(status);
 
-    if (isStar && isOut) {
-      impact = "Critical";
-      summary = `${inj.injury_type ?? "Injury"} — ${inj.status}`;
-      type = "injury";
-    } else if (isStar && isReturning) {
-      impact = "High";
-      summary = "Returning to action";
-      type = "return";
-    } else if (isOut) {
-      impact = "High";
-      summary = `${inj.injury_type ?? "Injury"} — ${inj.status}`;
-    } else if (isReturning) {
-      impact = "Medium";
-      summary = "Back in lineup";
-      type = "return";
-    }
+    const impact = impactFromScore(score);
+    const summary = isReturning
+      ? "Returning to action"
+      : `${inj.injury_type ?? "Injury"} — ${inj.status}`;
 
     cards.push({
       key: `inj-${inj.injury_id}`,
@@ -484,24 +510,26 @@ function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[]): 
       status: inj.status ?? "out",
       summary,
       impact,
-      impactColor: impact === "Critical" ? "text-red-400 bg-red-400/10 border-red-400/30"
-        : impact === "High" ? "text-amber-400 bg-amber-400/10 border-amber-400/30"
-        : "text-cyan-400 bg-cyan-400/10 border-cyan-400/30",
-      timeAgo: days === 0 ? "Today" : days === 1 ? "Yesterday" : `${days}d ago`,
-      type,
+      impactColor: IMPACT_COLORS[impact],
+      timeAgo: daysAgo(inj.date_injured) === 0 ? "Today"
+        : daysAgo(inj.date_injured) === 1 ? "Yesterday"
+        : `${daysAgo(inj.date_injured)}d ago`,
+      type: isReturning ? "return" : "injury",
     });
+
+    if (cards.length >= 8) break;
   }
 
-  // Major status changes for star/important players (from status_changes feed)
+  // Fill remaining slots with notable status changes
   for (const c of changes) {
-    // Skip if already have a card for this player
-    if (cards.some((card) => card.player_name === c.player_name)) continue;
-    // Only important change types
+    if (cards.length >= 8) break;
+    if (seenPlayers.has(c.player_id)) continue;
     if (c.change_type === "updated") continue;
-    const isActivation = c.change_type === "activated" || c.new_status === "active";
     const isDowngrade = c.summary?.toLowerCase().includes("downgraded");
+    const isActivation = c.change_type === "activated" || c.new_status === "active";
     if (!isActivation && !isDowngrade && c.change_type !== "new_injury") continue;
 
+    seenPlayers.add(c.player_id);
     cards.push({
       key: `sc-${c.id}`,
       player_name: c.player_name ?? "Unknown",
@@ -511,19 +539,13 @@ function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[]): 
       status: c.new_status,
       summary: c.summary,
       impact: isDowngrade ? "High" : "Medium",
-      impactColor: isDowngrade
-        ? "text-amber-400 bg-amber-400/10 border-amber-400/30"
-        : "text-cyan-400 bg-cyan-400/10 border-cyan-400/30",
+      impactColor: IMPACT_COLORS[isDowngrade ? "High" : "Medium"],
       timeAgo: timeAgo(c.changed_at),
       type: "status_change",
     });
   }
 
-  // Sort: Critical first, then High, then Medium; within same impact, most recent first
-  const impactOrder = { Critical: 0, High: 1, Medium: 2 };
-  cards.sort((a, b) => impactOrder[a.impact] - impactOrder[b.impact]);
-
-  return cards.slice(0, 8); // max 8 cards
+  return cards;
 }
 
 function HeadlineStories({ injuries, showLeague }: { injuries: InjuryRow[]; showLeague?: boolean }) {
