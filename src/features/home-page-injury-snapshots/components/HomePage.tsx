@@ -424,6 +424,182 @@ function StatusUpdatesBlock({ showLeague }: { showLeague?: boolean }) {
   );
 }
 
+/* -- Headline Stories: square cards for high-impact events -- */
+
+type HeadlineCard = {
+  key: string;
+  player_name: string;
+  headshot_url: string | null;
+  team_name: string;
+  league_slug: string;
+  status: string;
+  summary: string;
+  impact: "Critical" | "High" | "Medium";
+  impactColor: string;
+  timeAgo: string;
+  type: "injury" | "return" | "status_change";
+};
+
+function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[]): HeadlineCard[] {
+  const cards: HeadlineCard[] = [];
+
+  // Star/starter injuries (new or recent)
+  for (const inj of injuries) {
+    if (!inj.is_star && !inj.is_starter) continue;
+    const days = daysAgo(inj.date_injured);
+    if (days > 3) continue; // only last 3 days
+
+    const isStar = inj.is_star;
+    const status = (inj.status ?? "out").toLowerCase();
+    const isOut = ["out", "ir", "il_10", "il_15", "il_60"].includes(status.replace(/-/g, "_"));
+    const isReturning = ["active", "active_today", "back_in_play", "probable"].includes(status.replace(/-/g, "_"));
+
+    let impact: HeadlineCard["impact"] = "Medium";
+    let type: HeadlineCard["type"] = "injury";
+    let summary = `${inj.injury_type ?? "Injury"}`;
+
+    if (isStar && isOut) {
+      impact = "Critical";
+      summary = `${inj.injury_type ?? "Injury"} — ${inj.status}`;
+      type = "injury";
+    } else if (isStar && isReturning) {
+      impact = "High";
+      summary = "Returning to action";
+      type = "return";
+    } else if (isOut) {
+      impact = "High";
+      summary = `${inj.injury_type ?? "Injury"} — ${inj.status}`;
+    } else if (isReturning) {
+      impact = "Medium";
+      summary = "Back in lineup";
+      type = "return";
+    }
+
+    cards.push({
+      key: `inj-${inj.injury_id}`,
+      player_name: inj.player_name ?? "Unknown",
+      headshot_url: inj.headshot_url ?? null,
+      team_name: (inj.team_name && inj.team_name !== "Unknown") ? inj.team_name : "",
+      league_slug: inj.league_slug ?? "",
+      status: inj.status ?? "out",
+      summary,
+      impact,
+      impactColor: impact === "Critical" ? "text-red-400 bg-red-400/10 border-red-400/30"
+        : impact === "High" ? "text-amber-400 bg-amber-400/10 border-amber-400/30"
+        : "text-cyan-400 bg-cyan-400/10 border-cyan-400/30",
+      timeAgo: days === 0 ? "Today" : days === 1 ? "Yesterday" : `${days}d ago`,
+      type,
+    });
+  }
+
+  // Major status changes for star/important players (from status_changes feed)
+  for (const c of changes) {
+    // Skip if already have a card for this player
+    if (cards.some((card) => card.player_name === c.player_name)) continue;
+    // Only important change types
+    if (c.change_type === "updated") continue;
+    const isActivation = c.change_type === "activated" || c.new_status === "active";
+    const isDowngrade = c.summary?.toLowerCase().includes("downgraded");
+    if (!isActivation && !isDowngrade && c.change_type !== "new_injury") continue;
+
+    cards.push({
+      key: `sc-${c.id}`,
+      player_name: c.player_name ?? "Unknown",
+      headshot_url: c.headshot_url ?? null,
+      team_name: c.team_name ?? "",
+      league_slug: c.league_slug ?? "",
+      status: c.new_status,
+      summary: c.summary,
+      impact: isDowngrade ? "High" : "Medium",
+      impactColor: isDowngrade
+        ? "text-amber-400 bg-amber-400/10 border-amber-400/30"
+        : "text-cyan-400 bg-cyan-400/10 border-cyan-400/30",
+      timeAgo: timeAgo(c.changed_at),
+      type: "status_change",
+    });
+  }
+
+  // Sort: Critical first, then High, then Medium; within same impact, most recent first
+  const impactOrder = { Critical: 0, High: 1, Medium: 2 };
+  cards.sort((a, b) => impactOrder[a.impact] - impactOrder[b.impact]);
+
+  return cards.slice(0, 8); // max 8 cards
+}
+
+function HeadlineStories({ injuries, showLeague }: { injuries: InjuryRow[]; showLeague?: boolean }) {
+  const { data: rawChanges = [] } = useStatusChanges(30);
+  const cards = buildHeadlineCards(injuries, rawChanges);
+
+  if (cards.length === 0) return null;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <span>{"\uD83D\uDD25"}</span>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-white/70">
+          Headline Stories
+        </h3>
+        <span className="text-[10px] text-white/30">({cards.length})</span>
+      </div>
+      <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1 snap-x snap-mandatory">
+        {cards.map((card) => (
+          <div
+            key={card.key}
+            className="shrink-0 w-[160px] sm:w-[180px] rounded-xl border border-white/10 bg-white/5 p-3 snap-start hover:bg-white/[0.07] transition-colors"
+          >
+            {/* Headshot */}
+            <div className="flex justify-center mb-2">
+              {card.headshot_url ? (
+                <img
+                  src={card.headshot_url}
+                  alt={card.player_name}
+                  className="h-16 w-16 rounded-full bg-white/10 object-cover"
+                />
+              ) : (
+                <div className="h-16 w-16 rounded-full bg-white/10 flex items-center justify-center">
+                  <span className="text-lg text-white/30">{card.player_name[0]}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Name */}
+            <p className="text-sm font-semibold text-white text-center truncate">{card.player_name}</p>
+
+            {/* Team / League */}
+            <div className="flex items-center justify-center gap-1.5 mt-0.5">
+              {card.team_name && (
+                <span className="text-[10px] text-white/35 truncate max-w-[90px]">{card.team_name}</span>
+              )}
+              {showLeague && card.league_slug && (
+                <span className="flex items-center gap-1 text-[10px] text-white/25">
+                  <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[card.league_slug] ?? "bg-white/30"}`} />
+                  {LEAGUE_LABELS[card.league_slug] ?? ""}
+                </span>
+              )}
+            </div>
+
+            {/* Status change */}
+            <p className="text-[11px] text-white/50 text-center mt-1.5 line-clamp-2">{card.summary}</p>
+
+            {/* Impact badge */}
+            <div className="flex justify-center mt-2">
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${card.impactColor}`}>
+                {card.impact}
+              </span>
+            </div>
+
+            {/* Status + Time */}
+            <div className="flex items-center justify-between mt-2">
+              <StatusBadge status={card.status} />
+              <span className="text-[9px] text-white/25">{card.timeAgo}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* -- Landing: Top 50 players across all leagues -- */
 function TopPlayersView() {
   const { data: injuries = [], isLoading } = useTopPlayerInjuries();
@@ -440,13 +616,8 @@ function TopPlayersView() {
 
   return (
     <div className="space-y-6">
+      <HeadlineStories injuries={injuries} showLeague />
       <StatusUpdatesBlock showLeague />
-      <div className="flex items-center gap-2 text-white/40">
-        <span className="text-amber-400/60">{"\uD83D\uDC51"}</span>
-        <span className="text-xs">
-          Top 50 ranked players per league (preseason or at-injury rank)
-        </span>
-      </div>
       {SECTIONS.map((sec) => (
         <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} showLeague />
       ))}
@@ -481,6 +652,7 @@ function LeagueInjuries({ slug }: { slug: string }) {
 
   return (
     <div className="space-y-6">
+      <HeadlineStories injuries={injuries} />
       <StatusUpdatesBlock />
       {/* Team filter */}
       {teams.length > 1 && (
