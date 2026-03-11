@@ -6,8 +6,10 @@ import {
   useTopPlayerInjuries,
   useStatusChanges,
   type InjuryRow,
+  type StatusChangeRow,
 } from "../../../hooks/useInjuries";
 import { StatusBadge } from "../../../components/StatusBadge";
+import { supabase } from "../../../lib/supabase";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -43,18 +45,107 @@ function classifySection(inj: InjuryRow): Section {
   return "out";
 }
 
-/** Sort by best rank (lowest number = highest ranked = first). Unranked go last. */
-function sortByRank(a: InjuryRow, b: InjuryRow): number {
-  const rankA = Math.min(a.preseason_rank ?? 999, a.league_rank ?? 999, a.rank_at_injury ?? 999);
-  const rankB = Math.min(b.preseason_rank ?? 999, b.league_rank ?? 999, b.rank_at_injury ?? 999);
-  return rankA - rankB;
+/** High-value positions get a boost (NFL QB/RB, NBA PG, etc.) */
+const POSITION_BOOST: Record<string, number> = {
+  QB: 3, RB: 2, WR: 1.5, TE: 1.2, // NFL
+  PG: 1.5, SG: 1.2, SF: 1.2, PF: 1.2, C: 1.3, // NBA
+  GK: 1.5, ST: 1.5, CF: 1.5, LW: 1.3, RW: 1.3, CAM: 1.3, // Soccer
+  C: 1.3, LW: 1.2, RW: 1.2, G: 1.5, D: 1.1, // NHL
+  SP: 1.5, RP: 1, "1B": 1.2, SS: 1.3, CF: 1.2, // MLB
+};
+
+function daysAgo(dateStr: string | null | undefined): number {
+  if (!dateStr) return 0;
+  return Math.max(0, Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000));
+}
+
+/**
+ * Importance score = player importance × recency.
+ * Stars get 5x, starters 3x, ranked players scale by rank.
+ * High-value positions (QB, RB, etc.) get a boost.
+ * More recent injuries rank higher.
+ */
+function importanceScore(inj: InjuryRow): number {
+  // Player importance (1-10 scale)
+  let importance = 1;
+  if (inj.is_star) importance = 10;
+  else if (inj.is_starter) importance = 6;
+  else {
+    const rank = Math.min(inj.preseason_rank ?? 999, inj.league_rank ?? 999, inj.rank_at_injury ?? 999);
+    if (rank <= 10) importance = 8;
+    else if (rank <= 30) importance = 5;
+    else if (rank <= 50) importance = 3;
+  }
+
+  // Position boost
+  const pos = (inj.position ?? "").toUpperCase();
+  importance *= (POSITION_BOOST[pos] ?? 1);
+
+  // Recency: injuries from today = 1.0, 30 days ago = 0.3, older = 0.1
+  const days = daysAgo(inj.date_injured);
+  const recency = days <= 1 ? 1.0 : days <= 7 ? 0.8 : days <= 14 ? 0.6 : days <= 30 ? 0.3 : 0.1;
+
+  return importance * recency;
+}
+
+function sortByImportance(a: InjuryRow, b: InjuryRow): number {
+  return importanceScore(b) - importanceScore(a);
+}
+
+function StatusTimeline({ playerId }: { playerId: string }) {
+  const [changes, setChanges] = useState<StatusChangeRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase
+      .from("back_in_play_status_changes")
+      .select("*")
+      .eq("player_id", playerId)
+      .neq("change_type", "updated")
+      .order("changed_at", { ascending: true })
+      .limit(20)
+      .then(({ data }) => {
+        setChanges(data ?? []);
+        setLoading(false);
+      });
+  }, [playerId]);
+
+  if (loading) return <div className="h-8 bg-white/5 rounded animate-pulse mt-2" />;
+  if (changes.length === 0) return <p className="text-[10px] text-white/20 mt-2">No status history</p>;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-white/10">
+      <p className="text-[10px] text-white/30 mb-2 font-semibold uppercase tracking-wide">Status Timeline</p>
+      <div className="flex items-start gap-0 overflow-x-auto pb-1">
+        {changes.map((c, i) => (
+          <div key={c.id} className="flex items-center shrink-0">
+            <div className="flex flex-col items-center gap-1">
+              <StatusBadge status={c.new_status} />
+              <span className="text-[9px] text-white/25 whitespace-nowrap">
+                {new Date(c.changed_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              </span>
+              <span className="text-[8px] text-white/15 max-w-[80px] text-center truncate">{c.summary}</span>
+            </div>
+            {i < changes.length - 1 && (
+              <div className="w-6 h-px bg-white/10 mx-1 mt-[-12px]" />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean }) {
   const rank = inj.preseason_rank ?? inj.league_rank ?? inj.rank_at_injury;
+  const [expanded, setExpanded] = useState(false);
+  const days = daysAgo(inj.date_injured);
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+    <div
+      className="rounded-xl border border-white/10 bg-white/5 p-3 cursor-pointer transition-colors hover:bg-white/[0.07]"
+      onClick={() => setExpanded(!expanded)}
+    >
       <div className="flex items-start gap-3">
         {/* Headshot or rank badge */}
         {inj.headshot_url ? (
@@ -97,6 +188,20 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
               <span className="flex items-center gap-1 text-[10px] text-white/30">
                 <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[inj.league_slug] ?? "bg-white/30"}`} />
                 {LEAGUE_LABELS[inj.league_slug] ?? inj.league_name}
+              </span>
+            )}
+          </div>
+
+          {/* Games missed & days since injury */}
+          <div className="flex items-center gap-3 mt-1 text-[10px]">
+            {days > 0 && (
+              <span className="text-white/35">
+                {days === 1 ? "1 day" : `${days} days`} since injury
+              </span>
+            )}
+            {inj.games_missed != null && inj.games_missed > 0 && (
+              <span className="text-red-400/60 font-medium">
+                {inj.games_missed} game{inj.games_missed !== 1 ? "s" : ""} missed
               </span>
             )}
           </div>
@@ -155,8 +260,11 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
           <div className="mt-1.5 flex items-center gap-3 text-[10px] text-white/25">
             <span>{inj.date_injured}</span>
             {inj.source && <span>{inj.source}</span>}
-            {inj.games_missed != null && <span>{inj.games_missed} games missed</span>}
+            <span className="ml-auto text-white/15">{expanded ? "tap to collapse" : "tap for timeline"}</span>
           </div>
+
+          {/* Status Timeline (expanded) */}
+          {expanded && <StatusTimeline playerId={inj.player_id} />}
         </div>
       </div>
     </div>
@@ -173,7 +281,7 @@ function SectionBlock({
   showLeague?: boolean;
 }) {
   if (injuries.length === 0) return null;
-  const sorted = [...injuries].sort(sortByRank);
+  const sorted = [...injuries].sort(sortByImportance);
 
   return (
     <div className="space-y-2">
