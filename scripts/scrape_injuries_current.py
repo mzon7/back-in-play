@@ -197,22 +197,27 @@ def get_or_create_team(team_name, league_id):
         return result[0]["team_id"]
     return None
 
-def get_or_create_player(name, team_id, position="Unknown"):
+def get_or_create_player(name, team_id, position="Unknown", league_id=None):
     key = "%s:%s" % (name, team_id)
     if key in _player_cache:
         return _player_cache[key]
     slug = slugify(name)
-    existing = sb_get("back_in_play_players", "slug=eq.%s&select=player_id,team_id" % slug)
+    existing = sb_get("back_in_play_players", "slug=eq.%s&select=player_id,team_id,league_id" % slug)
     if existing:
         pid = existing[0]["player_id"]
         _player_cache[key] = pid
+        update = {}
         if existing[0]["team_id"] != team_id:
-            sb_request("PATCH", "back_in_play_players?player_id=eq.%s" % pid,
-                       {"team_id": team_id})
+            update["team_id"] = team_id
+        if league_id and existing[0].get("league_id") != league_id:
+            update["league_id"] = league_id
+        if update:
+            sb_request("PATCH", "back_in_play_players?player_id=eq.%s" % pid, update)
         return pid
-    result = sb_request("POST", "back_in_play_players", {
-        "player_name": name, "team_id": team_id, "position": position, "slug": slug
-    })
+    body = {"player_name": name, "team_id": team_id, "position": position, "slug": slug}
+    if league_id:
+        body["league_id"] = league_id
+    result = sb_request("POST", "back_in_play_players", body)
     if result and isinstance(result, list):
         _player_cache[key] = result[0]["player_id"]
         return result[0]["player_id"]
@@ -443,7 +448,7 @@ def scrape_espn(league_key):
 
             injury_type, injury_slug = classify_injury(full_desc or long_comment)
 
-            player_id = get_or_create_player(pname, team_id, pos_abbr)
+            player_id = get_or_create_player(pname, team_id, pos_abbr, league_id)
             if not player_id:
                 continue
 
@@ -606,7 +611,7 @@ def scrape_rotowire(league_key):
             injury_type, injury_slug = classify_injury(inj_desc)
             side = extract_side(inj_desc)
 
-            player_id = get_or_create_player(pname, team_id, position)
+            player_id = get_or_create_player(pname, team_id, position, league_id)
             if not player_id:
                 continue
 
@@ -657,7 +662,7 @@ def scrape_rotowire(league_key):
                     continue
 
                 injury_type, injury_slug = classify_injury(inj_desc)
-                player_id = get_or_create_player(pname, team_id, pos)
+                player_id = get_or_create_player(pname, team_id, pos, league_id)
                 if not player_id:
                     continue
 

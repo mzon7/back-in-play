@@ -175,7 +175,7 @@ export function useCurrentInjuries(leagueSlug: string) {
     queryKey: ["bip-injuries", leagueSlug],
     enabled: !!leagueSlug,
     queryFn: async () => {
-      // 1. Get league → teams (small set, ~30 per league)
+      // 1. Get league ID from slug
       const { data: leagues } = await supabase
         .from("back_in_play_leagues")
         .select("league_id")
@@ -184,6 +184,7 @@ export function useCurrentInjuries(leagueSlug: string) {
       if (!leagues || leagues.length === 0) return [];
       const leagueId = leagues[0].league_id;
 
+      // 2. Get teams for name lookup (exclude Unknown)
       const { data: teams } = await supabase
         .from("back_in_play_teams")
         .select("team_id, team_name")
@@ -191,23 +192,21 @@ export function useCurrentInjuries(leagueSlug: string) {
         .neq("team_name", "Unknown");
       const teamMap = new Map<string, string>();
       (teams ?? []).forEach((t) => teamMap.set(t.team_id, t.team_name));
-      const teamIds = Array.from(teamMap.keys());
-      if (teamIds.length === 0) return [];
 
-      // 2. Get players for this league's teams, chunked to avoid row limits
+      // 3. Get players directly by league_id (one query, no chunking needed)
+      const { data: players } = await supabase
+        .from("back_in_play_players")
+        .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
+        .eq("league_id", leagueId)
+        .limit(10000);
       const playerMap = new Map<string, any>();
-      for (let i = 0; i < teamIds.length; i += 20) {
-        const chunk = teamIds.slice(i, i + 20);
-        const { data: players } = await supabase
-          .from("back_in_play_players")
-          .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
-          .in("team_id", chunk)
-          .limit(5000);
-        (players ?? []).forEach((p: any) => playerMap.set(p.player_id, p));
-      }
+      (players ?? []).forEach((p: any) => {
+        // Skip players on Unknown teams
+        if (teamMap.has(p.team_id)) playerMap.set(p.player_id, p);
+      });
       if (playerMap.size === 0) return [];
 
-      // 3. Fetch injuries for this league's players in chunks
+      // 4. Fetch injuries for this league's players in chunks
       const cutoff = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
       const playerIds = Array.from(playerMap.keys());
       const injuries: any[] = [];
@@ -224,7 +223,7 @@ export function useCurrentInjuries(leagueSlug: string) {
         if (data) injuries.push(...data);
       }
 
-      // 4. Enrich with player/team data
+      // 5. Enrich with player/team data
       return injuries.map((inj) => {
           const player = playerMap.get(inj.player_id);
           return {
