@@ -9,6 +9,7 @@ import HomePage from "./features/home-page-injury-snapshots/components/HomePage"
 import { RecoveryStatsPage } from "./features/historical-injury-data-system/components/RecoveryStatsPage";
 
 const PlayerInjuryPage = lazy(() => import("./pages/player/PlayerInjuryPage"));
+const PlayerReturnPage = lazy(() => import("./pages/player/PlayerReturnAliasPage"));
 const TeamInjuryPage = lazy(() => import("./pages/team/TeamInjuryPage"));
 const SlugRouter = lazy(() => import("./pages/SlugRouter"));
 
@@ -42,6 +43,7 @@ export default function App() {
 
         {/* SEO: Player injury pages */}
         <Route path="/player/:playerSlug" element={<PlayerInjuryPage />} />
+        <Route path="/player/:playerSlug/return" element={<PlayerReturnPage />} />
 
         {/* SEO: Team injury pages (must be before /:slug to match 2-segment paths) */}
         <Route path="/:leagueSlug/:teamSlug" element={<TeamInjuryPage />} />

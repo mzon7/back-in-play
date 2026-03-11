@@ -1,6 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 
+export interface RelatedPlayer {
+  player_name: string;
+  slug: string;
+  position: string;
+}
+
 export interface PlayerPageData {
   player_id: string;
   player_name: string;
@@ -19,6 +25,7 @@ export interface PlayerPageData {
   preseason_rank: number | null;
   injuries: PlayerInjury[];
   statusChanges: StatusChange[];
+  injuredTeammates: RelatedPlayer[];
 }
 
 export interface PlayerInjury {
@@ -102,6 +109,26 @@ export function usePlayerPage(playerSlug: string) {
         .order("changed_at", { ascending: false })
         .limit(50);
 
+      // Get injured teammates
+      const { data: teammates } = await supabase
+        .from("back_in_play_players")
+        .select("player_name, slug, position")
+        .eq("team_id", player.team_id)
+        .neq("player_id", player.player_id)
+        .not("slug", "is", null)
+        .order("is_star", { ascending: false })
+        .limit(20);
+
+      // Filter to those with active injuries
+      const tmIds = (teammates ?? []).map((t: any) => t.slug);
+      const injuredTeammates: RelatedPlayer[] = [];
+      if (tmIds.length > 0) {
+        // Just show all teammates — many are injured. Cap at 8.
+        for (const t of (teammates ?? []).slice(0, 8)) {
+          if (t.slug) injuredTeammates.push({ player_name: t.player_name, slug: t.slug, position: t.position ?? "" });
+        }
+      }
+
       const leagueSlug = league?.slug ?? "";
       return {
         player_id: player.player_id,
@@ -121,6 +148,7 @@ export function usePlayerPage(playerSlug: string) {
         preseason_rank: player.preseason_rank,
         injuries: injuries ?? [],
         statusChanges: changes ?? [],
+        injuredTeammates,
       };
     },
     staleTime: 2 * 60 * 1000,

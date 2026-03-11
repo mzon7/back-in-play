@@ -142,136 +142,142 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
   const rank = inj.preseason_rank ?? inj.league_rank ?? inj.rank_at_injury;
   const [expanded, setExpanded] = useState(false);
   const days = daysAgo(inj.date_injured);
+  const playerUrl = `/player/${inj.player_slug || (inj.player_name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
 
   return (
-    <div
-      className="rounded-xl border border-white/10 bg-white/5 p-3 cursor-pointer transition-colors hover:bg-white/[0.07]"
-      onClick={() => setExpanded(!expanded)}
-    >
-      <div className="flex items-start gap-3">
-        {/* Headshot or rank badge */}
-        {inj.headshot_url ? (
-          <img
-            src={inj.headshot_url}
-            alt={inj.player_name}
-            className="h-10 w-10 rounded-full bg-white/10 object-cover shrink-0"
-          />
-        ) : rank ? (
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 shrink-0">
-            <span className="text-xs font-bold text-white/60">#{rank}</span>
-          </div>
-        ) : null}
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <Link
-                to={`/player/${(inj.player_name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
-                className="text-sm font-medium text-white truncate hover:text-cyan-400 transition-colors"
-                onClick={(e) => e.stopPropagation()}
-              >{inj.player_name}</Link>
-              {inj.is_star && (
-                <span className="shrink-0 text-[11px]" title="Star player">{"\u2B50"}</span>
-              )}
-              {inj.is_starter && !inj.is_star && (
-                <span className="shrink-0 text-[9px] font-bold text-emerald-400 border border-emerald-400/40 rounded px-1" title="Starter">S</span>
-              )}
-              {inj.position && (
-                <span className="text-[10px] text-white/40 shrink-0">{inj.position}</span>
-              )}
-              {rank && rank <= 50 && (
-                <span className="text-[10px] text-amber-400/70 shrink-0">#{rank}</span>
-              )}
+    <div className="rounded-xl border border-white/10 bg-white/5 transition-colors hover:bg-white/[0.07]">
+      <Link
+        to={playerUrl}
+        className="block p-3"
+      >
+        <div className="flex items-start gap-3">
+          {/* Headshot or rank badge */}
+          {inj.headshot_url ? (
+            <img
+              src={inj.headshot_url}
+              alt={inj.player_name}
+              className="h-10 w-10 rounded-full bg-white/10 object-cover shrink-0"
+            />
+          ) : rank ? (
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 shrink-0">
+              <span className="text-xs font-bold text-white/60">#{rank}</span>
             </div>
-            <StatusBadge status={inj.status ?? "out"} />
-          </div>
+          ) : null}
 
-          <div className="flex items-center gap-2 mt-0.5">
-            {inj.team_name && inj.team_name !== "Unknown" && (
-              <p className="text-xs text-white/40 truncate">{inj.team_name}</p>
-            )}
-            {showLeague && inj.league_slug && (
-              <span className="flex items-center gap-1 text-[10px] text-white/30">
-                <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[inj.league_slug] ?? "bg-white/30"}`} />
-                {LEAGUE_LABELS[inj.league_slug] ?? inj.league_name}
-              </span>
-            )}
-          </div>
-
-          {/* Games missed & days since injury */}
-          <div className="flex items-center gap-3 mt-1 text-[10px]">
-            {days > 0 && (
-              <span className="text-white/35">
-                {days === 1 ? "1 day" : `${days} days`} since injury
-              </span>
-            )}
-            {inj.games_missed != null && inj.games_missed > 0 && (
-              <span className="text-red-400/60 font-medium">
-                {inj.games_missed} game{inj.games_missed !== 1 ? "s" : ""} missed
-              </span>
-            )}
-          </div>
-
-          {/* Minutes bar (for reduced_load / back_in_play / active_today) */}
-          {inj.game_minutes != null && inj.game_minutes > 0 && (
-            <div className="mt-1.5">
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-white/60 font-medium">{inj.game_minutes} min</span>
-                {inj.pre_injury_avg_minutes != null && inj.pre_injury_avg_minutes > 0 && (
-                  <>
-                    <span className="text-white/30">/ {inj.pre_injury_avg_minutes} usual</span>
-                    <span className={`text-[10px] font-bold ${
-                      (inj.game_minutes / inj.pre_injury_avg_minutes) >= 0.8
-                        ? "text-cyan-400"
-                        : "text-amber-400"
-                    }`}>
-                      {Math.round((inj.game_minutes / inj.pre_injury_avg_minutes) * 100)}%
-                    </span>
-                  </>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-sm font-medium text-white truncate">{inj.player_name}</span>
+                {inj.is_star && (
+                  <span className="shrink-0 text-[11px]" title="Star player">{"\u2B50"}</span>
+                )}
+                {inj.is_starter && !inj.is_star && (
+                  <span className="shrink-0 text-[9px] font-bold text-emerald-400 border border-emerald-400/40 rounded px-1" title="Starter">S</span>
+                )}
+                {inj.position && (
+                  <span className="text-[10px] text-white/40 shrink-0">{inj.position}</span>
+                )}
+                {rank && rank <= 50 && (
+                  <span className="text-[10px] text-amber-400/70 shrink-0">#{rank}</span>
                 )}
               </div>
-              {inj.pre_injury_avg_minutes != null && inj.pre_injury_avg_minutes > 0 && (
-                <div className="mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      (inj.game_minutes / inj.pre_injury_avg_minutes) >= 0.8
-                        ? "bg-cyan-400"
-                        : "bg-amber-400"
-                    }`}
-                    style={{ width: `${Math.min(100, (inj.game_minutes / inj.pre_injury_avg_minutes) * 100)}%` }}
-                  />
-                </div>
+              <StatusBadge status={inj.status ?? "out"} />
+            </div>
+
+            <div className="flex items-center gap-2 mt-0.5">
+              {inj.team_name && inj.team_name !== "Unknown" && (
+                <p className="text-xs text-white/40 truncate">{inj.team_name}</p>
+              )}
+              {showLeague && inj.league_slug && (
+                <span className="flex items-center gap-1 text-[10px] text-white/30">
+                  <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[inj.league_slug] ?? "bg-white/30"}`} />
+                  {LEAGUE_LABELS[inj.league_slug] ?? inj.league_name}
+                </span>
               )}
             </div>
-          )}
 
-          {/* Injury details */}
-          <div className="mt-1.5 space-y-0.5">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-white/60 font-medium">{inj.injury_type}</span>
-              {inj.side && <span className="text-white/30">({inj.side})</span>}
+            {/* Games missed & days since injury */}
+            <div className="flex items-center gap-3 mt-1 text-[10px]">
+              {days > 0 && (
+                <span className="text-white/35">
+                  {days === 1 ? "1 day" : `${days} days`} since injury
+                </span>
+              )}
+              {inj.games_missed != null && inj.games_missed > 0 && (
+                <span className="text-red-400/60 font-medium">
+                  {inj.games_missed} game{inj.games_missed !== 1 ? "s" : ""} missed
+                </span>
+              )}
             </div>
-            {inj.injury_description && (
-              <p className="text-[11px] text-white/35 line-clamp-2">{inj.injury_description}</p>
-            )}
-            {inj.expected_return && (
-              <p className="text-[11px] text-cyan-300/60">Est. return: {inj.expected_return}</p>
-            )}
-            {inj.long_comment && (
-              <p className="text-[11px] text-white/30 line-clamp-2 italic">{inj.long_comment}</p>
-            )}
-          </div>
 
-          {/* Meta */}
-          <div className="mt-1.5 flex items-center gap-3 text-[10px] text-white/25">
-            <span>{inj.date_injured}</span>
-            {inj.source && <span>{inj.source}</span>}
-            <span className="ml-auto text-white/15">{expanded ? "tap to collapse" : "tap for timeline"}</span>
-          </div>
+            {/* Minutes bar (for reduced_load / back_in_play / active_today) */}
+            {inj.game_minutes != null && inj.game_minutes > 0 && (
+              <div className="mt-1.5">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-white/60 font-medium">{inj.game_minutes} min</span>
+                  {inj.pre_injury_avg_minutes != null && inj.pre_injury_avg_minutes > 0 && (
+                    <>
+                      <span className="text-white/30">/ {inj.pre_injury_avg_minutes} usual</span>
+                      <span className={`text-[10px] font-bold ${
+                        (inj.game_minutes / inj.pre_injury_avg_minutes) >= 0.8
+                          ? "text-cyan-400"
+                          : "text-amber-400"
+                      }`}>
+                        {Math.round((inj.game_minutes / inj.pre_injury_avg_minutes) * 100)}%
+                      </span>
+                    </>
+                  )}
+                </div>
+                {inj.pre_injury_avg_minutes != null && inj.pre_injury_avg_minutes > 0 && (
+                  <div className="mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        (inj.game_minutes / inj.pre_injury_avg_minutes) >= 0.8
+                          ? "bg-cyan-400"
+                          : "bg-amber-400"
+                      }`}
+                      style={{ width: `${Math.min(100, (inj.game_minutes / inj.pre_injury_avg_minutes) * 100)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
 
-          {/* Status Timeline (expanded) */}
-          {expanded && <StatusTimeline playerId={inj.player_id} />}
+            {/* Injury details */}
+            <div className="mt-1.5 space-y-0.5">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-white/60 font-medium">{inj.injury_type}</span>
+                {inj.side && <span className="text-white/30">({inj.side})</span>}
+              </div>
+              {inj.injury_description && (
+                <p className="text-[11px] text-white/35 line-clamp-2">{inj.injury_description}</p>
+              )}
+              {inj.expected_return && (
+                <p className="text-[11px] text-cyan-300/60">Est. return: {inj.expected_return}</p>
+              )}
+              {inj.long_comment && (
+                <p className="text-[11px] text-white/30 line-clamp-2 italic">{inj.long_comment}</p>
+              )}
+            </div>
+
+            {/* Meta */}
+            <div className="mt-1.5 flex items-center gap-3 text-[10px] text-white/25">
+              <span>{inj.date_injured}</span>
+              {inj.source && <span>{inj.source}</span>}
+            </div>
+          </div>
         </div>
+      </Link>
+
+      {/* Timeline toggle — separate from the navigable card */}
+      <div className="px-3 pb-2">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="text-[10px] text-white/20 hover:text-white/40 transition-colors"
+        >
+          {expanded ? "hide timeline" : "show timeline"}
+        </button>
+        {expanded && <StatusTimeline playerId={inj.player_id} />}
       </div>
     </div>
   );
@@ -383,9 +389,10 @@ function StatusUpdatesBlock({ showLeague }: { showLeague?: boolean }) {
       </div>
       <div className="space-y-1">
         {changes.map((c) => (
-          <div
+          <Link
             key={c.id}
-            className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2"
+            to={`/player/${c.player_slug || (c.player_name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
+            className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2 hover:bg-white/[0.07] transition-colors"
           >
             {c.headshot_url ? (
               <img
@@ -423,7 +430,7 @@ function StatusUpdatesBlock({ showLeague }: { showLeague?: boolean }) {
                 <StatusBadge status={c.new_status} />
               </div>
             )}
-          </div>
+          </Link>
         ))}
       </div>
     </div>
@@ -435,6 +442,7 @@ function StatusUpdatesBlock({ showLeague }: { showLeague?: boolean }) {
 type HeadlineCard = {
   key: string;
   player_name: string;
+  player_slug: string;
   headshot_url: string | null;
   team_name: string;
   league_slug: string;
@@ -510,6 +518,7 @@ function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[]): 
     cards.push({
       key: `inj-${inj.injury_id}`,
       player_name: inj.player_name ?? "Unknown",
+      player_slug: inj.player_slug ?? "",
       headshot_url: inj.headshot_url ?? null,
       team_name: (inj.team_name && inj.team_name !== "Unknown") ? inj.team_name : "",
       league_slug: inj.league_slug ?? "",
@@ -539,6 +548,7 @@ function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[]): 
     cards.push({
       key: `sc-${c.id}`,
       player_name: c.player_name ?? "Unknown",
+      player_slug: c.player_slug ?? "",
       headshot_url: c.headshot_url ?? null,
       team_name: c.team_name ?? "",
       league_slug: c.league_slug ?? "",
@@ -568,12 +578,14 @@ function HeadlineStories({ injuries, showLeague }: { injuries: InjuryRow[]; show
           Headline Stories
         </h3>
         <span className="text-[10px] text-white/30">({cards.length})</span>
+        <span className="ml-auto text-white/20 text-xs animate-pulse">scroll &rarr;</span>
       </div>
       <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1 snap-x snap-mandatory">
         {cards.map((card) => (
-          <div
+          <Link
             key={card.key}
-            className="shrink-0 w-[160px] sm:w-[180px] rounded-xl border border-white/10 bg-white/5 p-3 snap-start hover:bg-white/[0.07] transition-colors"
+            to={`/player/${card.player_slug || card.player_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
+            className="shrink-0 w-[160px] sm:w-[180px] rounded-xl border border-white/10 bg-white/5 p-3 snap-start hover:bg-white/[0.07] transition-colors block"
           >
             {/* Headshot */}
             <div className="flex justify-center mb-2">
@@ -621,9 +633,52 @@ function HeadlineStories({ injuries, showLeague }: { injuries: InjuryRow[]; show
               <StatusBadge status={card.status} />
               <span className="text-[9px] text-white/25">{card.timeAgo}</span>
             </div>
-          </div>
+          </Link>
         ))}
       </div>
+    </div>
+  );
+}
+
+/* -- Shared team filter pill bar -- */
+function TeamFilterBar({
+  teams, counts, teamFilter, setTeamFilter, totalLabel = "All Teams",
+}: {
+  teams: string[];
+  counts: InjuryRow[];
+  teamFilter: string | null;
+  setTeamFilter: (t: string | null) => void;
+  totalLabel?: string;
+}) {
+  if (teams.length <= 1) return null;
+  return (
+    <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
+      <button
+        onClick={() => setTeamFilter(null)}
+        className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+          teamFilter === null
+            ? "border-white/30 bg-white/10 text-white"
+            : "border-white/10 text-white/40 hover:text-white/60"
+        }`}
+      >
+        {totalLabel} ({counts.length})
+      </button>
+      {teams.map((team) => {
+        const count = counts.filter((i) => i.team_name === team).length;
+        return (
+          <button
+            key={team}
+            onClick={() => setTeamFilter(teamFilter === team ? null : team)}
+            className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+              teamFilter === team
+                ? "border-[#1C7CFF]/50 bg-[#1C7CFF]/15 text-[#1C7CFF]"
+                : "border-white/10 text-white/40 hover:text-white/60"
+            }`}
+          >
+            {team} ({count})
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -631,20 +686,25 @@ function HeadlineStories({ injuries, showLeague }: { injuries: InjuryRow[]; show
 /* -- Landing: Top 50 players across all leagues -- */
 function TopPlayersView() {
   const { data: injuries = [], isLoading } = useTopPlayerInjuries();
+  const [teamFilter, setTeamFilter] = useState<string | null>(null);
 
   if (isLoading) return <LoadingSkeleton />;
   if (injuries.length === 0) {
     return <EmptyBox message="No top player injury data yet." />;
   }
 
+  const teams = Array.from(new Set(injuries.map((i) => i.team_name ?? "").filter((t) => t && t !== "Unknown"))).sort();
+  const filtered = teamFilter ? injuries.filter((i) => i.team_name === teamFilter) : injuries;
+
   const grouped: Record<Section, InjuryRow[]> = { out: [], active: [], reduced: [], back: [] };
-  for (const inj of injuries) {
+  for (const inj of filtered) {
     grouped[classifySection(inj)].push(inj);
   }
 
   return (
     <div className="space-y-6">
-      <HeadlineStories injuries={injuries} showLeague />
+      <TeamFilterBar teams={teams} counts={injuries} teamFilter={teamFilter} setTeamFilter={setTeamFilter} totalLabel="All Teams" />
+      <HeadlineStories injuries={filtered} showLeague />
       <StatusUpdatesBlock showLeague />
       {SECTIONS.map((sec) => (
         <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} showLeague />
@@ -680,39 +740,9 @@ function LeagueInjuries({ slug }: { slug: string }) {
 
   return (
     <div className="space-y-6">
-      <HeadlineStories injuries={injuries} />
+      <TeamFilterBar teams={teams} counts={injuries} teamFilter={teamFilter} setTeamFilter={setTeamFilter} />
+      <HeadlineStories injuries={filtered} />
       <StatusUpdatesBlock />
-      {/* Team filter */}
-      {teams.length > 1 && (
-        <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
-          <button
-            onClick={() => setTeamFilter(null)}
-            className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
-              teamFilter === null
-                ? "border-white/30 bg-white/10 text-white"
-                : "border-white/10 text-white/40 hover:text-white/60"
-            }`}
-          >
-            All Teams ({injuries.length})
-          </button>
-          {teams.map((team) => {
-            const count = injuries.filter((i) => i.team_name === team).length;
-            return (
-              <button
-                key={team}
-                onClick={() => setTeamFilter(teamFilter === team ? null : team)}
-                className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
-                  teamFilter === team
-                    ? "border-[#1C7CFF]/50 bg-[#1C7CFF]/15 text-[#1C7CFF]"
-                    : "border-white/10 text-white/40 hover:text-white/60"
-                }`}
-              >
-                {team} ({count})
-              </button>
-            );
-          })}
-        </div>
-      )}
 
       {SECTIONS.map((sec) => (
         <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} />

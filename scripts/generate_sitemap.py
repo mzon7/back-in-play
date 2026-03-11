@@ -64,33 +64,15 @@ def main():
                 "changefreq": "daily",
             })
 
-    # Player pages — only players with recent injuries (last 90 days)
-    cutoff = datetime.utcnow()
-    cutoff_str = (datetime(cutoff.year, cutoff.month, cutoff.day) - __import__('datetime').timedelta(days=90)).strftime("%Y-%m-%d")
-
-    # Get player IDs with recent injuries
-    injured_players = set()
+    # Player pages — ALL players with slugs (not just recently injured)
+    # This maximizes indexable pages for programmatic SEO (4000+ pages)
+    player_count = 0
     offset = 0
     while True:
-        injs = sb_get("back_in_play_injuries",
-                       "date_injured=gte.%s&select=player_id&limit=1000&offset=%d" % (cutoff_str, offset))
-        if not injs:
-            break
-        for inj in injs:
-            injured_players.add(inj["player_id"])
-        if len(injs) < 1000:
-            break
-        offset += 1000
-
-    print("Players with recent injuries: %d" % len(injured_players), flush=True)
-
-    # Get slugs for those players in chunks
-    player_ids = list(injured_players)
-    for i in range(0, len(player_ids), 100):
-        chunk = player_ids[i:i+100]
-        ids_param = ",".join(chunk)
         players = sb_get("back_in_play_players",
-                         "player_id=in.(%s)&select=slug&team_id=not.is.null" % ids_param)
+                         "slug=not.is.null&team_id=not.is.null&select=slug&limit=1000&offset=%d" % offset)
+        if not players:
+            break
         for p in players:
             if p.get("slug"):
                 urls.append({
@@ -104,6 +86,12 @@ def main():
                     "priority": "0.8",
                     "changefreq": "daily",
                 })
+                player_count += 1
+        if len(players) < 1000:
+            break
+        offset += 1000
+
+    print("Players in sitemap: %d (%d URLs incl. return pages)" % (player_count, player_count * 2), flush=True)
 
     # Generate XML
     xml_lines = ['<?xml version="1.0" encoding="UTF-8"?>']

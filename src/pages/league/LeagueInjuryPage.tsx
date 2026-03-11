@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useCurrentInjuries, type InjuryRow } from "../../hooks/useInjuries";
 import { SEO } from "../../components/seo/SEO";
@@ -52,22 +53,32 @@ export default function LeagueInjuryPage() {
   const leagueSlug = (rawSlug ?? "").replace(/-injuries$/, "");
   const { data: injuries, isLoading } = useCurrentInjuries(leagueSlug);
   const { data: teams } = useLeagueTeams(leagueSlug);
+  const [teamFilter, setTeamFilter] = useState<string | null>(null);
+
+  // Reset filter when league changes
+  useEffect(() => { setTeamFilter(null); }, [leagueSlug]);
 
   const leagueLabel = LEAGUE_LABELS[leagueSlug] ?? leagueSlug.toUpperCase();
   const leagueFull = LEAGUE_FULL[leagueSlug] ?? leagueLabel;
   const year = new Date().getFullYear();
 
-  const activeInjuries = (injuries ?? []).filter((i) => i.status !== "returned" && i.status !== "active");
-  const returning = (injuries ?? []).filter((i) => i.status === "returned" || i.status === "active" || i.status === "back_in_play");
+  const allActive = (injuries ?? []).filter((i) => i.status !== "returned" && i.status !== "active");
+  const allReturning = (injuries ?? []).filter((i) => i.status === "returned" || i.status === "active" || i.status === "back_in_play");
 
-  // Count injuries per team
+  const activeInjuries = teamFilter ? allActive.filter((i) => i.team_name === teamFilter) : allActive;
+  const returning = teamFilter ? allReturning.filter((i) => i.team_name === teamFilter) : allReturning;
+
+  // Unique team names for the filter bar
+  const teamNames = Array.from(new Set((injuries ?? []).map((i) => i.team_name ?? "").filter((t) => t && t !== "Unknown"))).sort();
+
+  // Count injuries per team (unfiltered for directory display)
   const teamCounts = new Map<string, number>();
-  activeInjuries.forEach((i) => {
+  allActive.forEach((i) => {
     if (i.team_name) teamCounts.set(i.team_name, (teamCounts.get(i.team_name) ?? 0) + 1);
   });
 
   const pageTitle = `${leagueLabel} Injuries (${year}) - Injury Report & Updates`;
-  const pageDesc = `${leagueFull} injury report — ${activeInjuries.length} players currently injured. Latest ${leagueLabel} injury updates, return dates, and status changes.`;
+  const pageDesc = `${leagueFull} injury report — ${allActive.length} players currently injured. Latest ${leagueLabel} injury updates, return dates, and status changes.`;
   const now = new Date().toISOString();
 
   const jsonLd = {
@@ -100,7 +111,39 @@ export default function LeagueInjuryPage() {
 
       <div className="max-w-3xl mx-auto px-4 pb-12">
         <h1 className="text-2xl font-bold mb-1">{leagueLabel} Injury Report</h1>
-        <p className="text-sm text-white/40 mb-6">{leagueFull} - {activeInjuries.length} currently injured</p>
+        <p className="text-sm text-white/40 mb-4">{leagueFull} - {allActive.length} currently injured</p>
+
+        {/* Team filter */}
+        {teamNames.length > 1 && (
+          <div className="flex gap-1.5 overflow-x-auto pb-3 -mx-1 px-1 mb-4">
+            <button
+              onClick={() => setTeamFilter(null)}
+              className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+                teamFilter === null
+                  ? "border-white/30 bg-white/10 text-white"
+                  : "border-white/10 text-white/40 hover:text-white/60"
+              }`}
+            >
+              All Teams ({(injuries ?? []).length})
+            </button>
+            {teamNames.map((team) => {
+              const count = (injuries ?? []).filter((i) => i.team_name === team).length;
+              return (
+                <button
+                  key={team}
+                  onClick={() => setTeamFilter(teamFilter === team ? null : team)}
+                  className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+                    teamFilter === team
+                      ? "border-[#1C7CFF]/50 bg-[#1C7CFF]/15 text-[#1C7CFF]"
+                      : "border-white/10 text-white/40 hover:text-white/60"
+                  }`}
+                >
+                  {team} ({count})
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Team Directory */}
         {teams && teams.length > 0 && (
@@ -177,7 +220,7 @@ export default function LeagueInjuryPage() {
 }
 
 function InjuryRow({ inj }: { inj: InjuryRow }) {
-  const slug = inj.player_name?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") ?? "";
+  const slug = inj.player_slug || (inj.player_name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return (
     <Link
       to={`/player/${slug}`}

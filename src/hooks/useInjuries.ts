@@ -22,6 +22,7 @@ export interface InjuryRow {
   game_minutes: number | null;
   // joined
   player_name?: string;
+  player_slug?: string;
   position?: string;
   team_name?: string;
   league_slug?: string;
@@ -50,6 +51,7 @@ export interface StatusChangeRow {
   summary: string;
   changed_at: string;
   player_name?: string;
+  player_slug?: string;
   team_name?: string;
   league_slug?: string;
   headshot_url?: string | null;
@@ -98,7 +100,7 @@ export function useTopPlayerInjuries() {
 
       const { data: rankedPlayers } = await supabase
         .from("back_in_play_players")
-        .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
+        .select("player_id, player_name, slug, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
         .or("league_rank.lte.50,preseason_rank.lte.50");
 
       if (!rankedPlayers || rankedPlayers.length === 0) return [];
@@ -141,7 +143,7 @@ export function useTopPlayerInjuries() {
       if (missingPlayerIds.size > 0) {
         const { data: extraPlayers } = await supabase
           .from("back_in_play_players")
-          .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
+          .select("player_id, player_name, slug, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
           .in("player_id", Array.from(missingPlayerIds));
         (extraPlayers ?? []).forEach((p) => playerMap.set(p.player_id, p));
       }
@@ -153,6 +155,7 @@ export function useTopPlayerInjuries() {
         return {
           ...inj,
           player_name: player?.player_name ?? "Unknown",
+          player_slug: player?.slug ?? "",
           position: player?.position ?? "",
           team_name: team?.name ?? "",
           league_slug: league?.slug ?? "",
@@ -196,7 +199,7 @@ export function useCurrentInjuries(leagueSlug: string) {
       // 3. Get players directly by league_id (one query, no chunking needed)
       const { data: players } = await supabase
         .from("back_in_play_players")
-        .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
+        .select("player_id, player_name, slug, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
         .eq("league_id", leagueId)
         .limit(10000);
       const playerMap = new Map<string, any>();
@@ -229,6 +232,7 @@ export function useCurrentInjuries(leagueSlug: string) {
           return {
             ...inj,
             player_name: player?.player_name ?? "Unknown",
+            player_slug: player?.slug ?? "",
             position: player?.position ?? "",
             team_name: player ? (teamMap.get(player.team_id) ?? "") : "",
             league_slug: leagueSlug,
@@ -265,14 +269,14 @@ export function useStatusChanges(limit = 30) {
       const playerIds = Array.from(new Set(changes.map((c) => c.player_id)));
       const { data: players } = await supabase
         .from("back_in_play_players")
-        .select("player_id, player_name, team_id, headshot_url, espn_id")
+        .select("player_id, player_name, slug, team_id, headshot_url, espn_id")
         .in("player_id", playerIds);
 
-      const playerMap = new Map<string, { name: string; teamId: string; headshot: string | null }>();
+      const playerMap = new Map<string, { name: string; slug: string; teamId: string; headshot: string | null }>();
       (players ?? []).forEach((p) => {
         const headshot = p.headshot_url
           ?? (p.espn_id ? `https://a.espncdn.com/i/headshots/nba/players/full/${p.espn_id}.png` : null);
-        playerMap.set(p.player_id, { name: p.player_name, teamId: p.team_id, headshot });
+        playerMap.set(p.player_id, { name: p.player_name, slug: p.slug ?? "", teamId: p.team_id, headshot });
       });
 
       const teamIds = Array.from(new Set([...playerMap.values()].map((p) => p.teamId).filter(Boolean)));
@@ -295,6 +299,7 @@ export function useStatusChanges(limit = 30) {
         return {
           ...c,
           player_name: player?.name ?? "Unknown",
+          player_slug: player?.slug ?? "",
           team_name: team?.name ?? "",
           league_slug: team ? (leagueMap.get(team.leagueId) ?? "") : "",
           headshot_url: player?.headshot ?? null,
