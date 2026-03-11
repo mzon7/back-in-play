@@ -223,7 +223,15 @@ function timeAgo(iso: string): string {
 }
 
 function StatusUpdatesBlock({ showLeague }: { showLeague?: boolean }) {
-  const { data: changes = [], isLoading } = useStatusChanges(20);
+  const { data: rawChanges = [], isLoading } = useStatusChanges(50);
+
+  // Deduplicate: keep only the latest change per player
+  const seen = new Set<string>();
+  const changes = rawChanges.filter((c) => {
+    if (seen.has(c.player_id)) return false;
+    seen.add(c.player_id);
+    return true;
+  }).slice(0, 20);
 
   if (isLoading) {
     return (

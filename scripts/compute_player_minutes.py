@@ -158,8 +158,8 @@ def fetch_season_avg_minutes(espn_id, sport, league):
 
 
 # -- Fetch recent game log minutes -------------------------------------------
-def fetch_recent_game_minutes(espn_id, sport, league, days=7):
-    """Fetch game minutes from the last N days from ESPN game log."""
+def fetch_recent_game_minutes(espn_id, sport, league, after_date=None):
+    """Fetch game minutes from ESPN game log, only counting games AFTER after_date."""
     url = ("https://site.api.espn.com/apis/common/v3/sports/"
            "%s/%s/athletes/%s/gamelog" % (sport, league, espn_id))
     data = fetch_json(url)
@@ -170,21 +170,20 @@ def fetch_recent_game_minutes(espn_id, sport, league, days=7):
     min_label = "MIN" if "MIN" in labels else ("TOI" if "TOI" in labels else None)
     min_idx = labels.index(min_label) if min_label and min_label in labels else None
 
-    cutoff = datetime.utcnow() - timedelta(days=days)
-    games = []
+    # Use after_date (return date from injury) as cutoff, fallback to 7 days ago
+    if after_date:
+        if isinstance(after_date, str):
+            try:
+                cutoff = datetime.fromisoformat(after_date.replace("Z", "").replace("+00:00", ""))
+            except ValueError:
+                cutoff = datetime.utcnow() - timedelta(days=7)
+        else:
+            cutoff = after_date
+    else:
+        cutoff = datetime.utcnow() - timedelta(days=7)
 
     # Events can be dict (keyed by event ID) or in seasonTypes
     events = data.get("events", {})
-    if isinstance(events, dict):
-        for eid, ev in events.items():
-            gdate = ev.get("gameDate", "")
-            if gdate:
-                try:
-                    dt = datetime.fromisoformat(gdate.replace("Z", "+00:00").replace("+00:00", ""))
-                except ValueError:
-                    dt = datetime.min
-                if dt >= cutoff:
-                    games.append(ev)
 
     # Also check seasonTypes for stats
     game_minutes = []
@@ -294,9 +293,10 @@ def check_returned_players():
         if not cfg or not cfg["min_label"]:
             continue
 
-        # Fetch last 7 days of game logs
+        # Fetch game logs after the player's return date
+        return_date = inj.get("return_date")
         recent_minutes = fetch_recent_game_minutes(
-            espn_id, cfg["sport"], cfg["league"], days=7
+            espn_id, cfg["sport"], cfg["league"], after_date=return_date
         )
 
         if not recent_minutes:
