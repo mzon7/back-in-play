@@ -98,6 +98,12 @@ def main():
                     "priority": "0.7",
                     "changefreq": "daily",
                 })
+                # Return date page (highest traffic potential)
+                urls.append({
+                    "loc": "/%s-return-date" % p["slug"],
+                    "priority": "0.8",
+                    "changefreq": "daily",
+                })
 
     # Generate XML
     xml_lines = ['<?xml version="1.0" encoding="UTF-8"?>']

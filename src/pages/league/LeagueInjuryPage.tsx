@@ -47,7 +47,7 @@ function useLeagueTeams(leagueSlug: string) {
 }
 
 export default function LeagueInjuryPage() {
-  const { leagueSlug: rawSlug } = useParams<{ leagueSlug: string }>();
+  const { slug: rawSlug } = useParams<{ slug: string }>();
   // URL is like "/nba-injuries" — strip "-injuries"
   const leagueSlug = (rawSlug ?? "").replace(/-injuries$/, "");
   const { data: injuries, isLoading } = useCurrentInjuries(leagueSlug);

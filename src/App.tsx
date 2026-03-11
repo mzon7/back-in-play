@@ -10,7 +10,7 @@ import { RecoveryStatsPage } from "./features/historical-injury-data-system/comp
 
 const PlayerInjuryPage = lazy(() => import("./pages/player/PlayerInjuryPage"));
 const TeamInjuryPage = lazy(() => import("./pages/team/TeamInjuryPage"));
-const LeagueInjuryPage = lazy(() => import("./pages/league/LeagueInjuryPage"));
+const SlugRouter = lazy(() => import("./pages/SlugRouter"));
 
 function Loading() {
   return (
@@ -43,11 +43,11 @@ export default function App() {
         {/* SEO: Player injury pages */}
         <Route path="/player/:playerSlug" element={<PlayerInjuryPage />} />
 
-        {/* SEO: League injury hub pages */}
-        <Route path="/:leagueSlug" element={<LeagueInjuryPage />} />
-
-        {/* SEO: Team injury pages */}
+        {/* SEO: Team injury pages (must be before /:slug to match 2-segment paths) */}
         <Route path="/:leagueSlug/:teamSlug" element={<TeamInjuryPage />} />
+
+        {/* SEO: Top-level slug — dispatches to league hub or player return date */}
+        <Route path="/:slug" element={<SlugRouter />} />
 
         {/* Default redirect */}
         <Route path="*" element={<Navigate to="/" replace />} />
