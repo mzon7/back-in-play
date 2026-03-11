@@ -1007,15 +1007,8 @@ def diff_injuries(fresh, state_for_league):
                     "change_type": "status_change",
                     "summary": _status_change_summary(old_s, new_s, inj),
                 })
-            else:
-                status_changes.append({
-                    "player_id": pid,
-                    "injury_id": inj.get("injury_id"),
-                    "old_status": old_s,
-                    "new_status": new_s,
-                    "change_type": "updated",
-                    "summary": "Updated: %s" % inj.get("injury_type", "Unknown"),
-                })
+            # Skip logging when status unchanged (avoids spam every scrape cycle)
+            pass
 
     for pid in removed_pids:
         old_entry = old_by_player.get(pid, {})
