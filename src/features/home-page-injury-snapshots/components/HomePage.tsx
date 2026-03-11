@@ -73,6 +73,12 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-sm font-medium text-white truncate">{inj.player_name}</span>
+              {inj.is_star && (
+                <span className="shrink-0 text-[11px]" title="Star player">{"\u2B50"}</span>
+              )}
+              {inj.is_starter && !inj.is_star && (
+                <span className="shrink-0 text-[9px] font-bold text-emerald-400 border border-emerald-400/40 rounded px-1" title="Starter">S</span>
+              )}
               {inj.position && (
                 <span className="text-[10px] text-white/40 shrink-0">{inj.position}</span>
               )}

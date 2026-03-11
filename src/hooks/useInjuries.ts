@@ -30,6 +30,8 @@ export interface InjuryRow {
   preseason_rank?: number | null;
   headshot_url?: string | null;
   pre_injury_avg_minutes?: number | null;
+  is_star?: boolean;
+  is_starter?: boolean;
 }
 
 export interface LeagueRow {
@@ -95,7 +97,7 @@ export function useTopPlayerInjuries() {
 
       const { data: rankedPlayers } = await supabase
         .from("back_in_play_players")
-        .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id")
+        .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
         .or("league_rank.lte.50,preseason_rank.lte.50");
 
       if (!rankedPlayers || rankedPlayers.length === 0) return [];
@@ -138,7 +140,7 @@ export function useTopPlayerInjuries() {
       if (missingPlayerIds.size > 0) {
         const { data: extraPlayers } = await supabase
           .from("back_in_play_players")
-          .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id")
+          .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
           .in("player_id", Array.from(missingPlayerIds));
         (extraPlayers ?? []).forEach((p) => playerMap.set(p.player_id, p));
       }
@@ -158,6 +160,8 @@ export function useTopPlayerInjuries() {
           preseason_rank: player?.preseason_rank ?? null,
           headshot_url: player?.headshot_url ?? espnHeadshot(player?.espn_id) ?? null,
           pre_injury_avg_minutes: player?.pre_injury_avg_minutes ?? null,
+          is_star: player?.is_star ?? false,
+          is_starter: player?.is_starter ?? false,
         };
       });
     },
@@ -191,7 +195,7 @@ export function useCurrentInjuries(leagueSlug: string) {
       // 2. Get players for this league's teams (~30 team IDs, fits easily in URL)
       const { data: players } = await supabase
         .from("back_in_play_players")
-        .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id")
+        .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
         .in("team_id", teamIds);
       const playerMap = new Map<string, any>();
       (players ?? []).forEach((p: any) => playerMap.set(p.player_id, p));
@@ -223,6 +227,8 @@ export function useCurrentInjuries(leagueSlug: string) {
             preseason_rank: player?.preseason_rank ?? null,
             headshot_url: player?.headshot_url ?? espnHeadshot(player?.espn_id) ?? null,
             pre_injury_avg_minutes: player?.pre_injury_avg_minutes ?? null,
+            is_star: player?.is_star ?? false,
+            is_starter: player?.is_starter ?? false,
           };
         });
     },
