@@ -91,7 +91,8 @@ export function useTopPlayerInjuries() {
 
       const { data: teams } = await supabase
         .from("back_in_play_teams")
-        .select("team_id, team_name, league_id");
+        .select("team_id, team_name, league_id")
+        .neq("team_name", "Unknown");
       const teamMap = new Map<string, { name: string; leagueId: string }>();
       (teams ?? []).forEach((t) => teamMap.set(t.team_id, { name: t.team_name, leagueId: t.league_id }));
 
@@ -186,36 +187,45 @@ export function useCurrentInjuries(leagueSlug: string) {
       const { data: teams } = await supabase
         .from("back_in_play_teams")
         .select("team_id, team_name")
-        .eq("league_id", leagueId);
+        .eq("league_id", leagueId)
+        .neq("team_name", "Unknown");
       const teamMap = new Map<string, string>();
       (teams ?? []).forEach((t) => teamMap.set(t.team_id, t.team_name));
       const teamIds = Array.from(teamMap.keys());
       if (teamIds.length === 0) return [];
 
-      // 2. Get players for this league's teams (~30 team IDs, fits easily in URL)
-      const { data: players } = await supabase
-        .from("back_in_play_players")
-        .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
-        .in("team_id", teamIds);
+      // 2. Get players for this league's teams, chunked to avoid row limits
       const playerMap = new Map<string, any>();
-      (players ?? []).forEach((p: any) => playerMap.set(p.player_id, p));
-      const playerIdSet = new Set(playerMap.keys());
-      if (playerIdSet.size === 0) return [];
+      for (let i = 0; i < teamIds.length; i += 20) {
+        const chunk = teamIds.slice(i, i + 20);
+        const { data: players } = await supabase
+          .from("back_in_play_players")
+          .select("player_id, player_name, position, team_id, league_rank, preseason_rank, headshot_url, pre_injury_avg_minutes, espn_id, is_star, is_starter")
+          .in("team_id", chunk)
+          .limit(5000);
+        (players ?? []).forEach((p: any) => playerMap.set(p.player_id, p));
+      }
+      if (playerMap.size === 0) return [];
 
-      // 3. Fetch ALL recent injuries (no player filter), then filter client-side
+      // 3. Fetch injuries for this league's players in chunks
       const cutoff = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
-      const { data: allInjuries, error } = await supabase
-        .from("back_in_play_injuries")
-        .select("*")
-        .gte("date_injured", cutoff)
-        .neq("status", "cleared")
-        .order("date_injured", { ascending: false });
-      if (error) throw error;
+      const playerIds = Array.from(playerMap.keys());
+      const injuries: any[] = [];
+      for (let i = 0; i < playerIds.length; i += 100) {
+        const chunk = playerIds.slice(i, i + 100);
+        const { data, error } = await supabase
+          .from("back_in_play_injuries")
+          .select("*")
+          .in("player_id", chunk)
+          .gte("date_injured", cutoff)
+          .neq("status", "cleared")
+          .order("date_injured", { ascending: false });
+        if (error) throw error;
+        if (data) injuries.push(...data);
+      }
 
-      // 4. Filter to only this league's players and enrich
-      return (allInjuries ?? [])
-        .filter((inj) => playerIdSet.has(inj.player_id))
-        .map((inj) => {
+      // 4. Enrich with player/team data
+      return injuries.map((inj) => {
           const player = playerMap.get(inj.player_id);
           return {
             ...inj,

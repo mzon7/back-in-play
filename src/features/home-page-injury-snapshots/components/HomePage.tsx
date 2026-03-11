@@ -48,10 +48,11 @@ function classifySection(inj: InjuryRow): Section {
 /** High-value positions get a boost (NFL QB/RB, NBA PG, etc.) */
 const POSITION_BOOST: Record<string, number> = {
   QB: 3, RB: 2, WR: 1.5, TE: 1.2, // NFL
-  PG: 1.5, SG: 1.2, SF: 1.2, PF: 1.2, C: 1.3, // NBA
-  GK: 1.5, ST: 1.5, CF: 1.5, LW: 1.3, RW: 1.3, CAM: 1.3, // Soccer
-  C: 1.3, LW: 1.2, RW: 1.2, G: 1.5, D: 1.1, // NHL
-  SP: 1.5, RP: 1, "1B": 1.2, SS: 1.3, CF: 1.2, // MLB
+  PG: 1.5, SG: 1.2, SF: 1.2, PF: 1.2, // NBA
+  GK: 1.5, ST: 1.5, CAM: 1.3, // Soccer
+  G: 1.5, D: 1.1, // NHL
+  C: 1.3, LW: 1.3, RW: 1.3, CF: 1.5, // shared (NBA C / NHL C, Soccer wings)
+  SP: 1.5, RP: 1, "1B": 1.2, SS: 1.3, // MLB
 };
 
 function daysAgo(dateStr: string | null | undefined): number {
