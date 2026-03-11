@@ -904,6 +904,37 @@ def injury_fingerprint(inj):
     ])
 
 
+def _status_change_summary(old_status, new_status, inj):
+    """Generate a human-readable summary for a status transition."""
+    ns = new_status.lower().replace("-", "_")
+    os_ = old_status.lower().replace("-", "_")
+    if ns == "out":
+        if os_ in ("day_to_day", "questionable", "doubtful"):
+            return "Downgraded to OUT"
+        return "Placed on OUT"
+    if ns in ("ir", "il_10", "il_15", "il_60", "il_7"):
+        return "Placed on %s" % new_status.upper()
+    if ns == "day_to_day":
+        return "Upgraded to Day-to-Day" if os_ == "out" else "Day-to-Day"
+    if ns == "questionable":
+        return "Upgraded to Questionable" if os_ == "out" else "Questionable"
+    if ns == "doubtful":
+        if os_ in ("questionable", "probable"):
+            return "Downgraded to Doubtful"
+        return "Doubtful"
+    if ns == "probable":
+        return "Upgraded to Probable"
+    if ns == "active":
+        return "Activated"
+    if ns == "reduced_load":
+        return "Minutes restriction"
+    if ns == "back_in_play":
+        return "Full return"
+    if ns == "suspended":
+        return "Suspended"
+    return "%s -> %s" % (old_status, new_status)
+
+
 def diff_injuries(fresh, state_for_league):
     """Compare fresh injuries against last-known state.
     Returns (changed, removed_player_ids, change_log).
@@ -950,7 +981,54 @@ def diff_injuries(fresh, state_for_league):
             pname = _resolve_player_name(pid)
             change_log.append("  - ACTIVE: %s (off injury report → active)" % pname)
 
-    return changed, removed_pids, change_log
+    # Build structured status change records
+    status_changes = []
+    for inj in fresh:
+        pid = inj["player_id"]
+        old_entry = old_by_player.get(pid)
+        if not old_entry:
+            status_changes.append({
+                "player_id": pid,
+                "injury_id": inj.get("injury_id"),
+                "old_status": None,
+                "new_status": inj.get("status", "out"),
+                "change_type": "new_injury",
+                "summary": "New injury: %s (%s)" % (inj.get("injury_type", "Unknown"), inj.get("status", "out")),
+            })
+        elif old_entry.get("fingerprint") != injury_fingerprint(inj):
+            old_s = old_entry.get("status", "")
+            new_s = inj.get("status", "")
+            if old_s != new_s:
+                status_changes.append({
+                    "player_id": pid,
+                    "injury_id": inj.get("injury_id"),
+                    "old_status": old_s,
+                    "new_status": new_s,
+                    "change_type": "status_change",
+                    "summary": _status_change_summary(old_s, new_s, inj),
+                })
+            else:
+                status_changes.append({
+                    "player_id": pid,
+                    "injury_id": inj.get("injury_id"),
+                    "old_status": old_s,
+                    "new_status": new_s,
+                    "change_type": "updated",
+                    "summary": "Updated: %s" % inj.get("injury_type", "Unknown"),
+                })
+
+    for pid in removed_pids:
+        old_entry = old_by_player.get(pid, {})
+        status_changes.append({
+            "player_id": pid,
+            "injury_id": None,
+            "old_status": old_entry.get("status", "out"),
+            "new_status": "active",
+            "change_type": "activated",
+            "summary": "Activated (cleared from injury report)",
+        })
+
+    return changed, removed_pids, change_log, status_changes
 
 
 def _resolve_player_name(player_id):
@@ -959,6 +1037,26 @@ def _resolve_player_name(player_id):
         if pid == player_id:
             return key.split(":")[0]
     return player_id[:8]
+
+
+def log_status_changes(changes):
+    """Write status change records to back_in_play_status_changes table."""
+    if not changes:
+        return
+    rows = []
+    for c in changes:
+        rows.append({
+            "player_id": c["player_id"],
+            "injury_id": c.get("injury_id"),
+            "old_status": c.get("old_status"),
+            "new_status": c["new_status"],
+            "change_type": c["change_type"],
+            "summary": c["summary"],
+        })
+    for i in range(0, len(rows), 50):
+        chunk = rows[i:i + 50]
+        sb_request("POST", "back_in_play_status_changes", chunk)
+    print("  Logged %d status changes" % len(rows), flush=True)
 
 
 def build_state_entry(inj):
@@ -1033,7 +1131,7 @@ def ingest_league(league_key, sources, use_diff=False, state=None):
 
     if use_diff and state is not None:
         league_state = state.get(league_key, {})
-        changed, removed_pids, change_log = diff_injuries(all_injuries, league_state)
+        changed, removed_pids, change_log, status_changes = diff_injuries(all_injuries, league_state)
 
         if not changed and not removed_pids:
             print("  No changes for %s ✓" % league_key.upper(), flush=True)
@@ -1065,6 +1163,9 @@ def ingest_league(league_key, sources, use_diff=False, state=None):
         count = sb_upsert("back_in_play_injuries", changed,
                           "player_id,date_injured,injury_type_slug")
         print("  UPSERTED: %d changed injuries for %s" % (count, league_key.upper()), flush=True)
+
+        # Log status changes to the feed table
+        log_status_changes(status_changes)
 
         # Update state
         new_state = {}
