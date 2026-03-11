@@ -80,6 +80,28 @@ def sb_request(method, path, body=None):
                 print("    [SB FAIL] %s %s: %s" % (method, path, e), flush=True)
                 return None
 
+_known_columns = {}  # cache: table -> set of known column names
+
+def _detect_columns(table):
+    """Detect which columns exist on a table by doing a SELECT *."""
+    if table in _known_columns:
+        return _known_columns[table]
+    row = sb_get(table, "select=*&limit=1")
+    if row and isinstance(row, list) and len(row) > 0:
+        cols = set(row[0].keys())
+        _known_columns[table] = cols
+        return cols
+    # Fallback: return None (don't strip anything)
+    return None
+
+def _strip_unknown_columns(table, rows):
+    """Remove keys that don't exist as columns on the table."""
+    known = _detect_columns(table)
+    if known is None:
+        return rows
+    return [{k: v for k, v in row.items() if k in known} for row in rows]
+
+
 def sb_upsert(table, rows, conflict=""):
     if not rows:
         return 0
@@ -93,6 +115,8 @@ def sb_upsert(table, rows, conflict=""):
                 seen.add(k)
                 unique.append(r)
         rows = unique
+    # Strip columns that don't exist yet (migration not run)
+    rows = _strip_unknown_columns(table, rows)
     hdrs = sb_headers("return=representation,resolution=merge-duplicates")
     url = SUPABASE_URL + "/rest/v1/" + table
     if conflict:
