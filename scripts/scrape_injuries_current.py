@@ -787,37 +787,46 @@ def scrape_rankings(league_key):
                     continue
 
                 # Get athletes from roster
-                athletes = roster_data.get("athletes", [])
-                for group in athletes:
-                    items = group.get("items", []) if isinstance(group, dict) else []
-                    for athlete in items[:3]:  # Top ~3 per team
-                        pname = athlete.get("displayName") or athlete.get("fullName", "")
-                        if not pname:
-                            continue
+                # ESPN returns athletes either as direct list or grouped with items
+                athletes_raw = roster_data.get("athletes", [])
+                athlete_list = []
+                for entry in athletes_raw:
+                    if isinstance(entry, dict):
+                        if entry.get("displayName") or entry.get("fullName"):
+                            # Direct athlete object
+                            athlete_list.append(entry)
+                        elif entry.get("items"):
+                            # Grouped format
+                            athlete_list.extend(entry["items"])
 
-                        pos = athlete.get("position", {})
-                        pos_abbr = pos.get("abbreviation", "Unknown") if isinstance(pos, dict) else "Unknown"
-                        headshot = athlete.get("headshot", {})
-                        headshot_url = headshot.get("href", "") if isinstance(headshot, dict) else ""
-                        espn_id = str(athlete.get("id", ""))
+                for athlete in athlete_list[:3]:  # Top ~3 per team
+                    pname = athlete.get("displayName") or athlete.get("fullName", "")
+                    if not pname:
+                        continue
 
-                        # Check if already in list
-                        if any(p["espn_id"] == espn_id for p in ranked_players if p.get("espn_id")):
-                            continue
+                    pos = athlete.get("position", {})
+                    pos_abbr = pos.get("abbreviation", "Unknown") if isinstance(pos, dict) else "Unknown"
+                    headshot = athlete.get("headshot", {})
+                    headshot_url = headshot.get("href", "") if isinstance(headshot, dict) else ""
+                    espn_id = str(athlete.get("id", ""))
 
-                        ranked_players.append({
-                            "name": pname,
-                            "team_name": team_name,
-                            "position": pos_abbr,
-                            "rank": len(ranked_players) + 1,
-                            "headshot_url": headshot_url,
-                            "espn_id": espn_id,
-                        })
+                    # Check if already in list
+                    if any(p["espn_id"] == espn_id for p in ranked_players if p.get("espn_id")):
+                        continue
 
-                        if len(ranked_players) >= 50:
-                            break
+                    ranked_players.append({
+                        "name": pname,
+                        "team_name": team_name,
+                        "position": pos_abbr,
+                        "rank": len(ranked_players) + 1,
+                        "headshot_url": headshot_url,
+                        "espn_id": espn_id,
+                    })
+
                     if len(ranked_players) >= 50:
                         break
+                if len(ranked_players) >= 50:
+                    break
 
                 time.sleep(0.3)
                 if len(ranked_players) >= 50:
