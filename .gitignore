@@ -25,3 +25,8 @@ dist-ssr
 *.sw?
 .env.local
 .vercel
+
+# Scraper state files
+scripts/.injury_state.json
+scripts/.scraper_checkpoint.json
+scripts/*.log
