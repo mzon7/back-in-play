@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   useLeagues,
@@ -238,19 +238,62 @@ function TopPlayersView() {
 /* -- Per-league injuries view -- */
 function LeagueInjuries({ slug }: { slug: string }) {
   const { data: injuries = [], isLoading } = useCurrentInjuries(slug);
+  const [teamFilter, setTeamFilter] = useState<string | null>(null);
+
+  // Reset team filter when league changes
+  useEffect(() => { setTeamFilter(null); }, [slug]);
 
   if (isLoading) return <LoadingSkeleton />;
   if (injuries.length === 0) {
     return <EmptyBox message={`No injury data for ${LEAGUE_LABELS[slug] ?? slug.toUpperCase()}.`} />;
   }
 
+  // Extract unique teams sorted alphabetically
+  const teams = Array.from(new Set(injuries.map((i) => i.team_name ?? "").filter(Boolean))).sort();
+
+  const filtered = teamFilter
+    ? injuries.filter((i) => i.team_name === teamFilter)
+    : injuries;
+
   const grouped: Record<Section, InjuryRow[]> = { today: [], out: [], active: [], reduced: [], back: [] };
-  for (const inj of injuries) {
+  for (const inj of filtered) {
     grouped[classifySection(inj)].push(inj);
   }
 
   return (
     <div className="space-y-6">
+      {/* Team filter */}
+      {teams.length > 1 && (
+        <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
+          <button
+            onClick={() => setTeamFilter(null)}
+            className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+              teamFilter === null
+                ? "border-white/30 bg-white/10 text-white"
+                : "border-white/10 text-white/40 hover:text-white/60"
+            }`}
+          >
+            All Teams ({injuries.length})
+          </button>
+          {teams.map((team) => {
+            const count = injuries.filter((i) => i.team_name === team).length;
+            return (
+              <button
+                key={team}
+                onClick={() => setTeamFilter(teamFilter === team ? null : team)}
+                className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+                  teamFilter === team
+                    ? "border-[#1C7CFF]/50 bg-[#1C7CFF]/15 text-[#1C7CFF]"
+                    : "border-white/10 text-white/40 hover:text-white/60"
+                }`}
+              >
+                {team} ({count})
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {SECTIONS.map((sec) => (
         <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} />
       ))}
