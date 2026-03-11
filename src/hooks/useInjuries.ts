@@ -50,6 +50,7 @@ export interface StatusChangeRow {
   player_name?: string;
   team_name?: string;
   league_slug?: string;
+  headshot_url?: string | null;
 }
 
 export function useLeagues() {
@@ -238,12 +239,12 @@ export function useStatusChanges(limit = 30) {
       const playerIds = Array.from(new Set(changes.map((c) => c.player_id)));
       const { data: players } = await supabase
         .from("back_in_play_players")
-        .select("player_id, player_name, team_id")
+        .select("player_id, player_name, team_id, headshot_url")
         .in("player_id", playerIds);
 
-      const playerMap = new Map<string, { name: string; teamId: string }>();
+      const playerMap = new Map<string, { name: string; teamId: string; headshot: string | null }>();
       (players ?? []).forEach((p) =>
-        playerMap.set(p.player_id, { name: p.player_name, teamId: p.team_id }),
+        playerMap.set(p.player_id, { name: p.player_name, teamId: p.team_id, headshot: p.headshot_url }),
       );
 
       const teamIds = Array.from(new Set([...playerMap.values()].map((p) => p.teamId).filter(Boolean)));
@@ -268,6 +269,7 @@ export function useStatusChanges(limit = 30) {
           player_name: player?.name ?? "Unknown",
           team_name: team?.name ?? "",
           league_slug: team ? (leagueMap.get(team.leagueId) ?? "") : "",
+          headshot_url: player?.headshot ?? null,
         };
       });
     },

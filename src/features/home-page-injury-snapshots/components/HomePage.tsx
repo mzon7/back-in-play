@@ -257,6 +257,17 @@ function StatusUpdatesBlock({ showLeague }: { showLeague?: boolean }) {
             key={c.id}
             className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2"
           >
+            {c.headshot_url ? (
+              <img
+                src={c.headshot_url}
+                alt={c.player_name}
+                className="h-8 w-8 rounded-full bg-white/10 object-cover shrink-0"
+              />
+            ) : (
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 shrink-0">
+                <span className="text-[10px] text-white/40">{(c.player_name ?? "?")[0]}</span>
+              </div>
+            )}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-white truncate">{c.player_name}</span>
