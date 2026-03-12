@@ -47,3 +47,6 @@
 
 ## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
 - The code diff does not show any actual changes made to the source files; it only updates documentation files.
+
+## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
+- The code diff shows that the SEO component was modified to move helper functions to a separate file, which helps prevent conditional rendering of hooks, addressing the original error.
