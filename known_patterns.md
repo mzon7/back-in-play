@@ -38,3 +38,6 @@
 
 ## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
 - The code diff shows a new component `InjuriesView` that unconditionally calls the same number of hooks on every render, addressing the original error of conditional hook rendering.
+
+## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
+- The AI response discusses changes related to React.lazy and Fast Refresh but does not provide a code diff that shows any actual changes made to the source files. The error regarding hooks is not addre
