@@ -97,10 +97,16 @@ export function installFrontendErrorCapture(
   };
 
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    // Same filter as onError — React re-dispatches caught hooks errors as rejections too.
+    const message = String(event.reason?.message ?? event.reason);
+    if (
+      message.includes("Rendered more hooks") ||
+      message.includes("Rendered fewer hooks")
+    ) return;
     reportSelfHealError(supabase, {
       category: "frontend",
       source: "unhandledrejection",
-      errorMessage: String(event.reason),
+      errorMessage: message,
       projectPrefix,
     });
   };
