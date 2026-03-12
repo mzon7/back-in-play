@@ -23,3 +23,8 @@
 - Error: Error messages (most recent):
 - Attempted: 1 fix(es), verdict: The code diff shows a change that introduces a `Fragment` with a dynamic `key` based on the current route, which addresses the issue of rendering more hooks than during the previous render by ensuring that the component tree is fully unmounted and remounted when navigating between different route types.
 - Status: unresolved
+
+## [2026-03-12 00:57] Unresolved: react-dom_client.js?v=82e7d159
+- Error: Error messages (most recent):
+- Attempted: 1 fix(es), verdict: The code diff includes changes that address the original error by adding `// @refresh reset` to multiple components, which prevents hooks-count mismatches during hot module replacement.
+- Status: unresolved
