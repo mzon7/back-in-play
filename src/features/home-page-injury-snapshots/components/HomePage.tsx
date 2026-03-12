@@ -629,48 +629,36 @@ function HeadlineStories({ injuries, showLeague }: { injuries: InjuryRow[]; show
   );
 }
 
-/* -- Landing: Top 50 players across all leagues -- */
-function TopPlayersView() {
-  const { data: injuries = [], isLoading } = useTopPlayerInjuries();
-
-  if (isLoading) return <LoadingSkeleton />;
-  if (injuries.length === 0) {
-    return <EmptyBox message="No top player injury data yet." />;
-  }
-
-  const grouped: Record<Section, InjuryRow[]> = { out: [], active: [], reduced: [], back: [] };
-  for (const inj of injuries) {
-    grouped[classifySection(inj)].push(inj);
-  }
-
-  return (
-    <div className="space-y-6">
-      <HeadlineStories injuries={injuries} showLeague />
-      <StatusUpdatesBlock showLeague />
-      {SECTIONS.map((sec) => (
-        <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} showLeague />
-      ))}
-    </div>
+/* -- Unified injuries view: always calls the same hooks regardless of active tab.
+ * Merges TopPlayersView (was 1 hook) and LeagueInjuries (was 3 hooks) so React
+ * never sees a different hook count at this position in the tree. -- */
+function InjuriesView({ activeTab }: { activeTab: string }) {
+  // All four hooks called unconditionally every render — React rules of hooks.
+  const { data: topInjuries = [], isLoading: topLoading } = useTopPlayerInjuries();
+  const { data: leagueInjuries = [], isLoading: leagueLoading } = useCurrentInjuries(
+    activeTab === "top" ? "" : activeTab,
   );
-}
-
-/* -- Per-league injuries view -- */
-function LeagueInjuries({ slug }: { slug: string }) {
-  const { data: injuries = [], isLoading } = useCurrentInjuries(slug);
   const [teamFilter, setTeamFilter] = useState<string | null>(null);
+  useEffect(() => { setTeamFilter(null); }, [activeTab]);
 
-  // Reset team filter when league changes
-  useEffect(() => { setTeamFilter(null); }, [slug]);
+  const isTop = activeTab === "top";
+  const injuries = isTop ? topInjuries : leagueInjuries;
+  const isLoading = isTop ? topLoading : leagueLoading;
 
   if (isLoading) return <LoadingSkeleton />;
   if (injuries.length === 0) {
-    return <EmptyBox message={`No injury data for ${LEAGUE_LABELS[slug] ?? slug.toUpperCase()}.`} />;
+    return (
+      <EmptyBox
+        message={
+          isTop
+            ? "No top player injury data yet."
+            : `No injury data for ${LEAGUE_LABELS[activeTab] ?? activeTab.toUpperCase()}.`
+        }
+      />
+    );
   }
 
-  // Extract unique teams sorted alphabetically
-  const teams = Array.from(new Set(injuries.map((i) => i.team_name ?? "").filter((t) => t && t !== "Unknown"))).sort();
-
-  const filtered = teamFilter
+  const filtered = !isTop && teamFilter
     ? injuries.filter((i) => i.team_name === teamFilter)
     : injuries;
 
@@ -679,11 +667,27 @@ function LeagueInjuries({ slug }: { slug: string }) {
     grouped[classifySection(inj)].push(inj);
   }
 
+  if (isTop) {
+    return (
+      <div className="space-y-6">
+        <HeadlineStories injuries={injuries} showLeague />
+        <StatusUpdatesBlock showLeague />
+        {SECTIONS.map((sec) => (
+          <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} showLeague />
+        ))}
+      </div>
+    );
+  }
+
+  // Per-league view
+  const teams = Array.from(
+    new Set(injuries.map((i) => i.team_name ?? "").filter((t) => t && t !== "Unknown")),
+  ).sort();
+
   return (
     <div className="space-y-6">
       <HeadlineStories injuries={injuries} />
       <StatusUpdatesBlock />
-      {/* Team filter */}
       {teams.length > 1 && (
         <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
           <button
@@ -714,7 +718,6 @@ function LeagueInjuries({ slug }: { slug: string }) {
           })}
         </div>
       )}
-
       {SECTIONS.map((sec) => (
         <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} />
       ))}
@@ -790,11 +793,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
 
       {/* Content */}
       <main className="max-w-5xl mx-auto px-4 py-6 pb-16">
-        {activeTab === "top" ? (
-          <TopPlayersView key="top-players" />
-        ) : (
-          <LeagueInjuries key="league-injuries" slug={activeTab} />
-        )}
+        <InjuriesView activeTab={activeTab} />
       </main>
 
       {/* Footer */}
