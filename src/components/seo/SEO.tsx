@@ -44,7 +44,3 @@ export function SEO({ title, description, path, type = "website", dateModified, 
     </Helmet>
   );
 }
-
-// Non-component SEO helpers live in ./seoHelpers.ts to keep this file
-// Fast Refresh compatible (react-refresh/only-export-components rule).
-export { playerJsonLd, teamJsonLd } from "./seoHelpers";

@@ -1,7 +1,8 @@
 // @refresh reset
 import { useParams, Link } from "react-router-dom";
 import { usePlayerPage } from "../../hooks/usePlayerPage";
-import { SEO, playerJsonLd } from "../../components/seo/SEO";
+import { SEO } from "../../components/seo/SEO";
+import { playerJsonLd } from "../../components/seo/seoHelpers";
 import { StatusBadge } from "../../components/StatusBadge";
 
 const LEAGUE_LABELS: Record<string, string> = {
