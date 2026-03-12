@@ -792,7 +792,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
         {activeTab === "top" ? (
           <TopPlayersView key="top-players" />
         ) : (
-          <LeagueInjuries key={activeTab} slug={activeTab} />
+          <LeagueInjuries key="league-injuries" slug={activeTab} />
         )}
       </main>
 

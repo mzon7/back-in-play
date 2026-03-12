@@ -315,9 +315,18 @@ def _parse_int(text):
     return int(v) if v is not None else None
 
 def _season_for_date(d, league):
-    """Return the season year for a game date. NBA/NHL seasons span two years."""
+    """Return the season year for a game date.
+    NBA/NHL: Oct-Dec → next year (2024-25 season = "2025"). Jan-Sep → same year.
+    NFL: Sep-Dec → same year. Jan-Feb → previous year (2025 season includes Jan/Feb 2026 playoffs).
+    EPL: Aug-Dec → same year. Jan-May → previous year (2025-26 season = "2025" start).
+    MLB: Always the calendar year.
+    """
     if league in ("nba", "nhl"):
         return d.year + 1 if d.month >= 10 else d.year
+    if league == "nfl":
+        return d.year - 1 if d.month <= 2 else d.year
+    if league == "premier-league":
+        return d.year - 1 if d.month <= 6 else d.year
     return d.year
 
 
@@ -638,6 +647,248 @@ SCRAPERS = {
     "premier-league": scrape_epl_game_log,
 }
 
+# ─── ESPN API fallback scrapers ──────────────────────────────────────────────
+# ESPN API structure:
+#   data.events = dict keyed by eventId → {gameDate, opponent: {abbreviation}, ...}
+#   data.names = [field_name, ...] — consistent names for stat columns
+#   data.labels = [abbreviation, ...] — display labels (may have duplicates like "YDS")
+#   data.seasonTypes[n].categories[n].events[n] = {eventId, stats: [string values]}
+# We use `names` for index-based lookup since labels can be ambiguous.
+
+ESPN_SPORT_MAP = {
+    "nba": ("basketball", "nba"),
+    "nfl": ("football", "nfl"),
+    "nhl": ("hockey", "nhl"),
+    "mlb": ("baseball", "mlb"),
+    "premier-league": ("soccer", "eng.1"),
+}
+
+def _espn_fetch_gamelog(espn_id, league, season):
+    """Fetch game log JSON from ESPN API. Returns parsed JSON or None."""
+    sport, espn_league = ESPN_SPORT_MAP.get(league, (None, None))
+    if not sport:
+        return None
+    url = (f"https://site.api.espn.com/apis/common/v3/sports/{sport}/{espn_league}"
+           f"/athletes/{espn_id}/gamelog?season={season}")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        resp = urllib.request.urlopen(req, timeout=30)
+        return json.loads(resp.read().decode())
+    except Exception as e:
+        print(f"    ESPN API error ({league} {espn_id} {season}): {e}", flush=True)
+        return None
+
+
+def _espn_stat_by_name(names, stats, field_name):
+    """Extract a stat value from ESPN gamelog using the `names` array (not labels)."""
+    try:
+        idx = names.index(field_name)
+        v = stats[idx] if idx < len(stats) else None
+        if v is None or v == "--" or v == "" or v == "-":
+            return None
+        return float(str(v).replace(",", ""))
+    except (ValueError, IndexError):
+        return None
+
+
+def _espn_collect_games(data):
+    """Collect all per-game stat rows from ESPN API response.
+    Returns list of (eventId, stats_values) plus the event metadata dict + names list.
+    """
+    events_meta = data.get("events", {})  # dict keyed by eventId
+    names = data.get("names", [])
+    game_rows = []  # [(eventId, [stat_values])]
+
+    for st in data.get("seasonTypes", []):
+        st_name = st.get("displayName", "").lower()
+        # Skip preseason / all-star
+        if "pre" in st_name or "all-star" in st_name or "exhibition" in st_name:
+            continue
+        for cat in st.get("categories", []):
+            cat_type = cat.get("type", "")
+            if cat_type != "event":
+                continue
+            for ev in cat.get("events", []):
+                eid = ev.get("eventId")
+                stats = ev.get("stats", [])
+                if eid and stats:
+                    game_rows.append((str(eid), stats))
+
+    return game_rows, events_meta, names
+
+
+def espn_scrape_nba(espn_id, season):
+    """Scrape NBA game log via ESPN API."""
+    data = _espn_fetch_gamelog(espn_id, "nba", season)
+    if not data:
+        return []
+
+    game_rows, events_meta, names = _espn_collect_games(data)
+    rows = []
+    for eid, stats in game_rows:
+        meta = events_meta.get(eid, {})
+        game_date = meta.get("gameDate", "")[:10]
+        if not game_date:
+            continue
+        opponent = meta.get("opponent", {}).get("abbreviation", "")
+
+        mins = _espn_stat_by_name(names, stats, "minutes")
+        if mins is None or mins == 0:
+            continue
+
+        row = {
+            "game_date": game_date,
+            "opponent": opponent,
+            "started": False,
+            "minutes": mins,
+            "stat_pts": _espn_stat_by_name(names, stats, "points"),
+            "stat_reb": _espn_stat_by_name(names, stats, "totalRebounds"),
+            "stat_ast": _espn_stat_by_name(names, stats, "assists"),
+            "stat_stl": _espn_stat_by_name(names, stats, "steals"),
+            "stat_blk": _espn_stat_by_name(names, stats, "blocks"),
+        }
+        rows.append(row)
+    return rows
+
+
+def espn_scrape_nfl(espn_id, season):
+    """Scrape NFL game log via ESPN API.
+    NFL stat columns vary by position (QB gets passing+rushing, WR gets receiving+rushing).
+    Uses `names` array for unambiguous field lookup.
+    """
+    data = _espn_fetch_gamelog(espn_id, "nfl", season)
+    if not data:
+        return []
+
+    game_rows, events_meta, names = _espn_collect_games(data)
+    rows = []
+    for eid, stats in game_rows:
+        meta = events_meta.get(eid, {})
+        game_date = meta.get("gameDate", "")[:10]
+        if not game_date:
+            continue
+        opponent = meta.get("opponent", {}).get("abbreviation", "")
+
+        row = {
+            "game_date": game_date,
+            "opponent": opponent,
+            "started": False,
+            "minutes": None,
+            "stat_pass_yds": _espn_stat_by_name(names, stats, "passingYards"),
+            "stat_pass_td": _espn_stat_by_name(names, stats, "passingTouchdowns"),
+            "stat_rush_yds": _espn_stat_by_name(names, stats, "rushingYards"),
+            "stat_rush_td": _espn_stat_by_name(names, stats, "rushingTouchdowns"),
+            "stat_rec": _espn_stat_by_name(names, stats, "receptions"),
+            "stat_rec_yds": _espn_stat_by_name(names, stats, "receivingYards"),
+        }
+        rows.append(row)
+    return rows
+
+
+def espn_scrape_nhl(espn_id, season):
+    """Scrape NHL game log via ESPN API."""
+    data = _espn_fetch_gamelog(espn_id, "nhl", season)
+    if not data:
+        return []
+
+    game_rows, events_meta, names = _espn_collect_games(data)
+    rows = []
+    for eid, stats in game_rows:
+        meta = events_meta.get(eid, {})
+        game_date = meta.get("gameDate", "")[:10]
+        if not game_date:
+            continue
+        opponent = meta.get("opponent", {}).get("abbreviation", "")
+
+        row = {
+            "game_date": game_date,
+            "opponent": opponent,
+            "started": False,
+            "minutes": _espn_stat_by_name(names, stats, "timeOnIcePerGame"),
+            "stat_goals": _espn_stat_by_name(names, stats, "goals"),
+            "stat_assists": _espn_stat_by_name(names, stats, "assists"),
+            "stat_sog": _espn_stat_by_name(names, stats, "shotsTotal"),
+        }
+        rows.append(row)
+    return rows
+
+
+def espn_scrape_mlb(espn_id, season, is_pitcher=False):
+    """Scrape MLB game log via ESPN API."""
+    data = _espn_fetch_gamelog(espn_id, "mlb", season)
+    if not data:
+        return []
+
+    game_rows, events_meta, names = _espn_collect_games(data)
+    rows = []
+    for eid, stats in game_rows:
+        meta = events_meta.get(eid, {})
+        game_date = meta.get("gameDate", "")[:10]
+        if not game_date:
+            continue
+        opponent = meta.get("opponent", {}).get("abbreviation", "")
+
+        if is_pitcher:
+            row = {
+                "game_date": game_date,
+                "opponent": opponent,
+                "started": False,
+                "minutes": None,
+                "stat_ip": _espn_stat_by_name(names, stats, "innings") or _espn_stat_by_name(names, stats, "inningsPitched"),
+                "stat_k": _espn_stat_by_name(names, stats, "strikeouts"),
+                "stat_era": _espn_stat_by_name(names, stats, "ERA"),
+            }
+        else:
+            row = {
+                "game_date": game_date,
+                "opponent": opponent,
+                "started": False,
+                "minutes": None,
+                "stat_h": _espn_stat_by_name(names, stats, "hits"),
+                "stat_hr": _espn_stat_by_name(names, stats, "homeRuns"),
+                "stat_rbi": _espn_stat_by_name(names, stats, "RBIs"),
+                "stat_r": _espn_stat_by_name(names, stats, "runs"),
+                "stat_sb": _espn_stat_by_name(names, stats, "stolenBases"),
+            }
+        rows.append(row)
+    return rows
+
+
+def espn_scrape_epl(espn_id, season):
+    """Scrape EPL game log via ESPN API."""
+    data = _espn_fetch_gamelog(espn_id, "premier-league", season)
+    if not data:
+        return []
+
+    game_rows, events_meta, names = _espn_collect_games(data)
+    rows = []
+    for eid, stats in game_rows:
+        meta = events_meta.get(eid, {})
+        game_date = meta.get("gameDate", "")[:10]
+        if not game_date:
+            continue
+        opponent = meta.get("opponent", {}).get("abbreviation", "")
+
+        row = {
+            "game_date": game_date,
+            "opponent": opponent,
+            "started": False,
+            "minutes": _espn_stat_by_name(names, stats, "minutesPlayed") or _espn_stat_by_name(names, stats, "minutes"),
+            "stat_goals": _espn_stat_by_name(names, stats, "totalGoals") or _espn_stat_by_name(names, stats, "goals"),
+            "stat_assists": _espn_stat_by_name(names, stats, "goalAssists") or _espn_stat_by_name(names, stats, "assists"),
+        }
+        rows.append(row)
+    return rows
+
+
+ESPN_SCRAPERS = {
+    "nba": espn_scrape_nba,
+    "nfl": espn_scrape_nfl,
+    "nhl": espn_scrape_nhl,
+    "mlb": espn_scrape_mlb,
+    "premier-league": espn_scrape_epl,
+}
+
 # ─── Pipeline phases ─────────────────────────────────────────────────────────
 
 def phase_1_get_return_cases(league=None, since_date=None):
@@ -663,7 +914,7 @@ def phase_1_get_return_cases(league=None, since_date=None):
     for i in range(0, len(player_ids), 50):
         batch = player_ids[i:i + 50]
         ids_str = ",".join(batch)
-        p_params = f"select=player_id,player_name,slug,position,league_id,sport_ref_id&player_id=in.({ids_str})"
+        p_params = f"select=player_id,player_name,slug,position,league_id,sport_ref_id,espn_id&player_id=in.({ids_str})"
         for p in sb_get("back_in_play_players", p_params) or []:
             players[p["player_id"]] = p
 
@@ -683,6 +934,7 @@ def phase_1_get_return_cases(league=None, since_date=None):
         c["position"] = p.get("position", "")
         c["league_slug"] = ls
         c["sport_ref_id"] = p.get("sport_ref_id")
+        c["espn_id"] = p.get("espn_id")
         enriched.append(c)
 
     return enriched
@@ -732,17 +984,19 @@ def phase_2_resolve_ids(cases, league=None):
 
 
 def phase_3_scrape_logs(cases, league=None):
-    """Scrape game logs for players in return cases."""
-    # Collect unique (player_id, sport_ref_id, league, season) combos
+    """Scrape game logs for players in return cases.
+    Tries *-Reference first, falls back to ESPN API if that fails (403, no data, no sport_ref_id).
+    """
+    # Collect unique (player_id, sport_ref_id, espn_id, league, season, position) combos
     combos = set()
     for c in cases:
-        if not c.get("sport_ref_id"):
+        # Need either sport_ref_id or espn_id
+        if not c.get("sport_ref_id") and not c.get("espn_id"):
             continue
         ls = c["league_slug"]
         if league and ls != league:
             continue
 
-        # We need the season(s) covering injury and return
         try:
             d_injured = datetime.strptime(c["date_injured"], "%Y-%m-%d").date()
             d_return = datetime.strptime(c["return_date"], "%Y-%m-%d").date()
@@ -751,38 +1005,57 @@ def phase_3_scrape_logs(cases, league=None):
 
         season_inj = _season_for_date(d_injured, ls)
         season_ret = _season_for_date(d_return, ls)
-        combos.add((c["player_id"], c["sport_ref_id"], ls, season_inj, c.get("position", "")))
+        combos.add((c["player_id"], c.get("sport_ref_id", ""), c.get("espn_id", ""),
+                     ls, season_inj, c.get("position", "")))
         if season_ret != season_inj:
-            combos.add((c["player_id"], c["sport_ref_id"], ls, season_ret, c.get("position", "")))
+            combos.add((c["player_id"], c.get("sport_ref_id", ""), c.get("espn_id", ""),
+                         ls, season_ret, c.get("position", "")))
 
     # Check which we already have in game_logs
     already_scraped = set()
-    for pid, ref_id, ls, season, _ in combos:
+    for pid, ref_id, espn_id, ls, season, _ in combos:
         existing = sb_get("back_in_play_player_game_logs",
                           f"select=id&player_id=eq.{pid}&season=eq.{season}&limit=1")
         if existing:
             already_scraped.add((pid, season))
 
-    to_scrape = [(pid, ref_id, ls, season, pos) for pid, ref_id, ls, season, pos in combos
+    to_scrape = [(pid, ref_id, espn_id, ls, season, pos)
+                 for pid, ref_id, espn_id, ls, season, pos in combos
                  if (pid, season) not in already_scraped]
 
     print(f"  {len(to_scrape)} player-seasons to scrape ({len(already_scraped)} cached)", flush=True)
     scraped = 0
 
-    for i, (pid, ref_id, ls, season, position) in enumerate(sorted(to_scrape)):
-        scraper = SCRAPERS.get(ls)
-        if not scraper:
-            continue
+    for i, (pid, ref_id, espn_id, ls, season, position) in enumerate(sorted(to_scrape)):
+        game_rows = []
+        source = ""
+        is_pitcher = position and position.lower() in ("pitcher", "sp", "rp", "starting pitcher", "relief pitcher", "p")
 
-        # For MLB, detect pitcher vs hitter
-        if ls == "mlb":
-            is_pitcher = position and position.lower() in ("pitcher", "sp", "rp", "starting pitcher", "relief pitcher", "p")
-            game_rows = scraper(ref_id, season, is_pitcher=is_pitcher)
-        else:
-            game_rows = scraper(ref_id, season)
+        # Try *-Reference first (if we have the ID)
+        if ref_id:
+            scraper = SCRAPERS.get(ls)
+            if scraper:
+                if ls == "mlb":
+                    game_rows = scraper(ref_id, season, is_pitcher=is_pitcher)
+                else:
+                    game_rows = scraper(ref_id, season)
+                if game_rows:
+                    source = "ref"
+
+        # Fallback to ESPN API
+        if not game_rows and espn_id:
+            espn_scraper = ESPN_SCRAPERS.get(ls)
+            if espn_scraper:
+                if ls == "mlb":
+                    game_rows = espn_scraper(espn_id, season, is_pitcher=is_pitcher)
+                else:
+                    game_rows = espn_scraper(espn_id, season)
+                if game_rows:
+                    source = "espn"
 
         if not game_rows:
-            print(f"    [{i + 1}/{len(to_scrape)}] {ref_id} {season} → 0 games", flush=True)
+            label = ref_id or espn_id or pid
+            print(f"    [{i + 1}/{len(to_scrape)}] {label} {season} → 0 games", flush=True)
             continue
 
         # Convert to DB rows
@@ -820,7 +1093,8 @@ def phase_3_scrape_logs(cases, league=None):
 
         n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
         scraped += n
-        print(f"    [{i + 1}/{len(to_scrape)}] {ref_id} {season} → {len(db_rows)} games", flush=True)
+        label = ref_id or espn_id or pid
+        print(f"    [{i + 1}/{len(to_scrape)}] {label} {season} → {len(db_rows)} games [{source}]", flush=True)
 
     print(f"  Scraped {scraped} total game log entries", flush=True)
     return scraped
