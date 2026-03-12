@@ -20,3 +20,6 @@
 
 ## Learned: react-dom_client.js?v=70a232db (2026-03-12)
 - The code diff shows that keys were added to the components, which addresses the issue of React rendering more hooks than during the previous render.
+
+## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
+- The code diff shows a change in the `HomePage.tsx` file where the key for the `LeagueInjuries` component was modified to a static value. This change addresses the issue of conditional rendering of hoo
