@@ -1,8 +1,7 @@
-import { useEffect, lazy, Suspense } from "react";
+import { lazy, Suspense } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { AuthCallback } from "@mzon7/zon-incubator-sdk/auth";
 import { supabase } from "./lib/supabase";
-import { installFrontendErrorCapture } from "./lib/errorReporting";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
 import HomePage from "./features/home-page-injury-snapshots/components/HomePage";
@@ -21,11 +20,6 @@ function Loading() {
 }
 
 export default function App() {
-  useEffect(() => {
-    const cleanup = installFrontendErrorCapture(supabase, "back_in_play_");
-    return cleanup;
-  }, []);
-
   return (
     <Suspense fallback={<Loading />}>
       <Routes>

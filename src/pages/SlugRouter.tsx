@@ -13,9 +13,12 @@ export default function SlugRouter() {
   const { slug } = useParams<{ slug: string }>();
 
   if (slug?.endsWith("-return-date")) {
-    return <PlayerReturnDatePage />;
+    // Use a stable key so React remounts cleanly when switching component types.
+    // PlayerReturnDatePage has 2 hooks; LeagueInjuryPage has 3 — different types
+    // MUST unmount/remount rather than reconcile in place.
+    return <PlayerReturnDatePage key="return-date-page" />;
   }
 
   // Default: treat as league page (e.g., /nba-injuries)
-  return <LeagueInjuryPage />;
+  return <LeagueInjuryPage key="league-injury-page" />;
 }
