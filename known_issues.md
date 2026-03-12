@@ -13,3 +13,8 @@
 - Error: Error messages (most recent):
 - Attempted: 1 fix(es), verdict: The code diff shows a change in the `HomePage.tsx` file where the key for the `LeagueInjuries` component was modified to a static value. This change addresses the issue of conditional rendering of hooks by ensuring that React properly unmounts and remounts components when switching between different views, thus preventing the 'Rendered more hooks than during the previous render' error.
 - Status: unresolved
+
+## [2026-03-12 00:43] Unresolved: react-dom_client.js?v=82e7d159
+- Error: Error messages (most recent):
+- Attempted: 1 fix(es), verdict: The code diff includes the addition of a new `HooksErrorBoundary` component that catches and handles errors related to hooks being rendered inconsistently, which directly addresses the original error.
+- Status: unresolved

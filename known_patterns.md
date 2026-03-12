@@ -23,3 +23,6 @@
 
 ## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
 - The code diff shows a change in the `HomePage.tsx` file where the key for the `LeagueInjuries` component was modified to a static value. This change addresses the issue of conditional rendering of hoo
+
+## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
+- The code diff includes the addition of a new `HooksErrorBoundary` component that catches and handles errors related to hooks being rendered inconsistently, which directly addresses the original error.
