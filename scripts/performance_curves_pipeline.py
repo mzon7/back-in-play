@@ -930,12 +930,14 @@ def _fpl_load_season(season_year):
 
 
 def fpl_scrape_epl(player_name, season_year):
-    """Get EPL game log for a player from FPL CSV data.
+    """Get EPL game log for a player from FPL CSV data (2016-2025).
+    Falls back to FPL live API for current season.
     Uses player_name (not espn_id) for matching.
     """
     by_player = _fpl_load_season(season_year)
     if not by_player:
-        return []
+        # If CSV not available (current/future season), try FPL live API
+        return fpl_api_scrape_epl(player_name, season_year)
 
     # Try exact match first, then fuzzy
     name_lower = player_name.lower().strip()
@@ -952,7 +954,8 @@ def fpl_scrape_epl(player_name, season_year):
                     break
 
     if not player_rows:
-        return []
+        # Try FPL live API as fallback
+        return fpl_api_scrape_epl(player_name, season_year)
 
     rows = []
     for pr in player_rows:
@@ -976,6 +979,248 @@ def fpl_scrape_epl(player_name, season_year):
         rows.append(row)
 
     return rows
+
+
+# ─── FPL Live API scraper (current season) ──────────────────────────────────
+# Uses fantasy.premierleague.com/api/ for current season per-GW stats
+
+_fpl_bootstrap = None  # cached bootstrap-static data
+
+def _fpl_get_bootstrap():
+    """Fetch and cache the FPL bootstrap-static data (all players, teams)."""
+    global _fpl_bootstrap
+    if _fpl_bootstrap is not None:
+        return _fpl_bootstrap
+
+    url = "https://fantasy.premierleague.com/api/bootstrap-static/"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        resp = urllib.request.urlopen(req, timeout=30)
+        data = json.loads(resp.read().decode())
+        _fpl_bootstrap = data
+        print(f"    FPL API: loaded {len(data.get('elements', []))} players", flush=True)
+        return data
+    except Exception as e:
+        print(f"    FPL API bootstrap error: {e}", flush=True)
+        _fpl_bootstrap = {}
+        return {}
+
+
+def _fpl_find_player(player_name):
+    """Find a player's FPL element ID by name matching."""
+    bootstrap = _fpl_get_bootstrap()
+    elements = bootstrap.get("elements", [])
+    if not elements:
+        return None
+
+    name_lower = player_name.lower().strip()
+    name_parts = name_lower.split()
+
+    for el in elements:
+        # FPL has web_name (display name), first_name, second_name
+        web = (el.get("web_name") or "").lower()
+        full = f"{(el.get('first_name') or '')} {(el.get('second_name') or '')}".lower().strip()
+
+        if name_lower == full or name_lower == web:
+            return el["id"]
+
+        # Partial match: first + last name
+        if len(name_parts) >= 2:
+            full_parts = full.split()
+            if len(full_parts) >= 2:
+                if name_parts[0] == full_parts[0] and name_parts[-1] == full_parts[-1]:
+                    return el["id"]
+
+    return None
+
+
+def fpl_api_scrape_epl(player_name, season_year):
+    """Scrape EPL game logs from FPL live API (current season only).
+    Returns game rows compatible with the pipeline format.
+    """
+    fpl_id = _fpl_find_player(player_name)
+    if not fpl_id:
+        return []
+
+    url = f"https://fantasy.premierleague.com/api/element-summary/{fpl_id}/"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json.loads(resp.read().decode())
+    except Exception as e:
+        print(f"    FPL API element error for {player_name}: {e}", flush=True)
+        return []
+
+    # history = current season per-GW stats
+    history = data.get("history", [])
+    if not history:
+        return []
+
+    # Get team names from bootstrap for opponent mapping
+    bootstrap = _fpl_get_bootstrap()
+    teams = {t["id"]: t["short_name"] for t in bootstrap.get("teams", [])}
+
+    rows = []
+    for gw in history:
+        kickoff = gw.get("kickoff_time", "")
+        game_date = kickoff[:10] if kickoff else ""
+        if not game_date:
+            continue
+
+        # Check season: FPL current season starts Aug/Sep of season_year
+        try:
+            d = datetime.strptime(game_date, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+
+        # EPL season year = start year (Aug-May)
+        gw_season = d.year if d.month >= 7 else d.year - 1
+        if gw_season != season_year:
+            continue
+
+        minutes = gw.get("minutes", 0)
+        if not minutes or minutes == 0:
+            continue
+
+        opp_id = gw.get("opponent_team")
+        opponent = teams.get(opp_id, str(opp_id or ""))
+
+        row = {
+            "game_date": game_date,
+            "opponent": opponent,
+            "started": gw.get("starts", 0) == 1,
+            "minutes": float(minutes),
+            "stat_goals": float(gw.get("goals_scored", 0)),
+            "stat_assists": float(gw.get("assists", 0)),
+        }
+        rows.append(row)
+
+    return rows
+
+# ─── FPL bulk store: download & store all current season EPL game logs ────
+
+def fpl_bulk_store():
+    """Download all current season EPL game data from FPL API and store in DB.
+    Fetches element-summary for every EPL player in our DB, stores full game logs.
+    """
+    bootstrap = _fpl_get_bootstrap()
+    if not bootstrap:
+        print("  FPL API unavailable", flush=True)
+        return
+
+    elements = bootstrap.get("elements", [])
+    teams = {t["id"]: t["short_name"] for t in bootstrap.get("teams", [])}
+    # Map FPL web_name/full_name → element id
+    fpl_name_to_id = {}
+    for el in elements:
+        web = (el.get("web_name") or "").lower()
+        full = f"{(el.get('first_name') or '')} {(el.get('second_name') or '')}".lower().strip()
+        fpl_name_to_id[full] = el["id"]
+        if web:
+            fpl_name_to_id[web] = el["id"]
+
+    # Get our EPL league_id
+    leagues_data = sb_get("back_in_play_leagues", "select=league_id,slug")
+    epl_lid = None
+    for l in (leagues_data or []):
+        if l["slug"] == "premier-league":
+            epl_lid = l["league_id"]
+            break
+    if not epl_lid:
+        print("  EPL league not found in DB", flush=True)
+        return
+
+    # Get all EPL players from our DB
+    players = []
+    offset = 0
+    while True:
+        batch = sb_get("back_in_play_players",
+                       f"select=player_id,player_name&league_id=eq.{epl_lid}&limit=1000&offset={offset}")
+        if not batch:
+            break
+        players.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+
+    print(f"  {len(players)} EPL players in DB, {len(fpl_name_to_id)} FPL players", flush=True)
+
+    stored = 0
+    not_found = 0
+
+    for i, p in enumerate(players):
+        name = p.get("player_name", "").strip()
+        name_lower = name.lower()
+
+        # Find FPL element ID
+        fpl_id = fpl_name_to_id.get(name_lower)
+        if not fpl_id:
+            parts = name_lower.split()
+            if len(parts) >= 2:
+                for fn, fid in fpl_name_to_id.items():
+                    fp = fn.split()
+                    if len(fp) >= 2 and fp[0] == parts[0] and fp[-1] == parts[-1]:
+                        fpl_id = fid
+                        break
+        if not fpl_id:
+            not_found += 1
+            continue
+
+        # Fetch game history
+        try:
+            url = f"https://fantasy.premierleague.com/api/element-summary/{fpl_id}/"
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            resp = urllib.request.urlopen(req, timeout=15)
+            data = json.loads(resp.read().decode())
+        except Exception:
+            continue
+
+        history = data.get("history", [])
+        if not history:
+            continue
+
+        db_rows = []
+        for gw in history:
+            kickoff = gw.get("kickoff_time", "")
+            game_date = kickoff[:10] if kickoff else ""
+            if not game_date:
+                continue
+
+            try:
+                d = datetime.strptime(game_date, "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+
+            season_year = d.year if d.month >= 7 else d.year - 1
+            minutes = gw.get("minutes", 0)
+
+            db_row = {
+                "player_id": p["player_id"],
+                "league_slug": "premier-league",
+                "season": season_year,
+                "game_date": game_date,
+                "opponent": teams.get(gw.get("opponent_team"), str(gw.get("opponent_team", ""))),
+                "started": gw.get("starts", 0) == 1,
+                "minutes": float(minutes) if minutes else 0.0,
+                "stat_goals": float(gw.get("goals_scored", 0)),
+                "stat_assists": float(gw.get("assists", 0)),
+            }
+            db_row["composite"] = compute_composite(db_row, "premier-league")
+            db_rows.append(db_row)
+
+        if db_rows:
+            sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+            stored += len(db_rows)
+
+        if (i + 1) % 100 == 0:
+            print(f"  [{i + 1}/{len(players)}] stored {stored} game logs...", flush=True)
+
+        # Rate limit
+        if (i + 1) % 30 == 0:
+            time.sleep(1)
+
+    print(f"\n  FPL bulk store: {stored} game logs stored, {not_found} players not found in FPL", flush=True)
+
 
 # ─── Injury audit: discover returns from game logs ──────────────────────────
 
@@ -1792,10 +2037,19 @@ def main():
     parser.add_argument("--incremental", action="store_true", help="Incremental (daily cron)")
     parser.add_argument("--audit", action="store_true",
                         help="Audit injuries: discover returns and season-ending from game logs")
+    parser.add_argument("--fpl-store", action="store_true",
+                        help="Bulk download and store all current season EPL game logs from FPL API")
     parser.add_argument("--league", type=str, help="Process single league (nba, nfl, nhl, mlb, premier-league)")
     parser.add_argument("--phase", type=str, choices=["resolve-ids", "scrape-logs", "compute", "aggregate"],
                         help="Run single phase")
     args = parser.parse_args()
+
+    if args.fpl_store:
+        print(f"\n{'=' * 60}")
+        print(f"FPL Bulk Store — Current Season EPL Game Logs")
+        print(f"{'=' * 60}\n")
+        fpl_bulk_store()
+        return
 
     if args.audit:
         print(f"\n{'=' * 60}")
@@ -1808,7 +2062,7 @@ def main():
             print(f"\nRe-run with --backfill to compute curves for newly discovered returns.")
         return
 
-    if not args.backfill and not args.incremental and not args.phase:
+    if not args.backfill and not args.incremental and not args.phase and not args.fpl_store:
         parser.print_help()
         sys.exit(1)
 
