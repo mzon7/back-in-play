@@ -1,4 +1,5 @@
 import { useParams, Link } from "react-router-dom";
+import { SiteHeader } from "../../components/SiteHeader";
 import { useTeamPage } from "../../hooks/useTeamPage";
 import { SEO, teamJsonLd } from "../../components/seo/SEO";
 import { StatusBadge } from "../../components/StatusBadge";
@@ -56,9 +57,10 @@ export default function TeamInjuryPage() {
   return (
     <div className="min-h-screen bg-[#0a0f1a] text-white">
       <SEO title={pageTitle} description={pageDesc} path={`/${team.league_slug}/${cleanTeamSlug}-injuries`} type="article" dateModified={now} jsonLd={jsonLd} />
+      <SiteHeader />
 
       {/* Breadcrumb */}
-      <nav className="px-4 py-3 text-xs text-white/40 max-w-3xl mx-auto">
+      <nav className="px-4 py-3 text-sm text-white/45 max-w-3xl mx-auto">
         <Link to="/" className="hover:text-white/60">Home</Link>
         {" / "}
         <Link to={`/${team.league_slug}-injuries`} className="hover:text-white/60">{leagueLabel} Injuries</Link>
@@ -136,18 +138,18 @@ export default function TeamInjuryPage() {
           </div>
         )}
 
-        {/* Internal Links */}
-        <div className="border-t border-white/10 pt-6 space-y-2 text-sm">
-          <h3 className="text-white/40 text-xs uppercase tracking-wide mb-2">Related</h3>
+        {/* Related Links */}
+        <div className="border-t border-white/10 pt-8 space-y-2 text-sm">
+          <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wide mb-3">Related Links</h3>
           <Link to={`/${team.league_slug}-injuries`} className="block text-cyan-400 hover:underline">
-            See all {leagueLabel} injuries
+            {leagueLabel} injury report
           </Link>
           <Link to="/" className="block text-cyan-400 hover:underline">
-            Back to all injury updates
+            All injury updates
           </Link>
         </div>
 
-        <p className="mt-6 text-[10px] text-white/20">
+        <p className="mt-6 text-xs text-white/35">
           Last updated: {new Date().toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
         </p>
       </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { SiteHeader } from "../../components/SiteHeader";
 import { useParams, Link } from "react-router-dom";
 import { useCurrentInjuries, type InjuryRow } from "../../hooks/useInjuries";
 import { SEO } from "../../components/seo/SEO";
@@ -101,9 +102,10 @@ export default function LeagueInjuryPage() {
   return (
     <div className="min-h-screen bg-[#0a0f1a] text-white">
       <SEO title={pageTitle} description={pageDesc} path={`/${leagueSlug}-injuries`} type="website" dateModified={now} jsonLd={jsonLd} />
+      <SiteHeader />
 
       {/* Breadcrumb */}
-      <nav className="px-4 py-3 text-xs text-white/40 max-w-3xl mx-auto">
+      <nav className="px-4 py-3 text-sm text-white/45 max-w-3xl mx-auto">
         <Link to="/" className="hover:text-white/60">Home</Link>
         {" / "}
         <span className="text-white/60">{leagueLabel} Injuries</span>
@@ -145,10 +147,38 @@ export default function LeagueInjuryPage() {
           </div>
         )}
 
+        {/* Jump navigation */}
+        <nav className="flex flex-wrap gap-1.5 py-3 border-b border-white/8 mb-6">
+          {teams && teams.length > 0 && (
+            <button
+              onClick={() => document.getElementById("league-teams")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              className="px-3 py-1.5 rounded-full text-xs font-medium text-white/50 border border-white/10 hover:bg-white/10 hover:text-white/70 transition-colors"
+            >
+              Teams
+            </button>
+          )}
+          {activeInjuries.length > 0 && (
+            <button
+              onClick={() => document.getElementById("league-injured")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              className="px-3 py-1.5 rounded-full text-xs font-medium text-white/50 border border-white/10 hover:bg-white/10 hover:text-white/70 transition-colors"
+            >
+              Injured ({activeInjuries.length})
+            </button>
+          )}
+          {returning.length > 0 && (
+            <button
+              onClick={() => document.getElementById("league-returning")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              className="px-3 py-1.5 rounded-full text-xs font-medium text-white/50 border border-white/10 hover:bg-white/10 hover:text-white/70 transition-colors"
+            >
+              Back In Play ({returning.length})
+            </button>
+          )}
+        </nav>
+
         {/* Team Directory */}
         {teams && teams.length > 0 && (
-          <div className="mb-8">
-            <h2 className="text-lg font-semibold mb-3">Team Injury Reports</h2>
+          <div id="league-teams" className="scroll-mt-32 mb-10">
+            <h2 className="text-base font-bold uppercase tracking-wide text-white/80 mb-3">Team Injury Reports</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {teams.map((t) => {
                 const count = teamCounts.get(t.team_name) ?? 0;
@@ -167,33 +197,26 @@ export default function LeagueInjuryPage() {
           </div>
         )}
 
-        {/* Currently Injured */}
-        <div className="mb-8">
-          <h2 className="text-lg font-semibold mb-3">Currently Injured ({activeInjuries.length})</h2>
-          {activeInjuries.length > 0 ? (
-            <div className="space-y-2">
-              {activeInjuries.slice(0, 50).map((inj) => (
-                <InjuryRow key={inj.injury_id} inj={inj} />
-              ))}
-              {activeInjuries.length > 50 && (
-                <p className="text-white/30 text-xs text-center mt-2">+ {activeInjuries.length - 50} more</p>
-              )}
-            </div>
-          ) : (
-            <p className="text-white/40 text-sm">No currently injured players</p>
-          )}
-        </div>
+        {/* Currently Injured — collapsible with show-more */}
+        <LeagueSection
+          id="league-injured"
+          title="Currently Injured"
+          emoji={"\u26A0\uFE0F"}
+          color="text-red-400"
+          items={activeInjuries}
+          defaultCollapsed={false}
+        />
 
-        {/* Recently Returned */}
+        {/* Back In Play — collapsible with show-more */}
         {returning.length > 0 && (
-          <div className="mb-8">
-            <h2 className="text-lg font-semibold mb-3">Back In Play ({returning.length})</h2>
-            <div className="space-y-2">
-              {returning.slice(0, 20).map((inj) => (
-                <InjuryRow key={inj.injury_id} inj={inj} />
-              ))}
-            </div>
-          </div>
+          <LeagueSection
+            id="league-returning"
+            title="Back In Play"
+            emoji={"\u26A1"}
+            color="text-cyan-400"
+            items={returning}
+            defaultCollapsed={false}
+          />
         )}
 
         {/* Internal Links */}
@@ -207,11 +230,11 @@ export default function LeagueInjuryPage() {
               </Link>
             ))}
           <Link to="/" className="block text-cyan-400 hover:underline mt-2">
-            All Injury Updates
+            All injury updates
           </Link>
         </div>
 
-        <p className="mt-6 text-[10px] text-white/20">
+        <p className="mt-6 text-xs text-white/35">
           Last updated: {new Date().toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
         </p>
       </div>
@@ -219,7 +242,70 @@ export default function LeagueInjuryPage() {
   );
 }
 
-function InjuryRow({ inj }: { inj: InjuryRow }) {
+const LEAGUE_SECTION_LIMIT = 12;
+
+function LeagueSection({
+  id,
+  title,
+  emoji,
+  color,
+  items,
+  defaultCollapsed = false,
+}: {
+  id: string;
+  title: string;
+  emoji: string;
+  color: string;
+  items: InjuryRow[];
+  defaultCollapsed?: boolean;
+}) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const [showAll, setShowAll] = useState(false);
+
+  if (items.length === 0) return null;
+
+  // Sort by importance: stars first, then starters, then by rank
+  const sorted = [...items].sort((a, b) => {
+    const scoreA = (a.is_star ? 100 : 0) + (a.is_starter ? 50 : 0) + (50 - Math.min(a.league_rank ?? 999, a.preseason_rank ?? 999, 50));
+    const scoreB = (b.is_star ? 100 : 0) + (b.is_starter ? 50 : 0) + (50 - Math.min(b.league_rank ?? 999, b.preseason_rank ?? 999, 50));
+    return scoreB - scoreA;
+  });
+
+  const visible = showAll ? sorted : sorted.slice(0, LEAGUE_SECTION_LIMIT);
+  const hasMore = sorted.length > LEAGUE_SECTION_LIMIT;
+
+  return (
+    <div id={id} className="scroll-mt-32 rounded-2xl border border-white/8 bg-white/[0.02] mb-10">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="w-full flex items-center gap-2.5 px-5 py-4 text-left"
+      >
+        <span className="text-xl">{emoji}</span>
+        <h2 className={`text-base font-bold uppercase tracking-wide ${color}`}>{title}</h2>
+        <span className="text-sm text-white/40">({sorted.length})</span>
+        <span className="ml-auto text-white/30 text-sm transition-transform" style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0)" }}>&#9660;</span>
+      </button>
+
+      {!collapsed && (
+        <div className="px-5 pb-5 space-y-2">
+          {visible.map((inj) => (
+            <InjuryRowItem key={inj.injury_id} inj={inj} />
+          ))}
+          {hasMore && !showAll && (
+            <button
+              onClick={() => setShowAll(true)}
+              className="w-full py-2.5 rounded-lg border border-white/10 text-sm text-white/50 hover:bg-white/5 hover:text-white/70 transition-colors"
+            >
+              Show all {sorted.length} players
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InjuryRowItem({ inj }: { inj: InjuryRow }) {
   const slug = inj.player_slug || (inj.player_name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return (
     <Link

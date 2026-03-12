@@ -1,5 +1,10 @@
 import { useParams, Link } from "react-router-dom";
+import { SiteHeader } from "../../components/SiteHeader";
 import { usePlayerPage, type PlayerPageData, type PlayerInjury } from "../../hooks/usePlayerPage";
+import { useInjuryImpact } from "../../hooks/useInjuryImpact";
+import { usePerformanceCurve } from "../../features/performance-curves/lib/queries";
+import { usePlayerReturnCase } from "../../features/performance-curves/lib/queries";
+import { PerformanceCurveChart } from "../../features/performance-curves/components/PerformanceCurveChart";
 import { SEO, playerJsonLd } from "../../components/seo/SEO";
 import { StatusBadge } from "../../components/StatusBadge";
 
@@ -26,18 +31,12 @@ function teamSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-function lastName(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  return parts[parts.length - 1];
-}
-
 function buildSeoBlurb(player: PlayerPageData, injury: PlayerInjury | undefined, league: string): string {
   const name = player.player_name;
-  const last = lastName(name);
   const team = player.team_name;
 
   if (!injury) {
-    return `${name} of the ${team} is not currently listed on the injury report. This page tracks ${last}'s latest injury status, recovery timeline, and full injury history with the ${team} (${league}).`;
+    return `${name} is not currently listed on the ${team} injury report. This page tracks ${name}'s injury status, recovery timeline, and injury history (${league}).`;
   }
 
   const status = injury.status.replace(/_/g, " ");
@@ -45,23 +44,13 @@ function buildSeoBlurb(player: PlayerPageData, injury: PlayerInjury | undefined,
   const dateStr = formatDate(injury.date_injured);
 
   if (injury.status === "returned" || injury.status === "active") {
-    const recov = injury.recovery_days
-      ? ` ${last} was sidelined for ${injury.recovery_days} days before returning.`
-      : "";
-    const missed = injury.games_missed && injury.games_missed > 0
-      ? ` The injury caused ${last} to miss ${injury.games_missed} game${injury.games_missed > 1 ? "s" : ""}.`
-      : "";
-    return `${name} of the ${team} is currently listed as ${status} after recovering from a ${injType} injury suffered on ${dateStr}.${recov}${missed} This page tracks ${last}'s latest injury status, recovery timeline, and injury history with the ${team} (${league}).`;
+    return `${name} is currently listed as ${status} for the ${team} after recovering from a ${injType} injury. This page tracks ${name}'s injury status, recovery timeline, and injury history (${league}).`;
   }
 
   const returnInfo = injury.expected_return
-    ? ` The expected return date is ${injury.expected_return}.`
-    : " No official return date has been announced.";
-  const daysOut = daysAgo(injury.date_injured);
-  const missed = injury.games_missed && injury.games_missed > 0
-    ? ` ${last} has missed ${injury.games_missed} game${injury.games_missed > 1 ? "s" : ""} so far.`
-    : "";
-  return `${name} of the ${team} is currently listed as ${status} due to a ${injType} injury suffered on ${dateStr}. ${last} has been out for ${daysOut} day${daysOut !== 1 ? "s" : ""}.${missed}${returnInfo} This page tracks the latest injury updates, recovery timeline, and injury history for ${name} (${league}).`;
+    ? `Expected return: ${injury.expected_return}.`
+    : "No official return date announced.";
+  return `${name} is currently listed as ${status} for the ${team} due to a ${injType} injury suffered on ${dateStr}. ${returnInfo} This page tracks ${name}'s injury status, recovery timeline, and injury history (${league}).`;
 }
 
 export default function PlayerInjuryPage() {
@@ -86,6 +75,10 @@ export default function PlayerInjuryPage() {
   }
 
   const currentInjury = player.injuries[0];
+  const { data: impactPlayers } = useInjuryImpact(player);
+  const injuryTypeSlug = currentInjury?.injury_type?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") ?? "";
+  const { data: perfCurve } = usePerformanceCurve(player.league_slug, injuryTypeSlug);
+  const { data: returnCase } = usePlayerReturnCase(currentInjury?.injury_id ?? "");
   const leagueLabel = LEAGUE_LABELS[player.league_slug] ?? player.league_name;
   const leagueFull = LEAGUE_FULL[player.league_slug] ?? leagueLabel;
   const year = new Date().getFullYear();
@@ -115,9 +108,10 @@ export default function PlayerInjuryPage() {
   return (
     <div className="min-h-screen bg-[#0a0f1a] text-white">
       <SEO title={pageTitle} description={pageDesc} path={`/player/${player.slug}`} type="article" dateModified={now} jsonLd={jsonLd} />
+      <SiteHeader />
 
       {/* Breadcrumb */}
-      <nav className="px-4 py-3 text-xs text-white/40 max-w-3xl mx-auto">
+      <nav className="px-4 py-3 text-sm text-white/45 max-w-3xl mx-auto">
         <Link to="/" className="hover:text-white/60">Home</Link>
         {" / "}
         <Link to={`/${player.league_slug}-injuries`} className="hover:text-white/60">{leagueLabel} Injuries</Link>
@@ -129,7 +123,7 @@ export default function PlayerInjuryPage() {
 
       <div className="max-w-3xl mx-auto px-4 pb-12">
         {/* Last Updated (freshness signal) */}
-        <p className="text-[11px] text-white/30 mb-3">
+        <p className="text-xs text-white/40 mb-3">
           Last updated: {formatDateLong(new Date())}
         </p>
 
@@ -159,10 +153,24 @@ export default function PlayerInjuryPage() {
           </div>
         </div>
 
-        {/* Unique SEO paragraph — natural language for Google indexing */}
-        <p className="text-sm text-white/40 mb-6 leading-relaxed">
+        {/* SEO summary */}
+        <p className="text-sm text-white/50 mb-4 leading-relaxed">
           {buildSeoBlurb(player, currentInjury, leagueLabel)}
         </p>
+
+        {/* Return Date — prominent link, high-value for SEO */}
+        <Link
+          to={`/${player.slug}-return-date`}
+          className="flex items-center justify-between bg-cyan-500/10 border border-cyan-400/20 rounded-xl px-5 py-3.5 mb-6 hover:bg-cyan-500/15 transition-colors group"
+        >
+          <div>
+            <p className="text-sm font-semibold text-cyan-400">{player.player_name} Return Date</p>
+            <p className="text-xs text-white/45 mt-0.5">
+              {currentInjury?.expected_return ? `Expected: ${currentInjury.expected_return}` : "View return timeline"}
+            </p>
+          </div>
+          <span className="text-cyan-400 text-lg group-hover:translate-x-0.5 transition-transform">&rarr;</span>
+        </Link>
 
         {/* Is [Player] Playing Tonight? — always show, huge search query */}
         <div className="bg-white/5 border border-white/10 rounded-xl p-5 mb-6">
@@ -175,18 +183,18 @@ export default function PlayerInjuryPage() {
               </div>
               <dl className="text-sm space-y-1 text-white/50">
                 <div className="flex gap-2">
-                  <dt className="text-white/30">Last injury:</dt>
+                  <dt className="text-white/40">Last injury:</dt>
                   <dd>{currentInjury.injury_type}</dd>
                 </div>
                 {currentInjury.expected_return && (
                   <div className="flex gap-2">
-                    <dt className="text-white/30">Expected return:</dt>
+                    <dt className="text-white/40">Expected return:</dt>
                     <dd className="text-cyan-400">{currentInjury.expected_return}</dd>
                   </div>
                 )}
                 {!currentInjury.expected_return && (
                   <div className="flex gap-2">
-                    <dt className="text-white/30">Out since:</dt>
+                    <dt className="text-white/40">Out since:</dt>
                     <dd>{formatDate(currentInjury.date_injured)}</dd>
                   </div>
                 )}
@@ -208,68 +216,154 @@ export default function PlayerInjuryPage() {
             </div>
             <dl className="grid grid-cols-2 gap-3 text-sm">
               <div>
-                <dt className="text-white/40 text-xs">Injury</dt>
+                <dt className="text-white/50 text-xs">Injury</dt>
                 <dd className="font-medium">{currentInjury.injury_type}{currentInjury.side ? ` (${currentInjury.side})` : ""}</dd>
               </div>
               <div>
-                <dt className="text-white/40 text-xs">Date Injured</dt>
+                <dt className="text-white/50 text-xs">Date Injured</dt>
                 <dd>{formatDate(currentInjury.date_injured)}</dd>
               </div>
               {currentInjury.expected_return && (
                 <div>
-                  <dt className="text-white/40 text-xs">Expected Return</dt>
+                  <dt className="text-white/50 text-xs">Expected Return</dt>
                   <dd className="text-cyan-400">{currentInjury.expected_return}</dd>
                 </div>
               )}
               {currentInjury.return_date && (
                 <div>
-                  <dt className="text-white/40 text-xs">Actual Return</dt>
+                  <dt className="text-white/50 text-xs">Actual Return</dt>
                   <dd className="text-green-400">{formatDate(currentInjury.return_date)}</dd>
                 </div>
               )}
               {currentInjury.games_missed != null && currentInjury.games_missed > 0 && (
                 <div>
-                  <dt className="text-white/40 text-xs">Games Missed</dt>
+                  <dt className="text-white/50 text-xs">Games Missed</dt>
                   <dd className="text-red-400">{currentInjury.games_missed}</dd>
                 </div>
               )}
               {currentInjury.recovery_days != null && currentInjury.recovery_days > 0 ? (
                 <div>
-                  <dt className="text-white/40 text-xs">Total Recovery</dt>
+                  <dt className="text-white/50 text-xs">Total Recovery</dt>
                   <dd>{currentInjury.recovery_days} days</dd>
                 </div>
               ) : (
                 <div>
-                  <dt className="text-white/40 text-xs">Days Out</dt>
+                  <dt className="text-white/50 text-xs">Days Out</dt>
                   <dd>{daysAgo(currentInjury.date_injured)}</dd>
                 </div>
               )}
             </dl>
             {currentInjury.injury_description && (
-              <p className="mt-3 text-sm text-white/50">{currentInjury.injury_description}</p>
-            )}
-            {currentInjury.long_comment && (
-              <p className="mt-2 text-sm text-white/40 italic">{currentInjury.long_comment}</p>
+              <p className="mt-3 text-sm text-white/50 line-clamp-3">{currentInjury.injury_description}</p>
             )}
           </div>
         )}
 
-        {/* Injury Timeline — readable chronological format */}
-        {timeline.length > 1 && (
-          <div className="mb-6">
-            <h2 className="text-lg font-semibold mb-3">Injury Timeline</h2>
-            <div className="border-l-2 border-white/10 pl-4 space-y-3">
-              {timeline.map((entry, i) => (
-                <div key={i} className="relative">
-                  <div className="absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-white/20 bg-[#0a0f1a]" />
-                  <p className="text-xs text-white/30">{formatDate(entry.date)}</p>
-                  <p className="text-sm text-white/70">
-                    {entry.label === "Returned" ? (
-                      <span className="text-green-400">{entry.label}</span>
-                    ) : entry.label}
+        {/* Days Since Injury */}
+        {currentInjury && (
+          <div className="flex items-stretch gap-3 mb-6">
+            {currentInjury.return_date ? (
+              <>
+                <div className="flex-1 bg-white/5 border border-white/10 rounded-xl p-4 text-center">
+                  <p className="text-xs text-white/40 mb-1">Injured</p>
+                  <p className="text-sm font-semibold">{formatDate(currentInjury.date_injured)}</p>
+                </div>
+                <div className="flex-1 bg-green-500/10 border border-green-400/20 rounded-xl p-4 text-center">
+                  <p className="text-xs text-green-400/60 mb-1">Returned</p>
+                  <p className="text-sm font-semibold text-green-400">{formatDate(currentInjury.return_date)}</p>
+                </div>
+                <div className="flex-1 bg-white/5 border border-white/10 rounded-xl p-4 text-center">
+                  <p className="text-xs text-white/40 mb-1">Total Recovery</p>
+                  <p className="text-lg font-bold text-white">
+                    {currentInjury.recovery_days ?? Math.max(0, Math.floor((new Date(currentInjury.return_date).getTime() - new Date(currentInjury.date_injured).getTime()) / 86400000))} <span className="text-sm font-normal text-white/50">days</span>
                   </p>
                 </div>
+              </>
+            ) : currentInjury.status !== "returned" && currentInjury.status !== "active" ? (
+              <>
+                <div className="flex-1 bg-white/5 border border-white/10 rounded-xl p-4 text-center">
+                  <p className="text-xs text-white/40 mb-1">Injured</p>
+                  <p className="text-sm font-semibold">{formatDate(currentInjury.date_injured)}</p>
+                </div>
+                <div className="flex-1 bg-orange-500/10 border border-orange-400/20 rounded-xl p-4 text-center">
+                  <p className="text-xs text-orange-400/60 mb-1">Days Since Injury</p>
+                  <p className="text-lg font-bold text-orange-400">
+                    {daysAgo(currentInjury.date_injured)} <span className="text-sm font-normal text-orange-400/60">days</span>
+                  </p>
+                </div>
+                {currentInjury.games_missed != null && currentInjury.games_missed > 0 && (
+                  <div className="flex-1 bg-white/5 border border-white/10 rounded-xl p-4 text-center">
+                    <p className="text-xs text-white/40 mb-1">Games Missed</p>
+                    <p className="text-lg font-bold text-red-400">{currentInjury.games_missed}</p>
+                  </div>
+                )}
+              </>
+            ) : null}
+          </div>
+        )}
+
+        {/* Injury Impact */}
+        {impactPlayers && impactPlayers.length > 0 && currentInjury && (
+          <div className="bg-amber-500/5 border border-amber-400/15 rounded-xl p-5 mb-6">
+            <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+              <span className="text-amber-400">Injury Impact</span>
+            </h2>
+            <p className="text-sm text-white/50 mb-3">
+              If {player.player_name} misses time:
+            </p>
+            <div className="space-y-2">
+              {impactPlayers.map((ip) => (
+                <Link
+                  key={ip.slug}
+                  to={`/player/${ip.slug}`}
+                  className="flex items-center gap-3 bg-white/5 rounded-lg px-4 py-2.5 hover:bg-white/10 transition-colors group"
+                >
+                  <span className="text-green-400 text-base font-bold shrink-0">&uarr;</span>
+                  <span className="text-sm font-medium text-white group-hover:text-cyan-400 transition-colors">{ip.player_name}</span>
+                  <span className="text-xs text-white/40">{ip.opportunity}</span>
+                </Link>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Recovery Performance Curve */}
+        {perfCurve && (
+          <div className="bg-white/5 border border-white/10 rounded-xl p-5 mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold">Recovery Curve: {perfCurve.injury_type}</h2>
+              <Link to="/performance-curves" className="text-xs text-cyan-400 hover:underline">View all curves</Link>
+            </div>
+            <p className="text-xs text-white/40 mb-3">
+              Average performance in first 10 games back ({perfCurve.sample_size} historical cases)
+              {returnCase ? " — green line shows this player" : ""}
+            </p>
+            <PerformanceCurveChart curve={perfCurve} playerCase={returnCase} height={220} />
+          </div>
+        )}
+
+        {/* Injury Timeline */}
+        {timeline.length > 1 && (
+          <div className="mb-8">
+            <h2 className="text-lg font-semibold mb-4">Injury Timeline</h2>
+            <div className="border-l-2 border-white/10 pl-5 space-y-4">
+              {timeline.map((entry, i) => {
+                const isLatest = i === timeline.length - 1;
+                const isReturn = entry.label === "Returned";
+                return (
+                  <div key={i} className="relative">
+                    <div className={`absolute -left-[23px] top-1 h-3 w-3 rounded-full border-2 ${
+                      isLatest ? "border-cyan-400 bg-cyan-400/30" : isReturn ? "border-green-400 bg-green-400/20" : "border-white/20 bg-[#0a0f1a]"
+                    }`} />
+                    <p className="text-xs text-white/40">{formatDate(entry.date)}</p>
+                    <p className={`text-sm font-medium ${
+                      isLatest ? "text-white" : isReturn ? "text-green-400" : "text-white/60"
+                    }`}>
+                      {entry.label}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -304,17 +398,22 @@ export default function PlayerInjuryPage() {
             <h2 className="text-lg font-semibold mb-3">Injury History</h2>
             <div className="space-y-3">
               {player.injuries.map((inj) => (
-                <div key={inj.injury_id} className="bg-white/5 border border-white/10 rounded-lg p-3 flex items-center justify-between">
-                  <div>
+                <div key={inj.injury_id} className="bg-white/5 border border-white/10 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm">{inj.injury_type}</span>
-                      <StatusBadge status={inj.status} />
+                      <span className="font-semibold text-sm">{inj.injury_type}</span>
+                      {inj.side && <span className="text-xs text-white/40">({inj.side})</span>}
                     </div>
-                    <div className="text-xs text-white/40 mt-1">
-                      {formatDate(inj.date_injured)}
-                      {inj.return_date && ` — ${formatDate(inj.return_date)}`}
-                      {inj.games_missed != null && inj.games_missed > 0 && ` (${inj.games_missed} games missed)`}
-                    </div>
+                    <StatusBadge status={inj.status} />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-white/50 mt-1">
+                    <span>{formatDate(inj.date_injured)}{inj.return_date ? ` — ${formatDate(inj.return_date)}` : ""}</span>
+                    {inj.recovery_days != null && inj.recovery_days > 0 && (
+                      <span>{inj.recovery_days} days recovery</span>
+                    )}
+                    {inj.games_missed != null && inj.games_missed > 0 && (
+                      <span className="text-red-400/70">{inj.games_missed} games missed</span>
+                    )}
                   </div>
                 </div>
               ))}
@@ -322,40 +421,44 @@ export default function PlayerInjuryPage() {
           </div>
         )}
 
-        {/* Related Players — internal linking for SEO */}
-        <div className="border-t border-white/10 pt-6 mb-6">
-          <h3 className="text-white/40 text-xs uppercase tracking-wide mb-3">Related Players</h3>
-          <div className="space-y-2 text-sm">
-            {player.injuredTeammates.length > 0 && (
-              <div>
-                <p className="text-white/30 text-xs mb-1.5">Other {player.team_name} players</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {player.injuredTeammates.map((t) => (
-                    <Link
-                      key={t.slug}
-                      to={`/player/${t.slug}`}
-                      className="px-2.5 py-1 rounded-full border border-white/10 text-[11px] text-cyan-400 hover:bg-white/5 transition-colors"
-                    >
-                      {t.player_name} <span className="text-white/25">{t.position}</span>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            )}
-            <Link to={`/${player.league_slug}/${teamSlug(player.team_name)}-injuries`} className="block text-cyan-400 hover:underline">
-              All {player.team_name} injuries
+        {/* Related Links */}
+        <div className="border-t border-white/10 pt-8 mb-8">
+          <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wide mb-4">Related Links</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <Link to={`/${player.league_slug}/${teamSlug(player.team_name)}-injuries`}
+              className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-3 hover:bg-white/10 transition-colors text-sm">
+              <span className="text-white/60">{player.team_name} injury report</span>
             </Link>
-            <Link to={`/${player.league_slug}-injuries`} className="block text-cyan-400 hover:underline">
-              All {leagueFull} injuries
+            <Link to={`/${player.league_slug}-injuries`}
+              className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-3 hover:bg-white/10 transition-colors text-sm">
+              <span className="text-white/60">{leagueFull} injury report</span>
             </Link>
-            <Link to={`/${player.slug}-return-date`} className="block text-cyan-400 hover:underline">
-              {player.player_name} return date
-            </Link>
-            <Link to="/" className="block text-cyan-400 hover:underline">
-              Back to all injury updates
+            <Link to={`/${player.slug}-return-date`}
+              className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-3 hover:bg-white/10 transition-colors text-sm">
+              <span className="text-white/60">{player.player_name} return date</span>
             </Link>
           </div>
         </div>
+
+        {/* Related Players */}
+        {player.injuredTeammates.length > 0 && (
+          <div className="mb-8">
+            <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wide mb-4">
+              Related {player.team_name} Injury Updates
+            </h3>
+            <div className="flex flex-wrap gap-2">
+              {player.injuredTeammates.map((t) => (
+                <Link
+                  key={t.slug}
+                  to={`/player/${t.slug}`}
+                  className="px-3 py-1.5 rounded-full border border-white/10 text-xs text-cyan-400 hover:bg-white/5 transition-colors"
+                >
+                  {t.player_name} <span className="text-white/30">{t.position}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

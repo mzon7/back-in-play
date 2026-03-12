@@ -1,4 +1,5 @@
 import { useParams, Link } from "react-router-dom";
+import { SiteHeader } from "../../components/SiteHeader";
 import { usePlayerPage, type PlayerPageData, type PlayerInjury } from "../../hooks/usePlayerPage";
 import { SEO } from "../../components/seo/SEO";
 import { StatusBadge } from "../../components/StatusBadge";
@@ -119,9 +120,10 @@ export default function PlayerReturnDatePage() {
   return (
     <div className="min-h-screen bg-[#0a0f1a] text-white">
       <SEO title={pageTitle} description={pageDesc} path={path} type="article" dateModified={now} jsonLd={jsonLd} />
+      <SiteHeader />
 
       {/* Breadcrumb */}
-      <nav className="px-4 py-3 text-xs text-white/40 max-w-3xl mx-auto">
+      <nav className="px-4 py-3 text-sm text-white/45 max-w-3xl mx-auto">
         <Link to="/" className="hover:text-white/60">Home</Link>
         {" / "}
         <Link to={`/${player.league_slug}-injuries`} className="hover:text-white/60">{leagueLabel} Injuries</Link>
@@ -133,7 +135,7 @@ export default function PlayerReturnDatePage() {
 
       <div className="max-w-3xl mx-auto px-4 pb-12">
         {/* Last Updated (freshness signal) */}
-        <p className="text-[11px] text-white/30 mb-3">
+        <p className="text-xs text-white/40 mb-3">
           Last updated: {formatDateLong(new Date())}
         </p>
 
@@ -296,7 +298,7 @@ export default function PlayerReturnDatePage() {
           <div className="space-y-2 text-sm">
             {player.injuredTeammates.length > 0 && (
               <div>
-                <p className="text-white/30 text-xs mb-1.5">Other {player.team_name} players</p>
+                <p className="text-white/40 text-xs mb-2">Related {player.team_name} injury updates</p>
                 <div className="flex flex-wrap gap-1.5">
                   {player.injuredTeammates.map((t) => (
                     <Link

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { SiteHeader } from "../../../components/SiteHeader";
 import { useRecoveryStats } from "../lib/queries";
 import { LeagueFilterBar } from "./LeagueFilterBar";
 import { RecoveryStatsList } from "./RecoveryStatsList";
@@ -32,6 +33,7 @@ export function RecoveryStatsPage() {
 
   return (
     <div className="min-h-screen bg-[#0A0F1E] text-white">
+      <SiteHeader />
       {/* Hero header */}
       <div className="relative overflow-hidden border-b border-white/10 bg-gradient-to-br from-[#0A0F1E] via-[#0d1529] to-[#0A0F1E]">
         {/* Glow blobs */}

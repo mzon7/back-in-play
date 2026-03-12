@@ -30,3 +30,4 @@ dist-ssr
 scripts/.injury_state.json
 scripts/.scraper_checkpoint.json
 scripts/*.log
+.env*.local

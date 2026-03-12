@@ -12,6 +12,7 @@ const PlayerInjuryPage = lazy(() => import("./pages/player/PlayerInjuryPage"));
 const PlayerReturnPage = lazy(() => import("./pages/player/PlayerReturnAliasPage"));
 const TeamInjuryPage = lazy(() => import("./pages/team/TeamInjuryPage"));
 const SlugRouter = lazy(() => import("./pages/SlugRouter"));
+const PerformanceCurvesPage = lazy(() => import("./features/performance-curves/components/PerformanceCurvesPage"));
 
 function Loading() {
   return (
@@ -37,6 +38,7 @@ export default function App() {
         <Route path="/auth/callback" element={<AuthCallback supabase={supabase} redirectTo="/" />} />
 
         <Route path="/recovery-stats" element={<RecoveryStatsPage />} />
+        <Route path="/performance-curves" element={<PerformanceCurvesPage />} />
 
         {/* League-specific view (pre-selects the league tab on home) */}
         <Route path="/league/:leagueSlug" element={<HomePage />} />

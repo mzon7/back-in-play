@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   useLeagues,
@@ -68,7 +68,6 @@ function daysAgo(dateStr: string | null | undefined): number {
  * More recent injuries rank higher.
  */
 function importanceScore(inj: InjuryRow): number {
-  // Player importance (1-10 scale)
   let importance = 1;
   if (inj.is_star) importance = 10;
   else if (inj.is_starter) importance = 6;
@@ -79,11 +78,9 @@ function importanceScore(inj: InjuryRow): number {
     else if (rank <= 50) importance = 3;
   }
 
-  // Position boost
   const pos = (inj.position ?? "").toUpperCase();
   importance *= (POSITION_BOOST[pos] ?? 1);
 
-  // Recency: injuries from today = 1.0, 30 days ago = 0.3, older = 0.1
   const days = daysAgo(inj.date_injured);
   const recency = days <= 1 ? 1.0 : days <= 7 ? 0.8 : days <= 14 ? 0.6 : days <= 30 ? 0.3 : 0.1;
 
@@ -113,20 +110,20 @@ function StatusTimeline({ playerId }: { playerId: string }) {
   }, [playerId]);
 
   if (loading) return <div className="h-8 bg-white/5 rounded animate-pulse mt-2" />;
-  if (changes.length === 0) return <p className="text-[10px] text-white/20 mt-2">No status history</p>;
+  if (changes.length === 0) return <p className="text-xs text-white/25 mt-2">No status history</p>;
 
   return (
     <div className="mt-3 pt-3 border-t border-white/10">
-      <p className="text-[10px] text-white/30 mb-2 font-semibold uppercase tracking-wide">Status Timeline</p>
+      <p className="text-[11px] text-white/40 mb-2 font-semibold uppercase tracking-wide">Status Timeline</p>
       <div className="flex items-start gap-0 overflow-x-auto pb-1">
         {changes.map((c, i) => (
           <div key={c.id} className="flex items-center shrink-0">
             <div className="flex flex-col items-center gap-1">
               <StatusBadge status={c.new_status} />
-              <span className="text-[9px] text-white/25 whitespace-nowrap">
+              <span className="text-[10px] text-white/30 whitespace-nowrap">
                 {new Date(c.changed_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
               </span>
-              <span className="text-[8px] text-white/15 max-w-[80px] text-center truncate">{c.summary}</span>
+              <span className="text-[9px] text-white/20 max-w-[80px] text-center truncate">{c.summary}</span>
             </div>
             {i < changes.length - 1 && (
               <div className="w-6 h-px bg-white/10 mx-1 mt-[-12px]" />
@@ -148,7 +145,7 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
     <div className="rounded-xl border border-white/10 bg-white/5 transition-colors hover:bg-white/[0.07]">
       <Link
         to={playerUrl}
-        className="block p-3"
+        className="block p-4"
       >
         <div className="flex items-start gap-3">
           {/* Headshot or rank badge */}
@@ -156,40 +153,40 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
             <img
               src={inj.headshot_url}
               alt={inj.player_name}
-              className="h-10 w-10 rounded-full bg-white/10 object-cover shrink-0"
+              className="h-11 w-11 rounded-full bg-white/10 object-cover shrink-0"
             />
           ) : rank ? (
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 shrink-0">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 shrink-0">
               <span className="text-xs font-bold text-white/60">#{rank}</span>
             </div>
           ) : null}
 
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 leading-relaxed">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="text-sm font-medium text-white truncate">{inj.player_name}</span>
+                <span className="text-[15px] font-semibold text-white truncate">{inj.player_name}</span>
                 {inj.is_star && (
                   <span className="shrink-0 text-[11px]" title="Star player">{"\u2B50"}</span>
                 )}
                 {inj.is_starter && !inj.is_star && (
-                  <span className="shrink-0 text-[9px] font-bold text-emerald-400 border border-emerald-400/40 rounded px-1" title="Starter">S</span>
+                  <span className="shrink-0 text-[10px] font-bold text-emerald-400 border border-emerald-400/40 rounded px-1" title="Starter">S</span>
                 )}
                 {inj.position && (
-                  <span className="text-[10px] text-white/40 shrink-0">{inj.position}</span>
+                  <span className="text-xs text-white/50 shrink-0">{inj.position}</span>
                 )}
                 {rank && rank <= 50 && (
-                  <span className="text-[10px] text-amber-400/70 shrink-0">#{rank}</span>
+                  <span className="text-xs text-amber-400/80 shrink-0">#{rank}</span>
                 )}
               </div>
               <StatusBadge status={inj.status ?? "out"} />
             </div>
 
-            <div className="flex items-center gap-2 mt-0.5">
+            <div className="flex items-center gap-2 mt-1">
               {inj.team_name && inj.team_name !== "Unknown" && (
-                <p className="text-xs text-white/40 truncate">{inj.team_name}</p>
+                <p className="text-sm text-white/50 truncate">{inj.team_name}</p>
               )}
               {showLeague && inj.league_slug && (
-                <span className="flex items-center gap-1 text-[10px] text-white/30">
+                <span className="flex items-center gap-1 text-xs text-white/40">
                   <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[inj.league_slug] ?? "bg-white/30"}`} />
                   {LEAGUE_LABELS[inj.league_slug] ?? inj.league_name}
                 </span>
@@ -197,14 +194,14 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
             </div>
 
             {/* Games missed & days since injury */}
-            <div className="flex items-center gap-3 mt-1 text-[10px]">
+            <div className="flex items-center gap-3 mt-1.5 text-xs">
               {days > 0 && (
-                <span className="text-white/35">
+                <span className="text-white/45">
                   {days === 1 ? "1 day" : `${days} days`} since injury
                 </span>
               )}
               {inj.games_missed != null && inj.games_missed > 0 && (
-                <span className="text-red-400/60 font-medium">
+                <span className="text-red-400/70 font-medium">
                   {inj.games_missed} game{inj.games_missed !== 1 ? "s" : ""} missed
                 </span>
               )}
@@ -212,13 +209,13 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
 
             {/* Minutes bar (for reduced_load / back_in_play / active_today) */}
             {inj.game_minutes != null && inj.game_minutes > 0 && (
-              <div className="mt-1.5">
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="text-white/60 font-medium">{inj.game_minutes} min</span>
+              <div className="mt-2">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-white/70 font-medium">{inj.game_minutes} min</span>
                   {inj.pre_injury_avg_minutes != null && inj.pre_injury_avg_minutes > 0 && (
                     <>
-                      <span className="text-white/30">/ {inj.pre_injury_avg_minutes} usual</span>
-                      <span className={`text-[10px] font-bold ${
+                      <span className="text-white/40">/ {inj.pre_injury_avg_minutes} usual</span>
+                      <span className={`text-xs font-bold ${
                         (inj.game_minutes / inj.pre_injury_avg_minutes) >= 0.8
                           ? "text-cyan-400"
                           : "text-amber-400"
@@ -244,24 +241,24 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
             )}
 
             {/* Injury details */}
-            <div className="mt-1.5 space-y-0.5">
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-white/60 font-medium">{inj.injury_type}</span>
-                {inj.side && <span className="text-white/30">({inj.side})</span>}
+            <div className="mt-2 space-y-0.5">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-white/70 font-medium">{inj.injury_type}</span>
+                {inj.side && <span className="text-white/40">({inj.side})</span>}
               </div>
               {inj.injury_description && (
-                <p className="text-[11px] text-white/35 line-clamp-2">{inj.injury_description}</p>
+                <p className="text-xs text-white/45 line-clamp-2 leading-relaxed">{inj.injury_description}</p>
               )}
               {inj.expected_return && (
-                <p className="text-[11px] text-cyan-300/60">Est. return: {inj.expected_return}</p>
+                <p className="text-xs text-cyan-300/70">Est. return: {inj.expected_return}</p>
               )}
               {inj.long_comment && (
-                <p className="text-[11px] text-white/30 line-clamp-2 italic">{inj.long_comment}</p>
+                <p className="text-xs text-white/40 line-clamp-2 italic leading-relaxed">{inj.long_comment}</p>
               )}
             </div>
 
             {/* Meta */}
-            <div className="mt-1.5 flex items-center gap-3 text-[10px] text-white/25">
+            <div className="mt-2 flex items-center gap-3 text-xs text-white/35">
               <span>{inj.date_injured}</span>
               {inj.source && <span>{inj.source}</span>}
             </div>
@@ -270,10 +267,10 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
       </Link>
 
       {/* Timeline toggle — separate from the navigable card */}
-      <div className="px-3 pb-2">
+      <div className="px-4 pb-3">
         <button
           onClick={() => setExpanded(!expanded)}
-          className="text-[10px] text-white/20 hover:text-white/40 transition-colors"
+          className="text-xs text-white/25 hover:text-white/50 transition-colors"
         >
           {expanded ? "hide timeline" : "show timeline"}
         </button>
@@ -283,34 +280,84 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
   );
 }
 
+const INITIAL_SECTION_LIMIT = 10;
+
 function SectionBlock({
   section,
   injuries,
   showLeague,
+  defaultCollapsed = false,
 }: {
   section: (typeof SECTIONS)[number];
   injuries: InjuryRow[];
   showLeague?: boolean;
+  defaultCollapsed?: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const [showAll, setShowAll] = useState(false);
+
   if (injuries.length === 0) return null;
   const sorted = [...injuries].sort(sortByImportance);
+  const visible = showAll ? sorted : sorted.slice(0, INITIAL_SECTION_LIMIT);
+  const hasMore = sorted.length > INITIAL_SECTION_LIMIT;
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <span>{section.emoji}</span>
-        <h3 className={`text-xs font-semibold uppercase tracking-wide ${section.color}`}>
+    <div id={`section-${section.key}`} className="scroll-mt-32 rounded-2xl border border-white/8 bg-white/[0.02]">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="w-full flex items-center gap-2.5 px-5 py-4 text-left"
+      >
+        <span className="text-xl">{section.emoji}</span>
+        <h3 className={`text-base font-bold uppercase tracking-wide ${section.color}`}>
           {section.label}
         </h3>
-        <span className="text-[10px] text-white/30">({sorted.length})</span>
-        <span className="text-[10px] text-white/20 ml-1 hidden sm:inline">{section.desc}</span>
-      </div>
-      <div className="space-y-2">
-        {sorted.map((inj) => (
-          <InjuryCard key={inj.injury_id} inj={inj} showLeague={showLeague} />
-        ))}
-      </div>
+        <span className="text-sm text-white/40">({sorted.length})</span>
+        <span className="text-xs text-white/30 ml-1 hidden sm:inline">{section.desc}</span>
+        <span className="ml-auto text-white/30 text-sm transition-transform" style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0)" }}>&#9660;</span>
+      </button>
+
+      {!collapsed && (
+        <div className="px-5 pb-5 space-y-2.5">
+          {visible.map((inj) => (
+            <InjuryCard key={inj.injury_id} inj={inj} showLeague={showLeague} />
+          ))}
+          {hasMore && !showAll && (
+            <button
+              onClick={() => setShowAll(true)}
+              className="w-full py-2.5 rounded-lg border border-white/10 text-sm text-white/50 hover:bg-white/5 hover:text-white/70 transition-colors"
+            >
+              Show all {sorted.length} players
+            </button>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+function JumpNav({ grouped }: { grouped: Record<Section, InjuryRow[]> }) {
+  const items: { id: string; label: string; count?: number }[] = [
+    { id: "section-headlines", label: "Headlines" },
+    { id: "section-updates", label: "Updates" },
+  ];
+  for (const sec of SECTIONS) {
+    if (grouped[sec.key].length > 0) {
+      items.push({ id: `section-${sec.key}`, label: sec.label, count: grouped[sec.key].length });
+    }
+  }
+
+  return (
+    <nav className="flex flex-wrap gap-1.5 py-3 border-b border-white/8 mb-2">
+      {items.map((item) => (
+        <button
+          key={item.id}
+          onClick={() => document.getElementById(item.id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          className="px-3 py-1.5 rounded-full text-xs font-medium text-white/50 border border-white/10 hover:bg-white/10 hover:text-white/70 transition-colors"
+        >
+          {item.label}{item.count != null ? ` (${item.count})` : ""}
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -328,9 +375,30 @@ function EmptyBox({ message, hint }: { message: string; hint?: string }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
       <p className="text-sm text-white/50">{message}</p>
-      {hint && <p className="mt-1 text-[11px] text-white/30">{hint}</p>}
+      {hint && <p className="mt-1 text-xs text-white/35">{hint}</p>}
     </div>
   );
+}
+
+/** Micro trend indicator: improvement ↑, worsening ↓, neutral → */
+const STATUS_SEVERITY: Record<string, number> = {
+  out: 0, ir: 0, surgery: 0,
+  doubtful: 1,
+  questionable: 2,
+  day_to_day: 3, dtd: 3,
+  probable: 4,
+  reduced_load: 5,
+  back_in_play: 6,
+  active: 7, active_today: 7, returned: 7, cleared: 7,
+};
+
+function trendIndicator(oldStatus: string | null, newStatus: string): { icon: string; color: string } {
+  if (!oldStatus) return { icon: "", color: "" };
+  const oldSev = STATUS_SEVERITY[oldStatus.toLowerCase().replace(/-/g, "_")] ?? 3;
+  const newSev = STATUS_SEVERITY[newStatus.toLowerCase().replace(/-/g, "_")] ?? 3;
+  if (newSev > oldSev) return { icon: "\u2191", color: "text-green-400" }; // improvement
+  if (newSev < oldSev) return { icon: "\u2193", color: "text-red-400" }; // worsening
+  return { icon: "\u2192", color: "text-white/40" }; // neutral
 }
 
 const CHANGE_TYPE_STYLE: Record<string, string> = {
@@ -350,26 +418,29 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function StatusUpdatesBlock({ showLeague }: { showLeague?: boolean }) {
+function StatusUpdatesBlock({ showLeague, leagueSlug, teamFilter }: { showLeague?: boolean; leagueSlug?: string; teamFilter?: string | null }) {
   const { data: rawChanges = [], isLoading } = useStatusChanges(50);
 
-  // Deduplicate: keep only the latest change per player
+  // Filter by league and team, then deduplicate
   const seen = new Set<string>();
-  const changes = rawChanges.filter((c) => {
-    if (seen.has(c.player_id)) return false;
-    seen.add(c.player_id);
-    return true;
-  }).slice(0, 20);
+  const changes = rawChanges
+    .filter((c) => !leagueSlug || c.league_slug === leagueSlug)
+    .filter((c) => !teamFilter || c.team_name === teamFilter)
+    .filter((c) => {
+      if (seen.has(c.player_id)) return false;
+      seen.add(c.player_id);
+      return true;
+    }).slice(0, 20);
 
   if (isLoading) {
     return (
-      <div className="space-y-2">
+      <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <span>{"\uD83D\uDCE2"}</span>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-[#1C7CFF]">Player Status Updates</h3>
+          <span className="text-xl">{"\uD83D\uDCE2"}</span>
+          <h3 className="text-base font-bold uppercase tracking-wide text-[#1C7CFF]">Player Status Updates</h3>
         </div>
         {[1, 2, 3].map((i) => (
-          <div key={i} className="h-12 rounded-xl bg-white/10 animate-pulse" />
+          <div key={i} className="h-14 rounded-xl bg-white/10 animate-pulse" />
         ))}
       </div>
     );
@@ -378,58 +449,64 @@ function StatusUpdatesBlock({ showLeague }: { showLeague?: boolean }) {
   if (changes.length === 0) return null;
 
   return (
-    <div className="space-y-2">
+    <div id="section-updates" className="scroll-mt-32 space-y-3">
       <div className="flex items-center gap-2">
-        <span>{"\uD83D\uDCE2"}</span>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-[#1C7CFF]">
+        <span className="text-xl">{"\uD83D\uDCE2"}</span>
+        <h3 className="text-base font-bold uppercase tracking-wide text-[#1C7CFF]">
           Player Status Updates
         </h3>
-        <span className="text-[10px] text-white/30">({changes.length})</span>
-        <span className="text-[10px] text-white/20 ml-1 hidden sm:inline">Last 24 hours</span>
+        <span className="text-sm text-white/40">({changes.length})</span>
+        <span className="text-xs text-white/30 ml-1 hidden sm:inline">Last 24 hours</span>
       </div>
-      <div className="space-y-1">
+      <div className="space-y-1.5">
         {changes.map((c) => (
           <Link
             key={c.id}
             to={`/player/${c.player_slug || (c.player_name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
-            className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-3 py-2 hover:bg-white/[0.07] transition-colors"
+            className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/[0.07] transition-colors"
           >
             {c.headshot_url ? (
               <img
                 src={c.headshot_url}
                 alt={c.player_name}
-                className="h-8 w-8 rounded-full bg-white/10 object-cover shrink-0"
+                className="h-9 w-9 rounded-full bg-white/10 object-cover shrink-0"
               />
             ) : (
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 shrink-0">
-                <span className="text-[10px] text-white/40">{(c.player_name ?? "?")[0]}</span>
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 shrink-0">
+                <span className="text-xs text-white/50">{(c.player_name ?? "?")[0]}</span>
               </div>
             )}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-white truncate">{c.player_name}</span>
+                <span className="text-[15px] font-semibold text-white truncate">{c.player_name}</span>
                 <span className={`text-xs font-semibold ${CHANGE_TYPE_STYLE[c.change_type] ?? "text-white/50"}`}>
                   — {c.summary}
                 </span>
               </div>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-[10px] text-white/30">{c.team_name}</span>
+                <span className="text-xs text-white/40">{c.team_name}</span>
                 {showLeague && c.league_slug && (
-                  <span className="flex items-center gap-1 text-[10px] text-white/25">
+                  <span className="flex items-center gap-1 text-xs text-white/35">
                     <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[c.league_slug] ?? "bg-white/30"}`} />
                     {LEAGUE_LABELS[c.league_slug] ?? ""}
                   </span>
                 )}
-                <span className="text-[10px] text-white/20">{timeAgo(c.changed_at)}</span>
+                <span className="text-xs text-white/30">{timeAgo(c.changed_at)}</span>
               </div>
             </div>
-            {c.old_status && c.new_status && c.old_status !== c.new_status && (
-              <div className="flex items-center gap-1 shrink-0">
-                <StatusBadge status={c.old_status} />
-                <span className="text-white/30 text-xs">{"\u2192"}</span>
-                <StatusBadge status={c.new_status} />
-              </div>
-            )}
+            {c.old_status && c.new_status && c.old_status !== c.new_status && (() => {
+              const trend = trendIndicator(c.old_status, c.new_status);
+              return (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <StatusBadge status={c.old_status} />
+                  <span className="text-white/40 text-xs">{"\u2192"}</span>
+                  <StatusBadge status={c.new_status} />
+                  {trend.icon && (
+                    <span className={`text-sm font-bold ${trend.color}`}>{trend.icon}</span>
+                  )}
+                </div>
+              );
+            })()}
           </Link>
         ))}
       </div>
@@ -438,6 +515,12 @@ function StatusUpdatesBlock({ showLeague }: { showLeague?: boolean }) {
 }
 
 /* -- Headline Stories: square cards for high-impact events -- */
+
+const HEADLINE_TYPE_LABEL: Record<string, { text: string; color: string }> = {
+  injury: { text: "NEW INJURY", color: "text-red-400 bg-red-400/10" },
+  return: { text: "RETURNED", color: "text-green-400 bg-green-400/10" },
+  status_change: { text: "STATUS CHANGE", color: "text-amber-400 bg-amber-400/10" },
+};
 
 type HeadlineCard = {
   key: string;
@@ -493,155 +576,185 @@ const IMPACT_COLORS: Record<string, string> = {
   Medium: "text-cyan-400 bg-cyan-400/10 border-cyan-400/30",
 };
 
-function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[]): HeadlineCard[] {
-  const cards: HeadlineCard[] = [];
-  const seenPlayers = new Set<string>();
+function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[], maxCards = 8): HeadlineCard[] {
+  const minScore = maxCards <= 5 ? 0 : 3;
 
-  // Score all injuries and pick top ones
-  const scored = injuries
-    .map((inj) => ({ inj, score: headlineScore(inj) }))
-    .filter(({ score }) => score >= 3) // threshold: only notable players
-    .sort((a, b) => b.score - a.score);
+  // Build scored candidates from BOTH injuries and status changes
+  type Candidate = { card: HeadlineCard; score: number; playerId: string };
+  const candidates: Candidate[] = [];
 
-  for (const { inj, score } of scored) {
-    if (seenPlayers.has(inj.player_id)) continue;
-    seenPlayers.add(inj.player_id);
+  // Candidates from injuries
+  for (const inj of injuries) {
+    const score = headlineScore(inj);
+    if (score < minScore) continue;
 
     const status = (inj.status ?? "out").toLowerCase().replace(/-/g, "_");
     const isReturning = ["active", "active_today", "back_in_play", "probable"].includes(status);
-
     const impact = impactFromScore(score);
-    const summary = isReturning
-      ? "Returning to action"
-      : `${inj.injury_type ?? "Injury"} — ${inj.status}`;
 
-    cards.push({
-      key: `inj-${inj.injury_id}`,
-      player_name: inj.player_name ?? "Unknown",
-      player_slug: inj.player_slug ?? "",
-      headshot_url: inj.headshot_url ?? null,
-      team_name: (inj.team_name && inj.team_name !== "Unknown") ? inj.team_name : "",
-      league_slug: inj.league_slug ?? "",
-      status: inj.status ?? "out",
-      summary,
-      impact,
-      impactColor: IMPACT_COLORS[impact],
-      timeAgo: daysAgo(inj.date_injured) === 0 ? "Today"
-        : daysAgo(inj.date_injured) === 1 ? "Yesterday"
-        : `${daysAgo(inj.date_injured)}d ago`,
-      type: isReturning ? "return" : "injury",
+    candidates.push({
+      playerId: inj.player_id,
+      score,
+      card: {
+        key: `inj-${inj.injury_id}`,
+        player_name: inj.player_name ?? "Unknown",
+        player_slug: inj.player_slug ?? "",
+        headshot_url: inj.headshot_url ?? null,
+        team_name: (inj.team_name && inj.team_name !== "Unknown") ? inj.team_name : "",
+        league_slug: inj.league_slug ?? "",
+        status: inj.status ?? "out",
+        summary: isReturning ? "Returning to action" : `${inj.injury_type ?? "Injury"} — ${inj.status}`,
+        impact,
+        impactColor: IMPACT_COLORS[impact],
+        timeAgo: daysAgo(inj.date_injured) === 0 ? "Today"
+          : daysAgo(inj.date_injured) === 1 ? "Yesterday"
+          : `${daysAgo(inj.date_injured)}d ago`,
+        type: isReturning ? "return" : "injury",
+      },
     });
-
-    if (cards.length >= 8) break;
   }
 
-  // Fill remaining slots with notable status changes
+  // Candidates from status changes (scored equally with injuries)
   for (const c of changes) {
-    if (cards.length >= 8) break;
-    if (seenPlayers.has(c.player_id)) continue;
     if (c.change_type === "updated") continue;
     const isDowngrade = c.summary?.toLowerCase().includes("downgraded");
     const isActivation = c.change_type === "activated" || c.new_status === "active";
     if (!isActivation && !isDowngrade && c.change_type !== "new_injury") continue;
 
-    seenPlayers.add(c.player_id);
-    cards.push({
-      key: `sc-${c.id}`,
-      player_name: c.player_name ?? "Unknown",
-      player_slug: c.player_slug ?? "",
-      headshot_url: c.headshot_url ?? null,
-      team_name: c.team_name ?? "",
-      league_slug: c.league_slug ?? "",
-      status: c.new_status,
-      summary: c.summary,
-      impact: isDowngrade ? "High" : "Medium",
-      impactColor: IMPACT_COLORS[isDowngrade ? "High" : "Medium"],
-      timeAgo: timeAgo(c.changed_at),
-      type: "status_change",
+    // Score: higher = more newsworthy, scaled by recency
+    const recency = recencyFactor(c.changed_at);
+    const eventWeight = c.change_type === "new_injury" ? 9 : isActivation ? 8 : isDowngrade ? 7 : 6;
+    const score = eventWeight * recency;
+    if (score < minScore) continue;
+
+    const impact = impactFromScore(score);
+    const type: HeadlineCard["type"] = c.change_type === "new_injury" ? "injury"
+      : isActivation ? "return" : "status_change";
+    candidates.push({
+      playerId: c.player_id,
+      score,
+      card: {
+        key: `sc-${c.id}`,
+        player_name: c.player_name ?? "Unknown",
+        player_slug: c.player_slug ?? "",
+        headshot_url: c.headshot_url ?? null,
+        team_name: c.team_name ?? "",
+        league_slug: c.league_slug ?? "",
+        status: c.new_status,
+        summary: c.summary,
+        impact,
+        impactColor: IMPACT_COLORS[impact],
+        timeAgo: timeAgo(c.changed_at),
+        type,
+      },
     });
+  }
+
+  // Sort all candidates by score, deduplicate by player, take top N
+  candidates.sort((a, b) => b.score - a.score);
+  const seenPlayers = new Set<string>();
+  const cards: HeadlineCard[] = [];
+  for (const { card, playerId } of candidates) {
+    if (seenPlayers.has(playerId)) continue;
+    seenPlayers.add(playerId);
+    cards.push(card);
+    if (cards.length >= maxCards) break;
   }
 
   return cards;
 }
 
-function HeadlineStories({ injuries, showLeague }: { injuries: InjuryRow[]; showLeague?: boolean }) {
+function HeadlineStories({ injuries, showLeague, leagueSlug, teamFilter }: { injuries: InjuryRow[]; showLeague?: boolean; leagueSlug?: string; teamFilter?: string | null }) {
   const { data: rawChanges = [] } = useStatusChanges(30);
-  const cards = buildHeadlineCards(injuries, rawChanges);
+  const filteredChanges = rawChanges
+    .filter((c) => !leagueSlug || c.league_slug === leagueSlug)
+    .filter((c) => !teamFilter || c.team_name === teamFilter);
+  const cards = buildHeadlineCards(injuries, filteredChanges, teamFilter ? 5 : 8);
 
   if (cards.length === 0) return null;
 
   return (
-    <div className="space-y-3">
+    <div id="section-headlines" className="scroll-mt-32 space-y-3">
       <div className="flex items-center gap-2">
-        <span>{"\uD83D\uDD25"}</span>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-white/70">
+        <span className="text-xl">{"\uD83D\uDD25"}</span>
+        <h3 className="text-base font-bold uppercase tracking-wide text-white/80">
           Headline Stories
         </h3>
-        <span className="text-[10px] text-white/30">({cards.length})</span>
-        <span className="ml-auto text-white/20 text-xs animate-pulse">scroll &rarr;</span>
+        <span className="text-xs text-white/40">({cards.length})</span>
+        <span className="ml-auto text-white/25 text-xs animate-pulse">scroll &rarr;</span>
       </div>
       <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1 snap-x snap-mandatory">
-        {cards.map((card) => (
-          <Link
-            key={card.key}
-            to={`/player/${card.player_slug || card.player_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
-            className="shrink-0 w-[160px] sm:w-[180px] rounded-xl border border-white/10 bg-white/5 p-3 snap-start hover:bg-white/[0.07] transition-colors block"
-          >
-            {/* Headshot */}
-            <div className="flex justify-center mb-2">
-              {card.headshot_url ? (
-                <img
-                  src={card.headshot_url}
-                  alt={card.player_name}
-                  className="h-16 w-16 rounded-full bg-white/10 object-cover"
-                />
-              ) : (
-                <div className="h-16 w-16 rounded-full bg-white/10 flex items-center justify-center">
-                  <span className="text-lg text-white/30">{card.player_name[0]}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Name */}
-            <p className="text-sm font-semibold text-white text-center truncate">{card.player_name}</p>
-
-            {/* Team / League */}
-            <div className="flex items-center justify-center gap-1.5 mt-0.5">
-              {card.team_name && (
-                <span className="text-[10px] text-white/35 truncate max-w-[90px]">{card.team_name}</span>
-              )}
-              {showLeague && card.league_slug && (
-                <span className="flex items-center gap-1 text-[10px] text-white/25">
-                  <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[card.league_slug] ?? "bg-white/30"}`} />
-                  {LEAGUE_LABELS[card.league_slug] ?? ""}
+        {cards.map((card) => {
+          const typeLabel = HEADLINE_TYPE_LABEL[card.type];
+          return (
+            <Link
+              key={card.key}
+              to={`/player/${card.player_slug || card.player_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
+              className="shrink-0 w-[170px] sm:w-[190px] rounded-xl border border-white/10 bg-white/5 p-3.5 snap-start hover:bg-white/[0.07] transition-colors block"
+            >
+              {/* Type label */}
+              <div className="mb-2">
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${typeLabel.color}`}>
+                  {typeLabel.text}
                 </span>
-              )}
-            </div>
+              </div>
 
-            {/* Status change */}
-            <p className="text-[11px] text-white/50 text-center mt-1.5 line-clamp-2">{card.summary}</p>
+              {/* Headshot */}
+              <div className="flex justify-center mb-2">
+                {card.headshot_url ? (
+                  <img
+                    src={card.headshot_url}
+                    alt={card.player_name}
+                    className="h-16 w-16 rounded-full bg-white/10 object-cover"
+                  />
+                ) : (
+                  <div className="h-16 w-16 rounded-full bg-white/10 flex items-center justify-center">
+                    <span className="text-lg text-white/30">{card.player_name[0]}</span>
+                  </div>
+                )}
+              </div>
 
-            {/* Impact badge */}
-            <div className="flex justify-center mt-2">
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${card.impactColor}`}>
-                {card.impact}
-              </span>
-            </div>
+              {/* Name */}
+              <p className="text-[15px] font-semibold text-white text-center truncate">{card.player_name}</p>
 
-            {/* Status + Time */}
-            <div className="flex items-center justify-between mt-2">
-              <StatusBadge status={card.status} />
-              <span className="text-[9px] text-white/25">{card.timeAgo}</span>
-            </div>
-          </Link>
-        ))}
+              {/* Team / League */}
+              <div className="flex items-center justify-center gap-1.5 mt-1">
+                {card.team_name && (
+                  <span className="text-xs text-white/45 truncate max-w-[100px]">{card.team_name}</span>
+                )}
+                {showLeague && card.league_slug && (
+                  <span className="flex items-center gap-1 text-xs text-white/35">
+                    <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[card.league_slug] ?? "bg-white/30"}`} />
+                    {LEAGUE_LABELS[card.league_slug] ?? ""}
+                  </span>
+                )}
+              </div>
+
+              {/* Summary */}
+              <p className="text-xs text-white/55 text-center mt-2 line-clamp-2 leading-relaxed">{card.summary}</p>
+
+              {/* Impact badge */}
+              <div className="flex justify-center mt-2.5">
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${card.impactColor}`}>
+                  {card.impact}
+                </span>
+              </div>
+
+              {/* Status + Time */}
+              <div className="flex items-center justify-between mt-2.5">
+                <StatusBadge status={card.status} />
+                <span className="text-[10px] text-white/30">{card.timeAgo}</span>
+              </div>
+            </Link>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-/* -- Shared team filter pill bar -- */
-function TeamFilterBar({
+/* -- Team filter dropdown -- */
+function TeamDropdown({
   teams, counts, teamFilter, setTeamFilter, totalLabel = "All Teams",
 }: {
   teams: string[];
@@ -650,35 +763,66 @@ function TeamFilterBar({
   setTeamFilter: (t: string | null) => void;
   totalLabel?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
   if (teams.length <= 1) return null;
+
+  const selectedLabel = teamFilter ?? totalLabel;
+  const selectedCount = teamFilter
+    ? counts.filter((i) => i.team_name === teamFilter).length
+    : counts.length;
+
   return (
-    <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
+    <div ref={ref} className="relative inline-block">
       <button
-        onClick={() => setTeamFilter(null)}
-        className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
-          teamFilter === null
-            ? "border-white/30 bg-white/10 text-white"
-            : "border-white/10 text-white/40 hover:text-white/60"
-        }`}
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 px-4 py-2 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 transition-colors text-sm font-medium"
       >
-        {totalLabel} ({counts.length})
+        <span className="text-white/50">Team:</span>
+        <span className="text-white font-semibold">{selectedLabel}</span>
+        <span className="text-white/40">({selectedCount})</span>
+        <svg className={`w-4 h-4 text-white/40 transition-transform ${open ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
       </button>
-      {teams.map((team) => {
-        const count = counts.filter((i) => i.team_name === team).length;
-        return (
+
+      {open && (
+        <div className="absolute z-40 mt-1 w-64 max-h-72 overflow-y-auto rounded-lg border border-white/15 bg-[#0F1320] shadow-xl">
           <button
-            key={team}
-            onClick={() => setTeamFilter(teamFilter === team ? null : team)}
-            className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
-              teamFilter === team
-                ? "border-[#1C7CFF]/50 bg-[#1C7CFF]/15 text-[#1C7CFF]"
-                : "border-white/10 text-white/40 hover:text-white/60"
+            onClick={() => { setTeamFilter(null); setOpen(false); }}
+            className={`w-full text-left px-4 py-2.5 text-sm hover:bg-white/10 transition-colors flex justify-between items-center ${
+              teamFilter === null ? "text-[#1C7CFF] font-semibold bg-white/5" : "text-white/70"
             }`}
           >
-            {team} ({count})
+            <span>{totalLabel}</span>
+            <span className="text-white/40 text-xs">{counts.length}</span>
           </button>
-        );
-      })}
+          {teams.map((team) => {
+            const count = counts.filter((i) => i.team_name === team).length;
+            return (
+              <button
+                key={team}
+                onClick={() => { setTeamFilter(team); setOpen(false); }}
+                className={`w-full text-left px-4 py-2.5 text-sm hover:bg-white/10 transition-colors flex justify-between items-center ${
+                  teamFilter === team ? "text-[#1C7CFF] font-semibold bg-white/5" : "text-white/70"
+                }`}
+              >
+                <span>{team}</span>
+                <span className="text-white/40 text-xs">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -702,12 +846,13 @@ function TopPlayersView() {
   }
 
   return (
-    <div className="space-y-6">
-      <TeamFilterBar teams={teams} counts={injuries} teamFilter={teamFilter} setTeamFilter={setTeamFilter} totalLabel="All Teams" />
-      <HeadlineStories injuries={filtered} showLeague />
-      <StatusUpdatesBlock showLeague />
+    <div className="space-y-10">
+      <TeamDropdown teams={teams} counts={injuries} teamFilter={teamFilter} setTeamFilter={setTeamFilter} totalLabel="All Teams" />
+      <JumpNav grouped={grouped} />
+      <HeadlineStories injuries={filtered} showLeague teamFilter={teamFilter} />
+      <StatusUpdatesBlock showLeague teamFilter={teamFilter} />
       {SECTIONS.map((sec) => (
-        <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} showLeague />
+        <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} showLeague defaultCollapsed={sec.key === "reduced" || sec.key === "active"} />
       ))}
     </div>
   );
@@ -739,13 +884,14 @@ function LeagueInjuries({ slug }: { slug: string }) {
   }
 
   return (
-    <div className="space-y-6">
-      <TeamFilterBar teams={teams} counts={injuries} teamFilter={teamFilter} setTeamFilter={setTeamFilter} />
-      <HeadlineStories injuries={filtered} />
-      <StatusUpdatesBlock />
+    <div className="space-y-10">
+      <TeamDropdown teams={teams} counts={injuries} teamFilter={teamFilter} setTeamFilter={setTeamFilter} />
+      <JumpNav grouped={grouped} />
+      <HeadlineStories injuries={filtered} leagueSlug={slug} teamFilter={teamFilter} />
+      <StatusUpdatesBlock leagueSlug={slug} teamFilter={teamFilter} />
 
       {SECTIONS.map((sec) => (
-        <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} />
+        <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} defaultCollapsed={sec.key === "reduced" || sec.key === "active"} />
       ))}
     </div>
   );
@@ -790,35 +936,41 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
             </span>
           </Link>
 
-          <div className="flex items-center gap-1 sm:gap-3 text-sm font-medium overflow-x-auto">
+          <div className="flex items-center gap-1 sm:gap-4 text-[15px] font-medium">
             <Link to="/" className="px-2 py-1 text-[#1C7CFF] shrink-0">Home</Link>
-            <Link to="/recovery-stats" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Recovery Stats</Link>
+            <Link to="/recovery-stats" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Recovery Stats</Link>
+            <Link to="/performance-curves" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Performance Curves</Link>
           </div>
         </div>
 
-        {/* League tabs */}
-        <div className="max-w-5xl mx-auto px-4 pb-2 flex gap-2 overflow-x-auto">
-          {allTabs.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              className={`shrink-0 px-3 py-1 rounded-full text-xs font-bold border transition-colors ${
-                activeTab === key
-                  ? key === "top"
-                    ? "border-amber-400/40 bg-amber-500/15 text-amber-300"
-                    : "border-[#1C7CFF]/60 bg-[#1C7CFF]/15 text-[#1C7CFF]"
-                  : "border-white/10 text-white/50 hover:border-white/20 hover:text-white/70"
-              }`}
-            >
-              {key === "top" && "\uD83D\uDC51 "}
-              {label}
-            </button>
-          ))}
+        {/* League tabs — navigation style */}
+        <div className="max-w-5xl mx-auto px-4">
+          <div className="flex gap-1 border-b border-white/8">
+            {allTabs.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={`px-5 py-3 text-[15px] font-semibold transition-colors relative whitespace-nowrap ${
+                  activeTab === key
+                    ? "text-white"
+                    : "text-white/40 hover:text-white/65"
+                }`}
+              >
+                {key === "top" && "\uD83D\uDC51 "}
+                {label}
+                {activeTab === key && (
+                  <span className={`absolute bottom-0 left-2 right-2 h-[3px] rounded-full ${
+                    key === "top" ? "bg-amber-400" : "bg-[#1C7CFF]"
+                  }`} />
+                )}
+              </button>
+            ))}
+          </div>
         </div>
       </nav>
 
       {/* Content */}
-      <main className="max-w-5xl mx-auto px-4 py-6 pb-16">
+      <main className="max-w-5xl mx-auto px-4 py-8 pb-16">
         {activeTab === "top" ? (
           <TopPlayersView />
         ) : (
@@ -827,7 +979,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-white/5 py-6 text-center text-xs text-white/20">
+      <footer className="border-t border-white/5 py-8 text-center text-sm text-white/25">
         Back In Play · Sports Injury Intelligence Platform
       </footer>
     </div>

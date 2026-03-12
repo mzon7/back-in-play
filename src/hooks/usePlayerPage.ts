@@ -12,6 +12,7 @@ export interface PlayerPageData {
   player_name: string;
   slug: string;
   position: string;
+  team_id: string;
   team_name: string;
   team_slug: string;
   league_slug: string;
@@ -135,6 +136,7 @@ export function usePlayerPage(playerSlug: string) {
         player_name: player.player_name,
         slug: player.slug,
         position: player.position ?? "",
+        team_id: player.team_id,
         team_name: team?.team_name ?? "Unknown",
         team_slug: teamSlug(team?.team_name ?? ""),
         league_slug: leagueSlug,
