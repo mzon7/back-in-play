@@ -1,3 +1,4 @@
+// @refresh reset
 import { useState, useEffect, useRef } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -827,54 +828,36 @@ function TeamDropdown({
   );
 }
 
-/* -- Landing: Top 50 players across all leagues -- */
-function TopPlayersView() {
-  const { data: injuries = [], isLoading } = useTopPlayerInjuries();
-  const [teamFilter, setTeamFilter] = useState<string | null>(null);
-
-  if (isLoading) return <LoadingSkeleton />;
-  if (injuries.length === 0) {
-    return <EmptyBox message="No top player injury data yet." />;
-  }
-
-  const teams = Array.from(new Set(injuries.map((i) => i.team_name ?? "").filter((t) => t && t !== "Unknown"))).sort();
-  const filtered = teamFilter ? injuries.filter((i) => i.team_name === teamFilter) : injuries;
-
-  const grouped: Record<Section, InjuryRow[]> = { out: [], active: [], reduced: [], back: [] };
-  for (const inj of filtered) {
-    grouped[classifySection(inj)].push(inj);
-  }
-
-  return (
-    <div className="space-y-10">
-      <TeamDropdown teams={teams} counts={injuries} teamFilter={teamFilter} setTeamFilter={setTeamFilter} totalLabel="All Teams" />
-      <JumpNav grouped={grouped} />
-      <HeadlineStories injuries={filtered} showLeague teamFilter={teamFilter} />
-      <StatusUpdatesBlock showLeague teamFilter={teamFilter} />
-      {SECTIONS.map((sec) => (
-        <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} showLeague defaultCollapsed={sec.key === "reduced" || sec.key === "active"} />
-      ))}
-    </div>
+/* -- Unified injuries view: always calls the same hooks regardless of active tab.
+ * Merges TopPlayersView (was 1 hook) and LeagueInjuries (was 3 hooks) so React
+ * never sees a different hook count at this position in the tree. -- */
+function InjuriesView({ activeTab }: { activeTab: string }) {
+  // All four hooks called unconditionally every render — React rules of hooks.
+  const { data: topInjuries = [], isLoading: topLoading } = useTopPlayerInjuries();
+  const { data: leagueInjuries = [], isLoading: leagueLoading } = useCurrentInjuries(
+    activeTab === "top" ? "" : activeTab,
   );
-}
-
-/* -- Per-league injuries view -- */
-function LeagueInjuries({ slug }: { slug: string }) {
-  const { data: injuries = [], isLoading } = useCurrentInjuries(slug);
   const [teamFilter, setTeamFilter] = useState<string | null>(null);
+  useEffect(() => { setTeamFilter(null); }, [activeTab]);
 
-  // Reset team filter when league changes
-  useEffect(() => { setTeamFilter(null); }, [slug]);
+  const isTop = activeTab === "top";
+  const injuries = isTop ? topInjuries : leagueInjuries;
+  const isLoading = isTop ? topLoading : leagueLoading;
 
   if (isLoading) return <LoadingSkeleton />;
   if (injuries.length === 0) {
-    return <EmptyBox message={`No injury data for ${LEAGUE_LABELS[slug] ?? slug.toUpperCase()}.`} />;
+    return (
+      <EmptyBox
+        message={
+          isTop
+            ? "No top player injury data yet."
+            : `No injury data for ${LEAGUE_LABELS[activeTab] ?? activeTab.toUpperCase()}.`
+        }
+      />
+    );
   }
 
-  // Extract unique teams sorted alphabetically
-  const teams = Array.from(new Set(injuries.map((i) => i.team_name ?? "").filter((t) => t && t !== "Unknown"))).sort();
-
-  const filtered = teamFilter
+  const filtered = !isTop && teamFilter
     ? injuries.filter((i) => i.team_name === teamFilter)
     : injuries;
 
@@ -883,13 +866,29 @@ function LeagueInjuries({ slug }: { slug: string }) {
     grouped[classifySection(inj)].push(inj);
   }
 
+  if (isTop) {
+    return (
+      <div className="space-y-6">
+        <HeadlineStories injuries={injuries} showLeague />
+        <StatusUpdatesBlock showLeague />
+        {SECTIONS.map((sec) => (
+          <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} showLeague />
+        ))}
+      </div>
+    );
+  }
+
+  // Per-league view
+  const teams = Array.from(
+    new Set(injuries.map((i) => i.team_name ?? "").filter((t) => t && t !== "Unknown")),
+  ).sort();
+
   return (
     <div className="space-y-10">
       <TeamDropdown teams={teams} counts={injuries} teamFilter={teamFilter} setTeamFilter={setTeamFilter} />
       <JumpNav grouped={grouped} />
-      <HeadlineStories injuries={filtered} leagueSlug={slug} teamFilter={teamFilter} />
-      <StatusUpdatesBlock leagueSlug={slug} teamFilter={teamFilter} />
-
+      <HeadlineStories injuries={filtered} leagueSlug={activeTab} teamFilter={teamFilter} />
+      <StatusUpdatesBlock leagueSlug={activeTab} teamFilter={teamFilter} />
       {SECTIONS.map((sec) => (
         <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} defaultCollapsed={sec.key === "reduced" || sec.key === "active"} />
       ))}
@@ -971,11 +970,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
 
       {/* Content */}
       <main className="max-w-5xl mx-auto px-4 py-8 pb-16">
-        {activeTab === "top" ? (
-          <TopPlayersView />
-        ) : (
-          <LeagueInjuries slug={activeTab} />
-        )}
+        <InjuriesView activeTab={activeTab} />
       </main>
 
       {/* Footer */}

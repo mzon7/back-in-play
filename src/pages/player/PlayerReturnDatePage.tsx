@@ -1,3 +1,4 @@
+// @refresh reset
 import { useParams, Link } from "react-router-dom";
 import { SiteHeader } from "../../components/SiteHeader";
 import { usePlayerPage, type PlayerPageData, type PlayerInjury } from "../../hooks/usePlayerPage";

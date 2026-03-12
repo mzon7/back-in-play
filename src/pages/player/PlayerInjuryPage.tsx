@@ -1,11 +1,12 @@
+// @refresh reset
 import { useParams, Link } from "react-router-dom";
 import { SiteHeader } from "../../components/SiteHeader";
 import { usePlayerPage, type PlayerPageData, type PlayerInjury } from "../../hooks/usePlayerPage";
 import { useInjuryImpact } from "../../hooks/useInjuryImpact";
-import { usePerformanceCurve } from "../../features/performance-curves/lib/queries";
-import { usePlayerReturnCase } from "../../features/performance-curves/lib/queries";
+import { usePerformanceCurve, usePlayerReturnCase } from "../../features/performance-curves/lib/queries";
 import { PerformanceCurveChart } from "../../features/performance-curves/components/PerformanceCurveChart";
-import { SEO, playerJsonLd } from "../../components/seo/SEO";
+import { SEO } from "../../components/seo/SEO";
+import { playerJsonLd } from "../../components/seo/seoHelpers";
 import { StatusBadge } from "../../components/StatusBadge";
 
 const LEAGUE_LABELS: Record<string, string> = {

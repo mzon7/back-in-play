@@ -1,8 +1,7 @@
+// @refresh reset
 import { useParams } from "react-router-dom";
-import { lazy } from "react";
-
-const PlayerReturnDatePage = lazy(() => import("./player/PlayerReturnDatePage"));
-const LeagueInjuryPage = lazy(() => import("./league/LeagueInjuryPage"));
+import PlayerReturnDatePage from "./player/PlayerReturnDatePage";
+import LeagueInjuryPage from "./league/LeagueInjuryPage";
 
 /**
  * Handles top-level /:slug routes, dispatching to the right page:
@@ -13,9 +12,8 @@ export default function SlugRouter() {
   const { slug } = useParams<{ slug: string }>();
 
   if (slug?.endsWith("-return-date")) {
-    return <PlayerReturnDatePage />;
+    return <PlayerReturnDatePage key="return-date-page" />;
   }
 
-  // Default: treat as league page (e.g., /nba-injuries)
-  return <LeagueInjuryPage />;
+  return <LeagueInjuryPage key="league-injury-page" />;
 }
