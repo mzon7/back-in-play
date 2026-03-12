@@ -32,3 +32,6 @@
 
 ## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
 - The code diff includes changes that address the original error by adding `// @refresh reset` to multiple components, which prevents hooks-count mismatches during hot module replacement.
+
+## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
+- The code diff does not address the original error related to hooks in a React component; it only modifies error reporting logic.
