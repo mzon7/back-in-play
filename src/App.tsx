@@ -29,12 +29,13 @@ function Loading() {
 function routeKey(pathname: string): string {
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length === 0) return "home";
-  if (segments[0] === "player") return `player-${segments[1] ?? ""}`;
+  if (segments[0] === "player" || segments[0] === "injury") return `player-${segments[1] ?? ""}`;
   if (segments[0] === "league") return `league-${segments[1] ?? ""}`;
   if (segments[0] === "login") return "login";
   if (segments[0] === "signup") return "signup";
   if (segments[0] === "auth") return "auth";
   if (segments[0] === "recovery-stats") return "recovery-stats";
+  if (segments[0] === "injuries") return `injuries-${segments[1] ?? ""}`;
   if (segments[0] === "performance-curves") return "performance-curves";
   if (segments.length === 2) return `team-${segments[0]}-${segments[1]}`;
   // top-level slug (league hub or player return date)
@@ -61,7 +62,11 @@ function AppRoutes() {
 
           {/* SEO: Player injury pages */}
           <Route path="/player/:playerSlug" element={<PlayerInjuryPage />} />
+          <Route path="/injury/:playerSlug" element={<PlayerInjuryPage />} />
           <Route path="/player/:playerSlug/return" element={<PlayerReturnPage />} />
+
+          {/* SEO: Injury type pages */}
+          <Route path="/injuries/:injurySlug" element={<RecoveryStatsPage />} />
 
           {/* SEO: Team injury pages (must be before /:slug to match 2-segment paths) */}
           <Route path="/:leagueSlug/:teamSlug" element={<TeamInjuryPage />} />

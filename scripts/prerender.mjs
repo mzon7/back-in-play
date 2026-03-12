@@ -330,6 +330,72 @@ function returnDateContent(player, injuries) {
   return h;
 }
 
+function injuryTypeContent(injuryType, injurySlug, injuriesByLeague) {
+  const today = todayStr();
+  const year = new Date().getFullYear();
+  const totalCount = Object.values(injuriesByLeague).reduce((a, b) => a + b.length, 0);
+
+  // Compute average recovery
+  const allRecov = Object.values(injuriesByLeague).flat().filter(i => i.recovery_days > 0).map(i => i.recovery_days);
+  const avgRecov = allRecov.length > 0 ? Math.round(allRecov.reduce((a, b) => a + b, 0) / allRecov.length) : null;
+  const allMissed = Object.values(injuriesByLeague).flat().filter(i => i.games_missed > 0).map(i => i.games_missed);
+  const avgMissed = allMissed.length > 0 ? Math.round(allMissed.reduce((a, b) => a + b, 0) / allMissed.length) : null;
+
+  let h = `<div style="max-width:48rem;margin:0 auto;padding:1rem">`;
+  h += `<p style="font-size:11px;color:#666">Last updated: ${today}</p>`;
+  h += `<nav><a href="/">Home</a> / Injuries / ${esc(injuryType)}</nav>`;
+  h += `<h1>${esc(injuryType)} Injuries in Professional Sports (${year})</h1>`;
+
+  h += `<p>${esc(injuryType)} injuries are among the most tracked in professional sports. `;
+  h += `Our database contains ${totalCount} recorded ${esc(injuryType.toLowerCase())} injuries across the NBA, NFL, MLB, NHL, and EPL.`;
+  if (avgRecov) h += ` The average recovery time is ${avgRecov} days.`;
+  if (avgMissed) h += ` Players miss an average of ${avgMissed} games.`;
+  h += `</p>`;
+
+  // Recovery statistics
+  if (avgRecov || avgMissed) {
+    h += `<h2>Recovery Statistics</h2>`;
+    h += `<dl>`;
+    if (avgRecov) h += `<dt>Average Recovery Time</dt><dd>${avgRecov} days</dd>`;
+    if (avgMissed) h += `<dt>Average Games Missed</dt><dd>${avgMissed} games</dd>`;
+    h += `<dt>Total Cases in Database</dt><dd>${totalCount}</dd>`;
+    h += `</dl>`;
+  }
+
+  // Per-league breakdown
+  for (const [leagueSlug, leagueInjs] of Object.entries(injuriesByLeague)) {
+    if (leagueInjs.length === 0) continue;
+    const label = LEAGUE_LABELS[leagueSlug] ?? leagueSlug.toUpperCase();
+    const leagueRecov = leagueInjs.filter(i => i.recovery_days > 0).map(i => i.recovery_days);
+    const leagueAvg = leagueRecov.length > 0 ? Math.round(leagueRecov.reduce((a, b) => a + b, 0) / leagueRecov.length) : null;
+
+    h += `<h2>${esc(injuryType)} Injuries in the ${esc(label)} (${leagueInjs.length})</h2>`;
+    if (leagueAvg) h += `<p>Average recovery in the ${esc(label)}: ${leagueAvg} days.</p>`;
+
+    // Recent players
+    const recent = leagueInjs.slice(0, 15);
+    h += `<ul>`;
+    for (const inj of recent) {
+      const pSlug = inj.player_slug || slugify(inj.player_name);
+      h += `<li><a href="/injury/${pSlug}">${esc(inj.player_name)}</a> — ${esc(inj.team_name)} — ${fmtDate(inj.date_injured)}`;
+      if (inj.return_date) h += ` → Returned ${fmtDate(inj.return_date)}`;
+      if (inj.recovery_days > 0) h += ` (${inj.recovery_days} days)`;
+      h += `</li>`;
+    }
+    h += `</ul>`;
+  }
+
+  // Related links
+  h += `<h3>Related Injury Types</h3><ul>`;
+  h += `<li><a href="/performance-curves">Performance After Injury (Recovery Curves)</a></li>`;
+  for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+    h += `<li><a href="/${s}-injuries">${l} Injury Report</a></li>`;
+  }
+  h += `</ul>`;
+  h += `</div>`;
+  return h;
+}
+
 // --- Main ---
 async function main() {
   console.log("Prerender: Starting...");
@@ -367,6 +433,17 @@ async function main() {
   }
   console.log(`Prerender: ${allInjuries.length} recent injuries`);
 
+  // Fetch ALL injuries (full history for player pages — healthy players show past injuries)
+  let fullInjuries = [];
+  offset = 0;
+  while (true) {
+    const batch = await sbGet("back_in_play_injuries", `select=injury_id,player_id,injury_type,status,date_injured,return_date,expected_return,games_missed,recovery_days,side&order=date_injured.desc&limit=1000&offset=${offset}`);
+    fullInjuries.push(...batch);
+    if (batch.length < 1000) break;
+    offset += 1000;
+  }
+  console.log(`Prerender: ${fullInjuries.length} total injuries (all time)`);
+
   // Build player lookup
   const playerById = new Map();
   for (const p of allPlayers) {
@@ -381,11 +458,18 @@ async function main() {
     });
   }
 
-  // Build injuries by player
+  // Build injuries by player (recent — for league/team pages)
   const injByPlayer = new Map();
   for (const inj of allInjuries) {
     if (!injByPlayer.has(inj.player_id)) injByPlayer.set(inj.player_id, []);
     injByPlayer.get(inj.player_id).push(inj);
+  }
+
+  // Build ALL injuries by player (full history — for player pages)
+  const allInjByPlayer = new Map();
+  for (const inj of fullInjuries) {
+    if (!allInjByPlayer.has(inj.player_id)) allInjByPlayer.set(inj.player_id, []);
+    allInjByPlayer.get(inj.player_id).push(inj);
   }
 
   // Enrich injuries with player data for league/team pages
@@ -441,28 +525,94 @@ async function main() {
     }
   }
 
-  // 4. Player pages + return date pages (only players with injury data)
+  // 4. Injury type pages (/injuries/acl, /injuries/hamstring, etc.)
+  const injuryTypeMap = new Map(); // injury_type_slug → { type, byLeague }
+  for (const inj of enrichedInjuries) {
+    const typeSlug = slugify(inj.injury_type);
+    if (!typeSlug) continue;
+    if (!injuryTypeMap.has(typeSlug)) injuryTypeMap.set(typeSlug, { type: inj.injury_type, byLeague: {} });
+    const entry = injuryTypeMap.get(typeSlug);
+    if (!entry.byLeague[inj.league_slug]) entry.byLeague[inj.league_slug] = [];
+    entry.byLeague[inj.league_slug].push(inj);
+  }
+  // Also include full history injuries for richer type pages
+  for (const inj of fullInjuries) {
+    const p = playerById.get(inj.player_id);
+    if (!p) continue;
+    const typeSlug = slugify(inj.injury_type);
+    if (!typeSlug) continue;
+    if (!injuryTypeMap.has(typeSlug)) injuryTypeMap.set(typeSlug, { type: inj.injury_type, byLeague: {} });
+    const entry = injuryTypeMap.get(typeSlug);
+    if (!entry.byLeague[p.league_slug]) entry.byLeague[p.league_slug] = [];
+    // Avoid duplicates (recent injuries already added)
+    const existing = entry.byLeague[p.league_slug];
+    if (!existing.some(e => e.injury_id === inj.injury_id)) {
+      existing.push({
+        ...inj,
+        player_name: p.player_name,
+        player_slug: p.slug,
+        team_name: p.team_name,
+        league_slug: p.league_slug,
+      });
+    }
+  }
+
+  for (const [typeSlug, { type, byLeague }] of injuryTypeMap) {
+    const totalCount = Object.values(byLeague).reduce((a, b) => a + b.length, 0);
+    if (totalCount < 3) continue; // Skip very rare injury types
+
+    writePage(`/injuries/${typeSlug}`, {
+      title: `${type} Injuries (${new Date().getFullYear()}) - Recovery Time & Statistics`,
+      description: `${type} injury statistics across NBA, NFL, MLB, NHL, EPL. Average recovery time, games missed, and recent players with ${type.toLowerCase()} injuries.`,
+      content: injuryTypeContent(type, typeSlug, byLeague),
+    });
+    pageCount++;
+  }
+  console.log(`Prerender: ${injuryTypeMap.size} injury types, ${pageCount} pages so far`);
+
+  // 5. Player pages + return date pages (ALL players — healthy ones show history/status)
   for (const [playerId, player] of playerById) {
     const injuries = injByPlayer.get(playerId) ?? [];
-    if (injuries.length === 0) continue; // Skip players with no injuries — saves deployment size
+    // Also check full history for healthy players
+    const allPlayerInjuries = allInjByPlayer.get(playerId) ?? injuries;
+    const displayInjuries = injuries.length > 0 ? injuries : allPlayerInjuries;
 
-    // Player injury page
+    const label = LEAGUE_LABELS[player.league_slug] ?? "";
+    const year = new Date().getFullYear();
+
+    const title = displayInjuries.length > 0 && displayInjuries[0].status !== "returned" && displayInjuries[0].status !== "active"
+      ? `${player.player_name} Injury Update (${year}) - Status & Return Date`
+      : `Is ${player.player_name} Injured? (${year}) - Injury Status & History`;
+
+    const description = displayInjuries[0]
+      ? `${player.player_name} injury status: ${displayInjuries[0].status.replace(/_/g, " ")}. ${displayInjuries[0].injury_type}. ${player.team_name} (${label}).`
+      : `${player.player_name} injury status and history. ${player.team_name} (${label}). Currently healthy.`;
+
+    // /player/{slug} page
     writePage(`/player/${player.slug}`, {
-      title: `${player.player_name} Injury Update (${new Date().getFullYear()}) - Status & Return Date`,
-      description: injuries[0]
-        ? `${player.player_name} injury status: ${injuries[0].status}. ${injuries[0].injury_type}. ${player.team_name} (${LEAGUE_LABELS[player.league_slug] ?? ""}).`
-        : `${player.player_name} injury history. ${player.team_name} (${LEAGUE_LABELS[player.league_slug] ?? ""}).`,
-      content: playerContent(player, injuries),
+      title,
+      description,
+      content: playerContent(player, displayInjuries),
     });
     pageCount++;
 
-    // Return date page
-    writePage(`/${player.slug}-return-date`, {
-      title: `${player.player_name} Return Date (${new Date().getFullYear()}) - Latest Injury Update`,
-      description: `When will ${player.player_name} return? Latest return date, recovery timeline, and injury updates. ${player.team_name} (${LEAGUE_LABELS[player.league_slug] ?? ""}).`,
-      content: returnDateContent(player, injuries),
+    // /injury/{slug} page (same content, different URL for SEO)
+    writePage(`/injury/${player.slug}`, {
+      title,
+      description,
+      content: playerContent(player, displayInjuries),
     });
     pageCount++;
+
+    // Return date page (only for players with injury history)
+    if (displayInjuries.length > 0) {
+      writePage(`/${player.slug}-return-date`, {
+        title: `${player.player_name} Return Date (${year}) - Latest Injury Update`,
+        description: `When will ${player.player_name} return? Latest return date, recovery timeline, and injury updates. ${player.team_name} (${label}).`,
+        content: returnDateContent(player, displayInjuries),
+      });
+      pageCount++;
+    }
   }
 
   console.log(`Prerender: Generated ${pageCount} pages`);
