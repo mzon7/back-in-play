@@ -35,3 +35,6 @@
 
 ## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
 - The code diff does not address the original error related to hooks in a React component; it only modifies error reporting logic.
+
+## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
+- The code diff shows a new component `InjuriesView` that unconditionally calls the same number of hooks on every render, addressing the original error of conditional hook rendering.
