@@ -14,3 +14,6 @@
 ## API Response Shapes
 - Edge function → SDK unwraps → you get the inner `data` directly
 - If you get `data.data.something`, the SDK unwrapping is broken or bypassed
+
+## Learned: react-dom_client.js?v=70a232db (2026-03-12)
+- The AI response indicates that a key prop was added to prevent reconciliation issues between components using different numbers of hooks, which directly addresses the original error.
