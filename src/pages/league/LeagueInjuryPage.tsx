@@ -65,7 +65,11 @@ export default function LeagueInjuryPage() {
   const year = new Date().getFullYear();
 
   const allActive = (injuries ?? []).filter((i) => i.status !== "returned" && i.status !== "active");
-  const allReturning = (injuries ?? []).filter((i) => i.status === "returned" || i.status === "active" || i.status === "back_in_play");
+  const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+  const allReturning = (injuries ?? []).filter((i) =>
+    (i.status === "returned" || i.status === "back_in_play") &&
+    (i.return_date ?? i.updated_at ?? "") >= fourteenDaysAgo
+  );
 
   const activeInjuries = teamFilter ? allActive.filter((i) => i.team_name === teamFilter) : allActive;
   const returning = teamFilter ? allReturning.filter((i) => i.team_name === teamFilter) : allReturning;

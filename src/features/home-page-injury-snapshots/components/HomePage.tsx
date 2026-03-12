@@ -586,12 +586,18 @@ function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[], m
 
   // Candidates from injuries
   for (const inj of injuries) {
-    const score = headlineScore(inj);
+    const status = (inj.status ?? "out").toLowerCase().replace(/-/g, "_");
+    const isReturning = ["active", "active_today", "back_in_play", "returned"].includes(status);
+
+    // For returns, use return_date for recency; skip if older than 14 days
+    const relevantDate = isReturning ? (inj.return_date ?? inj.date_injured) : inj.date_injured;
+    if (isReturning && daysAgo(relevantDate) > 14) continue;
+
+    const score = starRating(inj) * recencyFactor(relevantDate);
     if (score < minScore) continue;
 
-    const status = (inj.status ?? "out").toLowerCase().replace(/-/g, "_");
-    const isReturning = ["active", "active_today", "back_in_play", "probable"].includes(status);
     const impact = impactFromScore(score);
+    const days = daysAgo(relevantDate);
 
     candidates.push({
       playerId: inj.player_id,
@@ -607,9 +613,7 @@ function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[], m
         summary: isReturning ? "Returning to action" : `${inj.injury_type ?? "Injury"} — ${inj.status}`,
         impact,
         impactColor: IMPACT_COLORS[impact],
-        timeAgo: daysAgo(inj.date_injured) === 0 ? "Today"
-          : daysAgo(inj.date_injured) === 1 ? "Yesterday"
-          : `${daysAgo(inj.date_injured)}d ago`,
+        timeAgo: days === 0 ? "Today" : days === 1 ? "Yesterday" : `${days}d ago`,
         type: isReturning ? "return" : "injury",
       },
     });

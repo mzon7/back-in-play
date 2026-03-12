@@ -330,6 +330,18 @@ def _season_for_date(d, league):
     return d.year
 
 
+def _season_end_date(season, league):
+    """Approximate end date for a given season. Used to determine if a season is over."""
+    if league in ("nba", "nhl"):
+        return date(season, 6, 30)  # NBA/NHL seasons end by June
+    if league == "nfl":
+        return date(season + 1, 2, 15)  # NFL season ends Feb (Super Bowl)
+    if league == "premier-league":
+        return date(season + 1, 5, 31)  # EPL season ends May
+    # MLB
+    return date(season, 10, 31)  # MLB ends October
+
+
 def scrape_nba_game_log(sport_ref_id, season):
     """Scrape a player's NBA game log from Basketball-Reference."""
     letter = sport_ref_id[0]
@@ -1222,6 +1234,375 @@ def fpl_bulk_store():
     print(f"\n  FPL bulk store: {stored} game logs stored, {not_found} players not found in FPL", flush=True)
 
 
+# ─── Injury classification ────────────────────────────────────────────────────
+
+# Map body-part injury_type → specific subtypes by keywords in description
+INJURY_SUBTYPES = {
+    # Knee
+    "acl": "ACL Tear",
+    "anterior cruciate": "ACL Tear",
+    "mcl": "MCL Sprain",
+    "medial collateral": "MCL Sprain",
+    "pcl": "PCL Injury",
+    "posterior cruciate": "PCL Injury",
+    "lcl": "LCL Sprain",
+    "lateral collateral": "LCL Sprain",
+    "meniscus": "Meniscus Tear",
+    "torn meniscus": "Meniscus Tear",
+    "patellar": "Patellar Injury",
+    "patella": "Patellar Injury",
+    "hyperextend": "Knee Hyperextension",
+    "bone bruise": "Bone Bruise",
+    "knee scope": "Knee Scope",
+    "knee surgery": "Knee Surgery",
+    "arthroscop": "Knee Scope",
+    # Shoulder
+    "labrum": "Labrum Tear",
+    "torn labrum": "Labrum Tear",
+    "rotator cuff": "Rotator Cuff",
+    "separated shoulder": "Separated Shoulder",
+    "shoulder separation": "Separated Shoulder",
+    "dislocated shoulder": "Dislocated Shoulder",
+    "shoulder disloc": "Dislocated Shoulder",
+    # Ankle
+    "high ankle": "High Ankle Sprain",
+    "syndesmosis": "High Ankle Sprain",
+    "ankle sprain": "Ankle Sprain",
+    "sprained ankle": "Ankle Sprain",
+    "rolled ankle": "Ankle Sprain",
+    "ankle fracture": "Ankle Fracture",
+    "broken ankle": "Ankle Fracture",
+    "achilles": "Achilles Injury",
+    "torn achilles": "Achilles Tear",
+    "achilles tear": "Achilles Tear",
+    "achilles rupture": "Achilles Tear",
+    # Hamstring
+    "hamstring strain": "Hamstring Strain",
+    "hamstring tear": "Hamstring Tear",
+    "torn hamstring": "Hamstring Tear",
+    "hamstring pull": "Hamstring Strain",
+    "hamstring tight": "Hamstring Tightness",
+    # Concussion
+    "concussion protocol": "Concussion",
+    "head injury": "Concussion",
+    # Back
+    "herniated disc": "Herniated Disc",
+    "herniated disk": "Herniated Disc",
+    "bulging disc": "Bulging Disc",
+    "back spasms": "Back Spasms",
+    "back spasm": "Back Spasms",
+    "lower back": "Lower Back",
+    "lumbar": "Lower Back",
+    # Foot
+    "lisfranc": "Lisfranc Injury",
+    "plantar fasci": "Plantar Fasciitis",
+    "turf toe": "Turf Toe",
+    "jones fracture": "Jones Fracture",
+    "stress fracture": "Stress Fracture",
+    "metatarsal": "Metatarsal Fracture",
+    # Arm/Elbow
+    "tommy john": "Tommy John Surgery",
+    "ucl": "UCL Injury",
+    "ulnar collateral": "UCL Injury",
+    "elbow surgery": "Elbow Surgery",
+    "tennis elbow": "Tennis Elbow",
+    # Leg
+    "quad strain": "Quad Strain",
+    "quadricep strain": "Quad Strain",
+    "calf strain": "Calf Strain",
+    "groin strain": "Groin Strain",
+    "groin pull": "Groin Strain",
+    "hip flexor": "Hip Flexor Strain",
+    "oblique": "Oblique Strain",
+    "abdominal strain": "Abdominal Strain",
+    "core muscle": "Core Muscle Injury",
+    # Other specific
+    "tommy john": "Tommy John Surgery",
+    "microdiscectomy": "Back Surgery",
+    "fracture": "Fracture",
+    "torn": "Tear",
+    "sprain": "Sprain",
+    "strain": "Strain",
+    "surgery": "Surgery",
+    "scope": "Scope/Arthroscopy",
+}
+
+# Normalize body-part variations
+INJURY_TYPE_NORMALIZE = {
+    "Rib": "Ribs",
+    "Right Shoulder": "Shoulder",
+    "Left Shoulder": "Shoulder",
+    "Right Elbow": "Elbow",
+    "Left Elbow": "Elbow",
+    "Right Knee": "Knee",
+    "Left Knee": "Knee",
+    "Right Ankle": "Ankle",
+    "Left Ankle": "Ankle",
+    "Right Wrist": "Wrist",
+    "Left Wrist": "Wrist",
+    "Right Foot": "Foot",
+    "Left Foot": "Foot",
+    "Right Hand": "Hand",
+    "Left Hand": "Hand",
+    "Lower Leg": "Leg",
+    "Quadricep": "Quad",
+    "Quadriceps": "Quad",
+    "Biceps": "Bicep",
+    "Triceps": "Tricep",
+    "Pectoral": "Chest",
+    "Not Injury Related": "Non-Injury",
+}
+
+
+def classify_injury(injury_type, description="", short_comment="", long_comment=""):
+    """Classify an injury into normalized type + specific subtype.
+
+    Returns (normalized_type, subtype, side).
+    """
+    injury_type = injury_type or ""
+    desc_combined = " ".join(filter(None, [description, short_comment, long_comment])).lower()
+
+    # Extract side
+    side = None
+    orig = injury_type
+    for prefix in ("Right ", "Left "):
+        if injury_type.startswith(prefix):
+            side = prefix.strip().lower()
+            break
+    if not side:
+        if "right" in desc_combined[:60]:
+            side = "right"
+        elif "left" in desc_combined[:60]:
+            side = "left"
+
+    # Normalize type
+    normalized = INJURY_TYPE_NORMALIZE.get(injury_type, injury_type)
+
+    # Find specific subtype from description
+    subtype = None
+    for keyword, sub in INJURY_SUBTYPES.items():
+        if keyword in desc_combined:
+            subtype = sub
+            break  # first match wins (ordered by specificity)
+
+    # If no description match, use injury_type as subtype for specific enough types
+    if not subtype and normalized in ("Concussion", "Achilles", "Illness"):
+        subtype = normalized
+
+    return normalized, subtype, side
+
+
+def classify_all_injuries():
+    """Batch-classify all injuries and update normalized_type, subtype, side columns."""
+    print("[CLASSIFY] Loading injuries for classification...", flush=True)
+
+    # First ensure columns exist
+    _ensure_injury_columns()
+
+    offset = 0
+    batch_size = 500
+    total_classified = 0
+    total_updated = 0
+
+    while True:
+        rows = sb_get("back_in_play_injuries",
+                       f"select=injury_id,injury_type,injury_description,short_comment,long_comment,side"
+                       f"&order=injury_id.asc&limit={batch_size}&offset={offset}")
+        if not rows:
+            break
+
+        updates = []
+        for r in rows:
+            norm, sub, side = classify_injury(
+                r.get("injury_type"),
+                r.get("injury_description"),
+                r.get("short_comment"),
+                r.get("long_comment"),
+            )
+            patch = {}
+            if norm and norm != r.get("injury_type"):
+                patch["normalized_injury_type"] = norm
+            else:
+                patch["normalized_injury_type"] = r.get("injury_type") or "Unknown"
+            if sub:
+                patch["injury_subtype"] = sub
+            if side and not r.get("side"):
+                patch["side"] = side
+
+            if patch:
+                patch["injury_id"] = r["injury_id"]
+                updates.append(patch)
+
+        for u in updates:
+            iid = u.pop("injury_id")
+            sb_patch("back_in_play_injuries", f"injury_id=eq.{iid}", u)
+            total_updated += 1
+
+        total_classified += len(rows)
+        if total_classified % 5000 == 0:
+            print(f"  Classified {total_classified} injuries ({total_updated} updated)...", flush=True)
+
+        offset += batch_size
+        if len(rows) < batch_size:
+            break
+
+    print(f"[CLASSIFY] Done: {total_classified} injuries classified, {total_updated} updated", flush=True)
+
+
+def _ensure_injury_columns():
+    """Add normalized_injury_type, injury_subtype columns if they don't exist."""
+    # Try a select — if columns don't exist, we'll need to add them via SQL
+    try:
+        sb_get("back_in_play_injuries",
+               "select=injury_id,normalized_injury_type,injury_subtype&limit=1")
+    except Exception:
+        print("  Adding normalized_injury_type and injury_subtype columns...", flush=True)
+        # Use Supabase SQL via REST — this requires service role
+        url = SUPABASE_URL + "/rest/v1/rpc/sql"
+        # Fallback: just try the upsert and it'll fail gracefully if columns missing
+        print("  NOTE: If columns don't exist, run this SQL in Supabase dashboard:", flush=True)
+        print("    ALTER TABLE back_in_play_injuries ADD COLUMN IF NOT EXISTS normalized_injury_type TEXT;", flush=True)
+        print("    ALTER TABLE back_in_play_injuries ADD COLUMN IF NOT EXISTS injury_subtype TEXT;", flush=True)
+
+
+# ─── Injury history enrichment ────────────────────────────────────────────────
+
+def enrich_injury_history():
+    """Compute per-injury context: total prior injuries, same body part recurrence,
+    days since last injury, injury number this season, and performance impact.
+    Run this AFTER classify_all_injuries and audit_returns.
+    """
+    print("[ENRICH] Loading all injuries ordered by player and date...", flush=True)
+
+    # Load all injuries with player info
+    all_injuries = []
+    offset = 0
+    batch = 500
+    while True:
+        rows = sb_get("back_in_play_injuries",
+                       f"select=injury_id,player_id,injury_type,normalized_injury_type,date_injured,return_date,status"
+                       f"&date_injured=not.is.null&order=date_injured.asc&limit={batch}&offset={offset}")
+        if not rows:
+            break
+        all_injuries.extend(rows)
+        offset += batch
+        if len(rows) < batch:
+            break
+
+    print(f"  Loaded {len(all_injuries)} injuries", flush=True)
+
+    # Get league info for each player (needed for season calculation)
+    player_ids = list(set(inj["player_id"] for inj in all_injuries))
+    player_league = {}
+    for i in range(0, len(player_ids), 50):
+        batch_ids = player_ids[i:i + 50]
+        ids_str = ",".join(batch_ids)
+        p_data = sb_get("back_in_play_players",
+                         f"select=player_id,league_id&player_id=in.({ids_str})")
+        for p in (p_data or []):
+            player_league[p["player_id"]] = p.get("league_id", "")
+
+    leagues_data = sb_get("back_in_play_leagues", "select=league_id,slug")
+    league_slug_map = {l["league_id"]: l["slug"] for l in (leagues_data or [])}
+
+    # Group by player
+    by_player = {}
+    for inj in all_injuries:
+        pid = inj["player_id"]
+        by_player.setdefault(pid, []).append(inj)
+
+    print(f"  {len(by_player)} unique players", flush=True)
+
+    # Process each player's injury history
+    total_perf = 0
+    total_updated = 0
+    for pid, injuries in by_player.items():
+        ls = league_slug_map.get(player_league.get(pid, ""), "")
+
+        for idx, inj in enumerate(injuries):
+            patch = {}
+
+            # Total prior injuries for this player
+            patch["total_prior_injuries"] = idx
+
+            # Days since last injury
+            if idx > 0:
+                prev = injuries[idx - 1]
+                try:
+                    d_curr = datetime.strptime(inj["date_injured"], "%Y-%m-%d").date()
+                    d_prev = datetime.strptime(prev["date_injured"], "%Y-%m-%d").date()
+                    patch["days_since_last_injury"] = (d_curr - d_prev).days
+                except (ValueError, TypeError):
+                    pass
+
+            # Same body part as any prior injury?
+            curr_type = inj.get("normalized_injury_type") or inj.get("injury_type") or ""
+            if curr_type and idx > 0:
+                prior_types = [
+                    (i.get("normalized_injury_type") or i.get("injury_type") or "")
+                    for i in injuries[:idx]
+                ]
+                patch["same_body_part_prior"] = curr_type in prior_types
+
+            # Injury number this season
+            try:
+                d = datetime.strptime(inj["date_injured"], "%Y-%m-%d").date()
+                season_injuries = [
+                    i for i in injuries[:idx]
+                    if i.get("date_injured", "")[:4] == inj["date_injured"][:4]
+                    or (int(i.get("date_injured", "0000")[:4]) == d.year - 1
+                        and d.month < 7)
+                ]
+                patch["injury_number_season"] = len(season_injuries) + 1
+            except (ValueError, TypeError):
+                patch["injury_number_season"] = 1
+
+            # Pre/post performance computation (only for returned injuries with dates)
+            if inj.get("return_date") and inj.get("date_injured"):
+                try:
+                    d_injured = datetime.strptime(inj["date_injured"], "%Y-%m-%d").date()
+                    d_return = datetime.strptime(inj["return_date"], "%Y-%m-%d").date()
+                    season = _season_for_date(d_injured, ls) if ls else d_injured.year
+
+                    # Pre-injury: last 10 games before injury
+                    pre_logs = sb_get("back_in_play_player_game_logs",
+                                       f"select=composite&player_id=eq.{pid}"
+                                       f"&game_date=lt.{inj['date_injured']}"
+                                       f"&composite=not.is.null"
+                                       f"&order=game_date.desc&limit=10")
+
+                    # Post-return: first 5 games after return
+                    post_logs = sb_get("back_in_play_player_game_logs",
+                                        f"select=composite&player_id=eq.{pid}"
+                                        f"&game_date=gte.{inj['return_date']}"
+                                        f"&composite=not.is.null"
+                                        f"&order=game_date.asc&limit=5")
+
+                    if pre_logs and len(pre_logs) >= 3 and post_logs and len(post_logs) >= 1:
+                        pre_avg = statistics.mean(g["composite"] for g in pre_logs if g.get("composite") is not None)
+                        post_avg = statistics.mean(g["composite"] for g in post_logs if g.get("composite") is not None)
+
+                        patch["pre_injury_composite_avg"] = round(pre_avg, 2)
+                        patch["post_return_composite_avg"] = round(post_avg, 2)
+                        if pre_avg > 0:
+                            patch["performance_drop_pct"] = round((post_avg - pre_avg) / pre_avg * 100, 1)
+                        total_perf += 1
+                except (ValueError, TypeError):
+                    pass
+
+            if patch:
+                sb_patch("back_in_play_injuries",
+                         f"injury_id=eq.{inj['injury_id']}",
+                         patch)
+                total_updated += 1
+
+                if total_updated % 500 == 0:
+                    print(f"  Updated {total_updated} injuries ({total_perf} with perf stats)...", flush=True)
+
+    print(f"[ENRICH] Done: {total_updated} injuries enriched for {len(by_player)} players", flush=True)
+    print(f"  {total_perf} injuries have pre/post performance comparisons", flush=True)
+
+
 # ─── Injury audit: discover returns from game logs ──────────────────────────
 
 def audit_returns(league=None):
@@ -1445,17 +1826,22 @@ def audit_returns(league=None):
                 missed_str = f", {games_missed} games missed" if games_missed else ""
                 print(f"  [RETURNED] {inj.get('player_name', '?')}: injured {inj['date_injured']} → returned {first_game} ({recovery}d{missed_str})", flush=True)
         else:
-            # No games after injury this season → check if the season had games at all
+            # No games after injury this season → only mark season-ending if
+            # the season is actually over (not mid-season)
+            today = date.today()
+            season_end_approx = _season_end_date(season, ls)
+            if today < season_end_approx:
+                # Season still in progress — don't mark as season-ending
+                continue
+
             pre_logs = sb_get("back_in_play_player_game_logs",
                               f"select=game_date&player_id=eq.{pid}&season=eq.{season}&game_date=lte.{d_injured.isoformat()}&limit=200")
             if pre_logs:
-                # Player was active before injury but didn't return → season-ending
-                # Count remaining games they missed (games played before = proxy for season activity)
+                # Player was active before injury but didn't return in a finished season
                 games_played_before = len(pre_logs)
-                # Rough estimate of remaining games based on when in season injury occurred
                 all_season = sb_get("back_in_play_player_game_logs",
                                     f"select=game_date&player_id=eq.{pid}&season=eq.{season}&limit=200")
-                games_missed = len(all_season) - games_played_before  # games after injury they missed
+                games_missed = len(all_season) - games_played_before
 
                 update = {
                     "status": "season_ending",
@@ -2037,12 +2423,30 @@ def main():
     parser.add_argument("--incremental", action="store_true", help="Incremental (daily cron)")
     parser.add_argument("--audit", action="store_true",
                         help="Audit injuries: discover returns and season-ending from game logs")
+    parser.add_argument("--classify", action="store_true",
+                        help="Classify all injuries: normalize types, extract subtypes and side")
+    parser.add_argument("--enrich", action="store_true",
+                        help="Enrich injury history: prior injuries, recurrence, days between")
     parser.add_argument("--fpl-store", action="store_true",
                         help="Bulk download and store all current season EPL game logs from FPL API")
     parser.add_argument("--league", type=str, help="Process single league (nba, nfl, nhl, mlb, premier-league)")
     parser.add_argument("--phase", type=str, choices=["resolve-ids", "scrape-logs", "compute", "aggregate"],
                         help="Run single phase")
     args = parser.parse_args()
+
+    if args.classify:
+        print(f"\n{'=' * 60}")
+        print(f"Injury Classification — Normalize Types & Extract Subtypes")
+        print(f"{'=' * 60}\n")
+        classify_all_injuries()
+        return
+
+    if args.enrich:
+        print(f"\n{'=' * 60}")
+        print(f"Injury History Enrichment")
+        print(f"{'=' * 60}\n")
+        enrich_injury_history()
+        return
 
     if args.fpl_store:
         print(f"\n{'=' * 60}")

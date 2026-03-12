@@ -81,28 +81,29 @@ def sb_upsert(table, rows, conflict=""):
         "apikey": SB_KEY,
         "Authorization": "Bearer " + SB_KEY,
         "Content-Type": "application/json",
-        "Prefer": "return=representation,resolution=merge-duplicates",
+        "Prefer": "return=minimal,resolution=merge-duplicates",
     }
     url = SB_URL + "/rest/v1/" + table
     if conflict:
         url += "?on_conflict=" + conflict
     total = 0
-    for i in range(0, len(rows), 50):
-        batch = rows[i:i + 50]
+    for i in range(0, len(rows), 200):
+        batch = rows[i:i + 200]
         try:
             req = urllib.request.Request(url, data=json.dumps(batch).encode(),
                                         headers=hdrs, method="POST")
-            resp = urllib.request.urlopen(req, timeout=60)
-            result = json.loads(resp.read().decode())
-            total += len(result) if isinstance(result, list) else 1
+            resp = urllib.request.urlopen(req, timeout=120)
+            resp.read()  # drain response
+            total += len(batch)
         except Exception as e:
-            # Row-by-row fallback
-            for row in batch:
+            # Smaller batch fallback
+            for j in range(0, len(batch), 20):
+                mini = batch[j:j + 20]
                 try:
-                    req2 = urllib.request.Request(url, data=json.dumps([row]).encode(),
+                    req2 = urllib.request.Request(url, data=json.dumps(mini).encode(),
                                                   headers=hdrs, method="POST")
-                    urllib.request.urlopen(req2, timeout=30).read()
-                    total += 1
+                    urllib.request.urlopen(req2, timeout=60).read()
+                    total += len(mini)
                 except Exception:
                     pass
     return total
@@ -151,10 +152,20 @@ def build_player_map(league_id):
         offset += 1000
 
     name_map = {}
+    # Common position prefixes in scraped player names (e.g., "F Bobby Ryan")
+    pos_prefixes = ("f ", "c ", "d ", "g ", "lw ", "rw ", "ds ", "c/f ", "f/c ", "d/f ",
+                    "c/w ", "w ", "rw/lw ", "lw/rw ")
     for p in players:
         name = p.get("player_name", "").strip().lower()
         if name:
             name_map[name] = p["player_id"]
+            # Also add without position prefix for matching
+            for prefix in pos_prefixes:
+                if name.startswith(prefix):
+                    clean = name[len(prefix):]
+                    if clean and clean not in name_map:
+                        name_map[clean] = p["player_id"]
+                    break
     print(f"  Loaded {len(name_map)} players from DB", flush=True)
     return name_map
 
@@ -350,14 +361,89 @@ def load_nfl(league_id):
 # Note: no assists column in game-by-game data; composite uses goals + SOG
 
 def load_nhl(league_id):
-    """NHL: No bulk game-by-game CSV available (moneypuck's downloadable game-by-game
-    files are goalies-only; the full 2.6GB skater file is too large).
-    Use ESPN API for per-player game logs via the audit pipeline instead."""
-    print("  NHL: No bulk game-by-game skater CSV available.", flush=True)
-    print("  The moneypuck game-by-game download only contains goalies.", flush=True)
-    print("  The full skater game-by-game file is 2.6GB (too large for bulk loading).", flush=True)
-    print("  Use ESPN API instead: python3 performance_curves_pipeline.py --audit --league nhl", flush=True)
-    return 0
+    """NHL: Load from moneypuck extracted CSV (nhl_skaters_gamebygame.csv).
+    This is a 48MB extract of the 2.6GB full file, filtered to situation='all'.
+    Columns: name, season, gameDate, opposingTeam, icetime, I_F_goals,
+             I_F_primaryAssists, I_F_secondaryAssists, I_F_shotsOnGoal,
+             I_F_points, I_F_hits, I_F_blockedShotAttempts, position
+    """
+    csv_path = os.path.join(os.path.dirname(__file__), "nhl_skaters_gamebygame.csv")
+    if not os.path.exists(csv_path):
+        print(f"  NHL CSV not found at {csv_path}", flush=True)
+        print("  Extract it from moneypuck 2008_to_2024.csv (situation='all' rows only)", flush=True)
+        return 0
+
+    name_map = build_player_map(league_id)
+
+    total_loaded = 0
+    total_matched = 0
+    unmatched = set()
+    db_rows = []
+
+    with open(csv_path, "r") as f:
+        reader = csv.DictReader(f)
+        for row_num, row in enumerate(reader, 1):
+            name = (row.get("name") or "").strip().lower()
+            player_id = name_map.get(name)
+            if not player_id:
+                unmatched.add(name)
+                continue
+
+            gd_raw = row.get("gameDate", "")
+            if len(gd_raw) == 8:  # 20090102 → 2009-01-02
+                game_date = f"{gd_raw[:4]}-{gd_raw[4:6]}-{gd_raw[6:8]}"
+            else:
+                continue
+
+            season = int(row.get("season", "0"))
+            if season < 2008:
+                continue
+
+            icetime = _safe_float(row.get("icetime"))
+            minutes = round(icetime / 60.0, 1) if icetime else None
+
+            goals = _safe_float(row.get("I_F_goals")) or 0
+            sog = _safe_float(row.get("I_F_shotsOnGoal")) or 0
+            primary_a = _safe_float(row.get("I_F_primaryAssists")) or 0
+            secondary_a = _safe_float(row.get("I_F_secondaryAssists")) or 0
+            assists = primary_a + secondary_a
+
+            db_row = {
+                "player_id": player_id,
+                "league_slug": "nhl",
+                "season": season + 1,  # moneypuck uses start year, we use end year for NHL
+                "game_date": game_date,
+                "opponent": row.get("opposingTeam", ""),
+                "started": True,  # moneypuck doesn't track this
+                "minutes": minutes,
+                "stat_goals": goals,
+                "stat_assists": assists,
+                "stat_sog": sog,
+                "stat_hits": _safe_float(row.get("I_F_hits")),
+                "stat_blocks": _safe_float(row.get("I_F_blockedShotAttempts")),
+            }
+            # NHL composite: 3*G + 2*A + 0.5*SOG + 0.5*hits + 0.5*blocks
+            db_row["composite"] = 3.0 * goals + 2.0 * assists + 0.5 * sog
+
+            db_rows.append(db_row)
+            total_matched += 1
+
+            if len(db_rows) >= 500:
+                n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+                total_loaded += n
+                db_rows = []
+                if total_loaded % 10000 < 500:
+                    print(f"  {total_loaded} loaded so far...", flush=True)
+
+    if db_rows:
+        n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+        total_loaded += n
+
+    print(f"\nNHL: {total_loaded} game logs loaded, {total_matched} matched, {len(unmatched)} unmatched", flush=True)
+    if len(unmatched) <= 20:
+        for name in sorted(unmatched):
+            print(f"    unmatched: {name}", flush=True)
+    return total_loaded
 
 
 # ─── EPL loader (FPL CSV) ───────────────────────────────────────────────────
@@ -441,70 +527,48 @@ MLB_YEARS = list(range(2010, 2026))  # 2010-2025
 def load_mlb(league_id):
     name_map = build_player_map(league_id)
 
-    # retrosplits uses person.key (retrosheet IDs like "abadf001")
-    # Our DB uses player_name for matching. Build name→player_id map (already done above).
-
     total_loaded = 0
     total_matched = 0
     unmatched = set()
 
-    for year in MLB_YEARS:
-        url = f"https://raw.githubusercontent.com/chadwickbureau/retrosplits/master/daybyday/playing-{year}.csv"
-        try:
-            rows = fetch_csv(url)
-        except Exception as e:
-            print(f"  Failed to fetch {year}: {e}", flush=True)
-            continue
-
-        print(f"  {year}: {len(rows)} rows", flush=True)
-
-        # retrosplits uses person.key (retrosheet ID), not player name.
-        # We need to map retrosheet IDs to our player names.
-        # Since we only have name→player_id, we need a retrosheet_id→name mapping.
-        # Unfortunately retrosplits doesn't include player names in playing files.
-        # We'll need to use the register or skip this approach.
-        # Alternative: build a retrosheet_id→name map from our DB's sport_ref_id field.
-
-        # Actually, our DB has sport_ref_id which for MLB IS the baseball-reference ID
-        # (e.g., "troutmi01"). Retrosheet uses a different ID format ("troum001").
-        # These don't match directly.
-
-        # Better approach: use the Chadwick register to map person.key → name,
-        # then match name to our DB.
-        # For now, skip if we can't match.
-        # Let's try fetching the register for name mapping.
-        pass
-
-    # The retrosplits data uses retrosheet IDs (person.key) which don't match
-    # our DB's player names directly. We need a mapping file.
-    # Chadwick register: split across people-0.csv through people-f.csv
+    # Load Chadwick register for retrosheet ID → name mapping
+    # Only keep entries with a retrosheet key (saves memory)
     print("  Loading Chadwick register for name mapping...", flush=True)
     retro_to_name = {}
     register_files = [f"people-{c}.csv" for c in "0123456789abcdef"]
     for rf in register_files:
         reg_url = f"https://raw.githubusercontent.com/chadwickbureau/register/master/data/{rf}"
         try:
-            reg_rows = fetch_csv(reg_url)
-            for r in reg_rows:
+            resp = urllib.request.urlopen(reg_url, timeout=30)
+            text = resp.read().decode("utf-8", errors="replace")
+            reader = csv.DictReader(io.StringIO(text))
+            for r in reader:
                 key = r.get("key_retro", "").strip()
+                if not key:
+                    continue
                 first = r.get("name_first", "").strip()
                 last = r.get("name_last", "").strip()
-                if key and first and last:
+                if first and last:
                     retro_to_name[key] = f"{first} {last}".lower()
+            print(f"    {rf}: {len(retro_to_name)} total mappings so far", flush=True)
         except Exception as e:
             print(f"  Failed to fetch {rf}: {e}", flush=True)
             continue
 
     print(f"  Register: {len(retro_to_name)} retrosheet ID → name mappings", flush=True)
 
-    # Now process each year
+    # Process one year at a time to limit memory usage
     for year in MLB_YEARS:
         url = f"https://raw.githubusercontent.com/chadwickbureau/retrosplits/master/daybyday/playing-{year}.csv"
         try:
-            rows = fetch_csv(url)
+            resp = urllib.request.urlopen(url, timeout=60)
+            text = resp.read().decode("utf-8", errors="replace")
+            rows = list(csv.DictReader(io.StringIO(text)))
         except Exception as e:
+            print(f"  {year}: SKIP ({e})", flush=True)
             continue
 
+        print(f"  {year}: {len(rows)} rows, processing...", flush=True)
         db_rows = []
         for row in rows:
             # Only regular season
@@ -581,10 +645,18 @@ def load_mlb(league_id):
             db_rows.append(db_row)
             total_matched += 1
 
+            # Batch upsert every 500 rows to limit memory
+            if len(db_rows) >= 500:
+                n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+                total_loaded += n
+                db_rows = []
+
         if db_rows:
             n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
             total_loaded += n
-            print(f"  {year}: upserted {n} rows", flush=True)
+        # Free memory for this year
+        del rows, db_rows
+        print(f"  {year}: done (total so far: {total_loaded})", flush=True)
 
     print(f"\nMLB: {total_loaded} game logs loaded, {total_matched} matched, {len(unmatched)} unmatched", flush=True)
     if len(unmatched) <= 20:
