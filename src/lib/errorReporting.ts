@@ -81,6 +81,13 @@ export function installFrontendErrorCapture(
   projectPrefix = PROJECT_PREFIX,
 ): () => void {
   const onError = (event: ErrorEvent) => {
+    // React Fast Refresh (HMR) triggers hooks-count errors when modules are patched
+    // in-place during development. These are caught by HooksErrorBoundary and do
+    // not affect production — skip them to avoid false-positive monitoring alerts.
+    if (
+      event.message?.includes("Rendered more hooks") ||
+      event.message?.includes("Rendered fewer hooks")
+    ) return;
     reportSelfHealError(supabase, {
       category: "frontend",
       source: event.filename ?? "window.onerror",

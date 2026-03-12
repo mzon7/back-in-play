@@ -1,3 +1,4 @@
+// @refresh reset
 import { useParams, Link } from "react-router-dom";
 import { useCurrentInjuries, type InjuryRow } from "../../hooks/useInjuries";
 import { SEO } from "../../components/seo/SEO";

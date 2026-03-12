@@ -1,3 +1,4 @@
+// @refresh reset
 import { useParams, Link } from "react-router-dom";
 import { useTeamPage } from "../../hooks/useTeamPage";
 import { SEO, teamJsonLd } from "../../components/seo/SEO";

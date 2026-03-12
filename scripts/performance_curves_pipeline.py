@@ -977,6 +977,257 @@ def fpl_scrape_epl(player_name, season_year):
 
     return rows
 
+# ─── Injury audit: discover returns from game logs ──────────────────────────
+
+def audit_returns(league=None):
+    """Audit ALL injuries to discover unreported returns using game log data.
+    For each injury without a return_date, check if the player played games
+    after the injury date. If so, set return_date and status=returned.
+    Also scrapes game logs for players who don't have them yet.
+    """
+    print("[AUDIT] Loading all injuries...", flush=True)
+
+    # Get all injuries (not just returned ones)
+    params = "select=injury_id,player_id,injury_type,injury_type_slug,date_injured,return_date,status,games_missed,recovery_days"
+    params += "&date_injured=not.is.null"
+    if league:
+        pass  # Filter client-side after joining
+    params += "&order=date_injured.desc"
+    params += "&limit=50000"
+
+    all_injuries = sb_get("back_in_play_injuries", params)
+    if not all_injuries:
+        print("  No injuries found", flush=True)
+        return
+
+    # Get player info
+    player_ids = list(set(i["player_id"] for i in all_injuries))
+    players = {}
+    for i in range(0, len(player_ids), 50):
+        batch = player_ids[i:i + 50]
+        ids_str = ",".join(batch)
+        p_params = f"select=player_id,player_name,league_id,espn_id,sport_ref_id,position&player_id=in.({ids_str})"
+        for p in sb_get("back_in_play_players", p_params) or []:
+            players[p["player_id"]] = p
+
+    # Get league map
+    leagues_data = sb_get("back_in_play_leagues", "select=league_id,slug")
+    league_map = {l["league_id"]: l["slug"] for l in (leagues_data or [])}
+
+    # Filter injuries to target league and identify unresolved ones
+    unresolved = []  # injuries without return_date
+    all_enriched = []  # all injuries with player info
+    player_ids_needing_logs = set()
+
+    for inj in all_injuries:
+        p = players.get(inj["player_id"])
+        if not p:
+            continue
+        ls = league_map.get(p.get("league_id", ""), "")
+        if league and ls != league:
+            continue
+
+        inj["player_name"] = p.get("player_name", "")
+        inj["league_slug"] = ls
+        inj["espn_id"] = p.get("espn_id")
+        inj["sport_ref_id"] = p.get("sport_ref_id")
+        inj["position"] = p.get("position", "")
+        all_enriched.append(inj)
+
+        if not inj.get("return_date") and inj.get("status") != "returned":
+            unresolved.append(inj)
+            player_ids_needing_logs.add(inj["player_id"])
+
+    print(f"  {len(all_enriched)} total injuries, {len(unresolved)} unresolved (no return_date)", flush=True)
+    print(f"  {len(player_ids_needing_logs)} unique players need game log checks", flush=True)
+
+    if not unresolved:
+        print("  All injuries already have return data!", flush=True)
+        return
+
+    # Step 1: Scrape game logs for players with unresolved injuries
+    # Build combos: (player_id, sport_ref_id/espn_id, league, season)
+    combos = set()
+    for inj in unresolved:
+        pid = inj["player_id"]
+        ls = inj["league_slug"]
+        ref_id = inj.get("sport_ref_id") or ""
+        espn_id = inj.get("espn_id") or ""
+        pname = inj.get("player_name", "")
+
+        if not ref_id and not espn_id and ls != "premier-league":
+            continue
+
+        try:
+            d_injured = datetime.strptime(inj["date_injured"], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+
+        season = _season_for_date(d_injured, ls)
+        combos.add((pid, ref_id, espn_id, ls, season, inj.get("position", ""), pname))
+
+    # Check which we already have
+    already_scraped = set()
+    for pid, _, _, _, season, _, _ in combos:
+        existing = sb_get("back_in_play_player_game_logs",
+                          f"select=id&player_id=eq.{pid}&season=eq.{season}&limit=1")
+        if existing:
+            already_scraped.add((pid, season))
+
+    to_scrape = [(pid, ref_id, eid, ls, season, pos, pname)
+                 for pid, ref_id, eid, ls, season, pos, pname in combos
+                 if (pid, season) not in already_scraped]
+
+    print(f"\n[AUDIT] Scraping {len(to_scrape)} player-seasons ({len(already_scraped)} cached)...", flush=True)
+
+    for i, (pid, ref_id, espn_id, ls, season, position, pname) in enumerate(sorted(to_scrape)):
+        game_rows = []
+        is_pitcher = position and position.lower() in ("pitcher", "sp", "rp", "starting pitcher", "relief pitcher", "p")
+
+        # Try *-Reference
+        if ref_id:
+            scraper = SCRAPERS.get(ls)
+            if scraper:
+                if ls == "mlb":
+                    game_rows = scraper(ref_id, season, is_pitcher=is_pitcher)
+                else:
+                    game_rows = scraper(ref_id, season)
+
+        # ESPN fallback
+        if not game_rows and espn_id:
+            espn_scraper = ESPN_SCRAPERS.get(ls)
+            if espn_scraper:
+                if ls == "mlb":
+                    game_rows = espn_scraper(espn_id, season, is_pitcher=is_pitcher)
+                else:
+                    game_rows = espn_scraper(espn_id, season)
+
+        # FPL fallback for EPL
+        if not game_rows and ls == "premier-league" and pname and 2016 <= season <= 2024:
+            game_rows = fpl_scrape_epl(pname, season)
+
+        if not game_rows:
+            continue
+
+        # Store in DB
+        db_rows = []
+        for gr in game_rows:
+            gd = gr.get("game_date", "")
+            try:
+                if len(gd) == 10:
+                    pass
+                elif "," in gd:
+                    gd = datetime.strptime(gd, "%b %d, %Y").strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                continue
+
+            db_row = {
+                "player_id": pid,
+                "league_slug": ls,
+                "season": season,
+                "game_date": gd,
+                "opponent": gr.get("opponent", ""),
+                "started": gr.get("started", False),
+                "minutes": gr.get("minutes"),
+            }
+            for k, v in gr.items():
+                if k.startswith("stat_") and v is not None:
+                    db_row[k] = v
+            db_row["composite"] = compute_composite(db_row, ls)
+            db_rows.append(db_row)
+
+        if db_rows:
+            sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+
+        if (i + 1) % 50 == 0:
+            print(f"  [{i + 1}/{len(to_scrape)}] scraped...", flush=True)
+
+    # Step 2: Audit unresolved injuries against game logs
+    print(f"\n[AUDIT] Checking {len(unresolved)} unresolved injuries against game logs...", flush=True)
+    updated = 0
+    season_ending = 0
+
+    for inj in unresolved:
+        pid = inj["player_id"]
+        ls = inj["league_slug"]
+
+        try:
+            d_injured = datetime.strptime(inj["date_injured"], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+
+        # Get game logs after injury date
+        season = _season_for_date(d_injured, ls)
+        logs = sb_get("back_in_play_player_game_logs",
+                      f"select=game_date&player_id=eq.{pid}&game_date=gt.{d_injured.isoformat()}&season=eq.{season}&order=game_date.asc&limit=1")
+
+        if logs:
+            # Player played after injury → they returned!
+            first_game = logs[0]["game_date"]
+            try:
+                d_return = datetime.strptime(first_game, "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+
+            recovery = (d_return - d_injured).days
+
+            # Count games missed: games the player played before injury minus
+            # the gap tells us team activity. But simpler: count all their games
+            # in the season, and how many fall between injury and return
+            all_season = sb_get("back_in_play_player_game_logs",
+                                f"select=game_date&player_id=eq.{pid}&season=eq.{season}&order=game_date.asc&limit=200")
+            # Games missed ≈ total season games after injury date minus games they played after injury
+            # But since logs only show games played, approximate by looking at game frequency
+            games_before = len([g for g in all_season if g["game_date"] <= inj["date_injured"]])
+            games_after = len([g for g in all_season if g["game_date"] >= first_game])
+            total_games = len(all_season)
+            # Estimate: if they played X games before and Y after, they missed roughly
+            # (total_expected - X - Y) games. Approximate total_expected from total + gap proportion.
+            games_missed = max(0, total_games - games_before - games_after) if total_games > 0 else None
+
+            update = {
+                "return_date": first_game,
+                "status": "returned",
+                "recovery_days": recovery,
+                "games_missed": games_missed,
+            }
+            sb_patch("back_in_play_injuries",
+                     f"injury_id=eq.{inj['injury_id']}",
+                     update)
+            updated += 1
+
+            if updated <= 20 or updated % 100 == 0:
+                missed_str = f", {games_missed} games missed" if games_missed else ""
+                print(f"  [RETURNED] {inj.get('player_name', '?')}: injured {inj['date_injured']} → returned {first_game} ({recovery}d{missed_str})", flush=True)
+        else:
+            # No games after injury this season → check if the season had games at all
+            pre_logs = sb_get("back_in_play_player_game_logs",
+                              f"select=game_date&player_id=eq.{pid}&season=eq.{season}&game_date=lte.{d_injured.isoformat()}&limit=200")
+            if pre_logs:
+                # Player was active before injury but didn't return → season-ending
+                # Count remaining games they missed (games played before = proxy for season activity)
+                games_played_before = len(pre_logs)
+                # Rough estimate of remaining games based on when in season injury occurred
+                all_season = sb_get("back_in_play_player_game_logs",
+                                    f"select=game_date&player_id=eq.{pid}&season=eq.{season}&limit=200")
+                games_missed = len(all_season) - games_played_before  # games after injury they missed
+
+                update = {
+                    "status": "season_ending",
+                    "games_missed": max(0, games_missed) if games_missed else None,
+                }
+                sb_patch("back_in_play_injuries",
+                         f"injury_id=eq.{inj['injury_id']}",
+                         update)
+                season_ending += 1
+
+                if season_ending <= 10 or season_ending % 50 == 0:
+                    print(f"  [SEASON-END] {inj.get('player_name', '?')}: injured {inj['date_injured']}, missed {games_missed} games rest of {season} season", flush=True)
+
+    print(f"\n[AUDIT] Results: {updated} returned, {season_ending} season-ending, {len(unresolved) - updated - season_ending} unknown", flush=True)
+    return updated
+
+
 # ─── Pipeline phases ─────────────────────────────────────────────────────────
 
 def phase_1_get_return_cases(league=None, since_date=None):
@@ -1539,10 +1790,23 @@ def main():
     parser = argparse.ArgumentParser(description="Post-injury performance curves pipeline")
     parser.add_argument("--backfill", action="store_true", help="Full historical backfill")
     parser.add_argument("--incremental", action="store_true", help="Incremental (daily cron)")
+    parser.add_argument("--audit", action="store_true",
+                        help="Audit injuries: discover returns and season-ending from game logs")
     parser.add_argument("--league", type=str, help="Process single league (nba, nfl, nhl, mlb, premier-league)")
     parser.add_argument("--phase", type=str, choices=["resolve-ids", "scrape-logs", "compute", "aggregate"],
                         help="Run single phase")
     args = parser.parse_args()
+
+    if args.audit:
+        print(f"\n{'=' * 60}")
+        print(f"Injury Audit Mode")
+        if args.league:
+            print(f"League: {args.league}")
+        print(f"{'=' * 60}\n")
+        n = audit_returns(league=args.league)
+        if n:
+            print(f"\nRe-run with --backfill to compute curves for newly discovered returns.")
+        return
 
     if not args.backfill and not args.incremental and not args.phase:
         parser.print_help()
