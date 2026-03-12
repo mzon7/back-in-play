@@ -41,3 +41,6 @@
 
 ## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
 - The AI response discusses changes related to React.lazy and Fast Refresh but does not provide a code diff that shows any actual changes made to the source files. The error regarding hooks is not addre
+
+## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
+- The code diff added '// @refresh reset' to multiple component files, which addresses the issue of hook-count mismatch during development by ensuring a full unmount and remount of components.
