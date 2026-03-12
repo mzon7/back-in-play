@@ -67,7 +67,7 @@ if not SB_URL or not SB_KEY:
 
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-REQUEST_DELAY = 3.5  # seconds between *-Reference requests (be respectful)
+REQUEST_DELAY = 4.0  # seconds between *-Reference requests (be respectful)
 
 ALL_LEAGUES = ["nba", "nfl", "nhl", "mlb", "premier-league"]
 
@@ -236,6 +236,27 @@ PLAYER_URL_PATTERNS = {
     "premier-league": re.compile(r"/en/players/([a-f0-9]+)/"),
 }
 
+def _name_match(search_name, link_text):
+    """Check if a link's text plausibly matches the player name we searched for."""
+    s = search_name.lower().strip()
+    t = link_text.lower().strip()
+    if not t:
+        return False
+    # Exact match
+    if s == t:
+        return True
+    # Last name match (handles "John Smith" vs "John Q. Smith")
+    s_parts = s.split()
+    t_parts = t.split()
+    if len(s_parts) >= 2 and len(t_parts) >= 2:
+        if s_parts[-1] == t_parts[-1] and s_parts[0] == t_parts[0]:
+            return True
+        # Handle Jr., III, etc.
+        if s_parts[0] == t_parts[0] and (s_parts[-1] in t or t_parts[-1] in s):
+            return True
+    return False
+
+
 def resolve_sport_ref_id(player_name, league):
     """Search *-Reference site for a player and return their slug/ID."""
     search_url = SEARCH_URLS.get(league)
@@ -247,25 +268,33 @@ def resolve_sport_ref_id(player_name, league):
     if not html:
         return None
 
-    # Check if we were redirected directly to a player page
     pattern = PLAYER_URL_PATTERNS.get(league)
     if not pattern:
         return None
 
-    # Search page results
     soup = BeautifulSoup(html, "lxml")
 
-    # Direct redirect: the page itself is a player page
+    # Direct redirect: the page itself is a player page (canonical link)
     for link in soup.find_all("link", rel="canonical"):
         href = link.get("href", "")
         m = pattern.search(href)
         if m:
             return m.group(1)
 
-    # Search results page: find first player link
+    # Check <title> for direct redirect (e.g., "LeBron James Stats")
+    title = soup.find("title")
+    if title:
+        title_text = title.get_text(strip=True)
+        if player_name.split()[-1].lower() in title_text.lower():
+            for a in soup.find_all("a", href=True):
+                m = pattern.search(a["href"])
+                if m:
+                    return m.group(1)
+
+    # Search results page: find player link whose text matches our search name
     for a in soup.find_all("a", href=True):
         m = pattern.search(a["href"])
-        if m:
+        if m and _name_match(player_name, a.get_text(strip=True)):
             return m.group(1)
 
     return None
