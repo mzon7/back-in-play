@@ -26,3 +26,6 @@
 
 ## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
 - The code diff includes the addition of a new `HooksErrorBoundary` component that catches and handles errors related to hooks being rendered inconsistently, which directly addresses the original error.
+
+## Learned: react-dom_client.js?v=82e7d159 (2026-03-12)
+- The code diff shows a change that introduces a `Fragment` with a dynamic `key` based on the current route, which addresses the issue of rendering more hooks than during the previous render by ensuring
