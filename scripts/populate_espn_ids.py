@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Bulk-populate ESPN IDs for all players in back_in_play_players.
-Uses ESPN's public search API to match players by name + league.
+Populate ESPN IDs for players who have injury return cases.
+Only looks up players the performance curves pipeline actually needs.
 
 Usage:
   python3 populate_espn_ids.py                    # all leagues
@@ -42,7 +42,6 @@ if not SB_URL or not SB_KEY:
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
-# ESPN league slug → ESPN sport/league for search matching
 LEAGUE_TO_ESPN = {
     "nba": ("basketball", "nba"),
     "nfl": ("football", "nfl"),
@@ -90,10 +89,8 @@ def _name_match(search_name, result_name):
     s_parts = s.split()
     r_parts = r.split()
     if len(s_parts) >= 2 and len(r_parts) >= 2:
-        # First + last name match (handles middle names, suffixes)
         if s_parts[0] == r_parts[0] and s_parts[-1] == r_parts[-1]:
             return True
-        # Handle Jr., III, etc. at end
         suffixes = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"}
         s_clean = [p for p in s_parts if p.lower() not in suffixes]
         r_clean = [p for p in r_parts if p.lower() not in suffixes]
@@ -127,16 +124,13 @@ def search_espn_id(player_name, league_slug):
         item_name = item.get("displayName", "")
         item_id = item.get("id")
 
-        # Match sport + league
         if item_sport != espn_sport:
             continue
-        # For EPL, ESPN uses "eng.1" internally but search returns various league values
         if league_slug == "premier-league" and item_sport != "soccer":
             continue
         if league_slug != "premier-league" and item_league != espn_league:
             continue
 
-        # Match name
         if _name_match(player_name, item_name):
             return str(item_id)
 
@@ -146,84 +140,107 @@ def search_espn_id(player_name, league_slug):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Bulk-populate ESPN IDs for players")
+    parser = argparse.ArgumentParser(description="Populate ESPN IDs for players with return cases")
     parser.add_argument("--league", type=str, help="Process single league slug")
     parser.add_argument("--dry-run", action="store_true", help="Preview without updating DB")
-    parser.add_argument("--limit", type=int, default=0, help="Max players to process (0=all)")
     args = parser.parse_args()
 
-    # Get league IDs
+    # Step 1: Get all player_ids from returned injuries
+    print("Finding players with injury return cases...", flush=True)
+    injuries = sb_get("back_in_play_injuries",
+                      "select=player_id&status=eq.returned&return_date=not.is.null&limit=10000")
+    if not injuries:
+        print("No return cases found.")
+        return
+
+    player_ids = list(set(i["player_id"] for i in injuries))
+    print(f"  {len(player_ids)} unique players with return cases", flush=True)
+
+    # Step 2: Get player details, filter to those missing espn_id
+    print("Checking which need ESPN IDs...", flush=True)
+    players_to_lookup = []
+    league_map = {}
+
+    # Get league slugs
     leagues = sb_get("back_in_play_leagues", "select=league_id,slug")
-    league_map = {l["slug"]: l["league_id"] for l in (leagues or [])}
+    lid_to_slug = {l["league_id"]: l["slug"] for l in (leagues or [])}
 
-    if args.league and args.league not in league_map:
-        print(f"Unknown league: {args.league}. Available: {list(league_map.keys())}")
-        sys.exit(1)
-
-    leagues_to_process = [args.league] if args.league else list(LEAGUE_TO_ESPN.keys())
-
-    total_found = 0
-    total_missing = 0
-    total_processed = 0
-
-    for league_slug in leagues_to_process:
-        league_id = league_map.get(league_slug)
-        if not league_id:
-            print(f"Skipping {league_slug} — not in DB")
-            continue
-
-        # Get players without espn_id
-        params = f"select=player_id,player_name,espn_id&league_id=eq.{league_id}&espn_id=is.null"
-        params += "&order=player_name.asc"
-        if args.limit:
-            params += f"&limit={args.limit}"
-        else:
-            params += "&limit=10000"
-
-        players = sb_get("back_in_play_players", params)
-        if not players:
-            print(f"\n{league_slug.upper()}: All players already have espn_id")
-            continue
-
-        # Also count how many already have it
-        existing = sb_get("back_in_play_players",
-                          f"select=player_id&league_id=eq.{league_id}&espn_id=not.is.null&limit=1")
-        # Use header for count
-        print(f"\n{'=' * 50}")
-        print(f"{league_slug.upper()}: {len(players)} players need ESPN ID")
-        print(f"{'=' * 50}")
-
-        found = 0
-        for i, p in enumerate(players):
-            name = p.get("player_name", "")
-            if not name:
+    # Fetch player details in batches
+    for i in range(0, len(player_ids), 50):
+        batch = player_ids[i:i + 50]
+        ids_str = ",".join(batch)
+        params = f"select=player_id,player_name,league_id,espn_id&player_id=in.({ids_str})"
+        for p in sb_get("back_in_play_players", params) or []:
+            slug = lid_to_slug.get(p.get("league_id", ""), "")
+            if not slug:
                 continue
+            if args.league and slug != args.league:
+                continue
+            # Only need lookup if espn_id is missing
+            if not p.get("espn_id"):
+                players_to_lookup.append({
+                    "player_id": p["player_id"],
+                    "player_name": p.get("player_name", ""),
+                    "league_slug": slug,
+                })
 
-            espn_id = search_espn_id(name, league_slug)
-            total_processed += 1
+    # Deduplicate by player_id
+    seen = set()
+    unique = []
+    for p in players_to_lookup:
+        if p["player_id"] not in seen:
+            seen.add(p["player_id"])
+            unique.append(p)
+    players_to_lookup = unique
 
-            if espn_id:
-                found += 1
-                total_found += 1
-                if not args.dry_run:
-                    sb_patch("back_in_play_players",
-                             f"player_id=eq.{p['player_id']}",
-                             {"espn_id": espn_id})
-                action = "→" if not args.dry_run else "(dry)"
-                print(f"  [{i + 1}/{len(players)}] {name} {action} {espn_id}", flush=True)
-            else:
-                total_missing += 1
-                if (i + 1) % 100 == 0:
-                    print(f"  [{i + 1}/{len(players)}] Progress: {found} found so far", flush=True)
+    if not players_to_lookup:
+        print("All players with return cases already have ESPN IDs!")
+        return
 
-            # Small delay to be respectful (ESPN API is fast, but don't hammer it)
-            if (i + 1) % 20 == 0:
-                time.sleep(0.5)
+    # Group by league for display
+    by_league = {}
+    for p in players_to_lookup:
+        by_league.setdefault(p["league_slug"], []).append(p)
 
-        print(f"\n  {league_slug.upper()} done: {found}/{len(players)} IDs found")
+    print(f"\n  {len(players_to_lookup)} players need ESPN ID lookup:")
+    for slug, plist in sorted(by_league.items()):
+        print(f"    {slug.upper()}: {len(plist)}")
+
+    # Step 3: Look up ESPN IDs
+    print(f"\n{'=' * 50}")
+    print(f"Looking up {len(players_to_lookup)} ESPN IDs...")
+    print(f"{'=' * 50}\n")
+
+    found = 0
+    not_found = 0
+
+    for i, p in enumerate(players_to_lookup):
+        name = p["player_name"]
+        slug = p["league_slug"]
+        if not name:
+            continue
+
+        espn_id = search_espn_id(name, slug)
+
+        if espn_id:
+            found += 1
+            if not args.dry_run:
+                sb_patch("back_in_play_players",
+                         f"player_id=eq.{p['player_id']}",
+                         {"espn_id": espn_id})
+            action = "→" if not args.dry_run else "(dry)"
+            print(f"  [{i + 1}/{len(players_to_lookup)}] [{slug}] {name} {action} {espn_id}", flush=True)
+        else:
+            not_found += 1
+            if (i + 1) % 50 == 0 or (i + 1) == len(players_to_lookup):
+                print(f"  [{i + 1}/{len(players_to_lookup)}] Progress: {found} found, {not_found} not found", flush=True)
+
+        # Small delay every 20 requests
+        if (i + 1) % 20 == 0:
+            time.sleep(0.5)
 
     print(f"\n{'=' * 50}")
-    print(f"TOTAL: {total_found} found, {total_missing} not found, {total_processed} processed")
+    print(f"DONE: {found} found, {not_found} not found, {len(players_to_lookup)} processed")
     if args.dry_run:
         print("(Dry run — no DB updates)")
     print(f"{'=' * 50}")
