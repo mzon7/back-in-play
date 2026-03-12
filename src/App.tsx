@@ -6,6 +6,7 @@ import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
 import HomePage from "./features/home-page-injury-snapshots/components/HomePage";
 import { RecoveryStatsPage } from "./features/historical-injury-data-system/components/RecoveryStatsPage";
+import { HooksErrorBoundary } from "./components/HooksErrorBoundary";
 
 const PlayerInjuryPage = lazy(() => import("./pages/player/PlayerInjuryPage"));
 const TeamInjuryPage = lazy(() => import("./pages/team/TeamInjuryPage"));
@@ -21,6 +22,7 @@ function Loading() {
 
 export default function App() {
   return (
+    <HooksErrorBoundary>
     <Suspense fallback={<Loading />}>
       <Routes>
         {/* Public routes */}
@@ -47,5 +49,6 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
+    </HooksErrorBoundary>
   );
 }

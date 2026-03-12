@@ -889,6 +889,94 @@ ESPN_SCRAPERS = {
     "premier-league": espn_scrape_epl,
 }
 
+# ─── FPL (Fantasy Premier League) CSV scraper for EPL ────────────────────────
+# Uses https://github.com/vaastav/Fantasy-Premier-League (2016-17 to 2024-25)
+
+_fpl_cache = {}  # season_str → {player_name_lower: [rows]}
+
+def _fpl_season_str(season_year):
+    """Convert season year (e.g., 2024) to FPL format (e.g., '2024-25')."""
+    return f"{season_year}-{str(season_year + 1)[-2:]}"
+
+def _fpl_load_season(season_year):
+    """Download and parse a season's FPL CSV, cached in memory."""
+    season_str = _fpl_season_str(season_year)
+    if season_str in _fpl_cache:
+        return _fpl_cache[season_str]
+
+    url = (f"https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/"
+           f"master/data/{season_str}/gws/merged_gw.csv")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        resp = urllib.request.urlopen(req, timeout=30)
+        text = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"    FPL CSV error ({season_str}): {e}", flush=True)
+        _fpl_cache[season_str] = {}
+        return {}
+
+    import csv
+    import io
+    reader = csv.DictReader(io.StringIO(text))
+    by_player = {}
+    for row in reader:
+        name = row.get("name", "").strip().lower()
+        if name:
+            by_player.setdefault(name, []).append(row)
+
+    _fpl_cache[season_str] = by_player
+    print(f"    FPL loaded {season_str}: {len(by_player)} players", flush=True)
+    return by_player
+
+
+def fpl_scrape_epl(player_name, season_year):
+    """Get EPL game log for a player from FPL CSV data.
+    Uses player_name (not espn_id) for matching.
+    """
+    by_player = _fpl_load_season(season_year)
+    if not by_player:
+        return []
+
+    # Try exact match first, then fuzzy
+    name_lower = player_name.lower().strip()
+    player_rows = by_player.get(name_lower)
+
+    if not player_rows:
+        # Try partial match (first + last name)
+        parts = name_lower.split()
+        if len(parts) >= 2:
+            for pname, prows in by_player.items():
+                pparts = pname.split()
+                if len(pparts) >= 2 and pparts[0] == parts[0] and pparts[-1] == parts[-1]:
+                    player_rows = prows
+                    break
+
+    if not player_rows:
+        return []
+
+    rows = []
+    for pr in player_rows:
+        kickoff = pr.get("kickoff_time", "")
+        game_date = kickoff[:10] if kickoff else ""
+        if not game_date:
+            continue
+
+        minutes = _parse_float(pr.get("minutes", "0"))
+        if minutes is None or minutes == 0:
+            continue  # Didn't play
+
+        row = {
+            "game_date": game_date,
+            "opponent": str(pr.get("opponent_team", "")),
+            "started": pr.get("starts", "0") == "1" or pr.get("was_home", "") == "True",
+            "minutes": minutes,
+            "stat_goals": _parse_float(pr.get("goals_scored", "0")),
+            "stat_assists": _parse_float(pr.get("assists", "0")),
+        }
+        rows.append(row)
+
+    return rows
+
 # ─── Pipeline phases ─────────────────────────────────────────────────────────
 
 def phase_1_get_return_cases(league=None, since_date=None):
@@ -985,16 +1073,19 @@ def phase_2_resolve_ids(cases, league=None):
 
 def phase_3_scrape_logs(cases, league=None):
     """Scrape game logs for players in return cases.
-    Tries *-Reference first, falls back to ESPN API if that fails (403, no data, no sport_ref_id).
+    Tries *-Reference first, falls back to ESPN API, then FPL CSV for EPL.
     """
+    # Build player_name lookup for FPL matching
+    player_names = {c["player_id"]: c.get("player_name", "") for c in cases}
+
     # Collect unique (player_id, sport_ref_id, espn_id, league, season, position) combos
     combos = set()
     for c in cases:
-        # Need either sport_ref_id or espn_id
-        if not c.get("sport_ref_id") and not c.get("espn_id"):
-            continue
         ls = c["league_slug"]
         if league and ls != league:
+            continue
+        # Need either sport_ref_id, espn_id, or be EPL (FPL uses player_name)
+        if not c.get("sport_ref_id") and not c.get("espn_id") and ls != "premier-league":
             continue
 
         try:
@@ -1005,10 +1096,10 @@ def phase_3_scrape_logs(cases, league=None):
 
         season_inj = _season_for_date(d_injured, ls)
         season_ret = _season_for_date(d_return, ls)
-        combos.add((c["player_id"], c.get("sport_ref_id", ""), c.get("espn_id", ""),
+        combos.add((c["player_id"], c.get("sport_ref_id") or "", c.get("espn_id") or "",
                      ls, season_inj, c.get("position", "")))
         if season_ret != season_inj:
-            combos.add((c["player_id"], c.get("sport_ref_id", ""), c.get("espn_id", ""),
+            combos.add((c["player_id"], c.get("sport_ref_id") or "", c.get("espn_id") or "",
                          ls, season_ret, c.get("position", "")))
 
     # Check which we already have in game_logs
@@ -1052,6 +1143,14 @@ def phase_3_scrape_logs(cases, league=None):
                     game_rows = espn_scraper(espn_id, season)
                 if game_rows:
                     source = "espn"
+
+        # EPL fallback: FPL CSV (uses player_name, works 2016-2024)
+        if not game_rows and ls == "premier-league" and 2016 <= season <= 2024:
+            pname = player_names.get(pid, "")
+            if pname:
+                game_rows = fpl_scrape_epl(pname, season)
+                if game_rows:
+                    source = "fpl"
 
         if not game_rows:
             label = ref_id or espn_id or pid
