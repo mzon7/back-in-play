@@ -570,22 +570,31 @@ async function main() {
   }
   console.log(`Prerender: ${injuryTypeMap.size} injury types, ${pageCount} pages so far`);
 
-  // 5. Player pages + return date pages (ALL players — healthy ones show history/status)
+  // 5. Player pages + return date pages
+  // Generate for: players with injury history, stars, starters (skip unknowns with no history)
   for (const [playerId, player] of playerById) {
     const injuries = injByPlayer.get(playerId) ?? [];
-    // Also check full history for healthy players
     const allPlayerInjuries = allInjByPlayer.get(playerId) ?? injuries;
     const displayInjuries = injuries.length > 0 ? injuries : allPlayerInjuries;
+
+    // Filter out "active" status entries — these aren't real injuries
+    const realInjuries = displayInjuries.filter(i => i.status !== "active");
+
+    // Only generate pages for players with injury history OR notable players
+    const hasInjuryHistory = realInjuries.length > 0;
+    const isNotable = player.is_star || player.is_starter || (player.league_rank && player.league_rank <= 200);
+    if (!hasInjuryHistory && !isNotable) continue;
 
     const label = LEAGUE_LABELS[player.league_slug] ?? "";
     const year = new Date().getFullYear();
 
-    const title = displayInjuries.length > 0 && displayInjuries[0].status !== "returned" && displayInjuries[0].status !== "active"
+    const current = realInjuries[0];
+    const title = current && current.status !== "returned"
       ? `${player.player_name} Injury Update (${year}) - Status & Return Date`
       : `Is ${player.player_name} Injured? (${year}) - Injury Status & History`;
 
-    const description = displayInjuries[0]
-      ? `${player.player_name} injury status: ${displayInjuries[0].status.replace(/_/g, " ")}. ${displayInjuries[0].injury_type}. ${player.team_name} (${label}).`
+    const description = current
+      ? `${player.player_name} injury status: ${current.status.replace(/_/g, " ")}. ${current.injury_type}. ${player.team_name} (${label}).`
       : `${player.player_name} injury status and history. ${player.team_name} (${label}). Currently healthy.`;
 
     // /player/{slug} page
