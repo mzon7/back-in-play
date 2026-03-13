@@ -1,4 +1,5 @@
 // @refresh reset
+import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { SiteHeader } from "../../components/SiteHeader";
 import { usePlayerPage, type PlayerPageData, type PlayerInjury } from "../../hooks/usePlayerPage";
@@ -32,6 +33,105 @@ function teamSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
+/** Group injuries into season buckets. NBA/NHL/NFL span two calendar years. */
+function getSeasonLabel(dateStr: string, leagueSlug: string): string {
+  const d = new Date(dateStr + "T00:00:00");
+  const month = d.getMonth(); // 0-indexed
+  const year = d.getFullYear();
+  if (leagueSlug === "mlb") return `${year} Season`;
+  // For NBA/NHL/NFL/EPL — if month >= August, it's the start of year/year+1 season
+  if (month >= 7) return `${year}–${String(year + 1).slice(2)} Season`;
+  return `${year - 1}–${String(year).slice(2)} Season`;
+}
+
+function groupInjuriesBySeason(injuries: PlayerInjury[], leagueSlug: string) {
+  const groups: { season: string; injuries: PlayerInjury[] }[] = [];
+  const map = new Map<string, PlayerInjury[]>();
+  for (const inj of injuries) {
+    const season = getSeasonLabel(inj.date_injured, leagueSlug);
+    if (!map.has(season)) map.set(season, []);
+    map.get(season)!.push(inj);
+  }
+  for (const [season, injs] of map) {
+    groups.push({ season, injuries: injs });
+  }
+  return groups;
+}
+
+function formatDateShort(d: string): string {
+  return new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function InjuryCard({ inj }: { inj: PlayerInjury }) {
+  const injLabel = inj.injury_type.toUpperCase() + (inj.side ? ` (${inj.side})` : "");
+  const dateRange = inj.return_date
+    ? `${formatDateShort(inj.date_injured)} → ${formatDateShort(inj.return_date)}`
+    : `${formatDateShort(inj.date_injured)} → present`;
+  const year = inj.date_injured.slice(0, 4);
+
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-lg px-4 py-3 flex items-start justify-between gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-sm font-semibold">{injLabel}</span>
+          <StatusBadge status={inj.status} />
+        </div>
+        <p className="text-xs text-white/45">{dateRange}, {year}</p>
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-xs text-white/40">
+          {inj.recovery_days != null && inj.recovery_days > 0 && (
+            <span>{inj.recovery_days}d recovery</span>
+          )}
+          {inj.games_missed != null && inj.games_missed > 0 && (
+            <span className="text-red-400/70">{inj.games_missed} games missed</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SeasonGroup({ season, injuries, defaultOpen }: { season: string; injuries: PlayerInjury[]; defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const totalMissed = injuries.reduce((sum, i) => sum + (i.games_missed ?? 0), 0);
+
+  return (
+    <div className="border border-white/10 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-white/5 hover:bg-white/8 transition-colors text-left"
+      >
+        <div className="flex items-center gap-3">
+          <span className={`text-xs transition-transform ${open ? "rotate-90" : ""}`}>&#9654;</span>
+          <span className="text-sm font-semibold">{season}</span>
+          <span className="text-xs text-white/40">{injuries.length} {injuries.length === 1 ? "injury" : "injuries"}</span>
+        </div>
+        {totalMissed > 0 && (
+          <span className="text-xs text-red-400/70">{totalMissed} games missed</span>
+        )}
+      </button>
+      {open && (
+        <div className="p-3 space-y-2">
+          {injuries.map((inj) => (
+            <InjuryCard key={inj.injury_id} inj={inj} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Rough season windows — returns true if the league is likely in-season right now */
+function isSeasonActive(leagueSlug: string): boolean {
+  const m = new Date().getMonth(); // 0-indexed
+  switch (leagueSlug) {
+    case "nba": case "nhl": return m >= 9 || m <= 5; // Oct–Jun
+    case "nfl": return m >= 8 || m <= 1; // Sep–Feb
+    case "mlb": return m >= 2 && m <= 9; // Mar–Oct
+    case "premier-league": return m >= 7 || m <= 4; // Aug–May
+    default: return true;
+  }
+}
+
 function buildSeoBlurb(player: PlayerPageData, injury: PlayerInjury | undefined, league: string): string {
   const name = player.player_name;
   const team = player.team_name;
@@ -58,6 +158,18 @@ export default function PlayerInjuryPage() {
   const { playerSlug } = useParams<{ playerSlug: string }>();
   const { data: player, isLoading } = usePlayerPage(playerSlug ?? "");
 
+  // All hooks must be called before any early return to avoid React error #310
+  // Current injury = most recent ACTIVE injury (not returned/season_ending/back_in_play)
+  // Falls back to most recent injury overall if all are resolved
+  const activeInjury = player?.injuries.find(i =>
+    i.status !== "returned" && i.status !== "season_ending" && i.status !== "back_in_play" && i.status !== "active"
+  );
+  const currentInjury = activeInjury ?? player?.injuries[0];
+  const { data: impactPlayers } = useInjuryImpact(player ?? null);
+  const injuryTypeSlug = currentInjury?.injury_type?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") ?? "";
+  const { data: perfCurve } = usePerformanceCurve(player?.league_slug ?? "", injuryTypeSlug);
+  const { data: returnCase } = usePlayerReturnCase(currentInjury?.injury_id ?? "");
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-[#0a0f1a] flex items-center justify-center">
@@ -75,17 +187,17 @@ export default function PlayerInjuryPage() {
     );
   }
 
-  const currentInjury = player.injuries[0];
-  const { data: impactPlayers } = useInjuryImpact(player);
-  const injuryTypeSlug = currentInjury?.injury_type?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") ?? "";
-  const { data: perfCurve } = usePerformanceCurve(player.league_slug, injuryTypeSlug);
-  const { data: returnCase } = usePlayerReturnCase(currentInjury?.injury_id ?? "");
   const leagueLabel = LEAGUE_LABELS[player.league_slug] ?? player.league_name;
   const leagueFull = LEAGUE_FULL[player.league_slug] ?? leagueLabel;
   const year = new Date().getFullYear();
   const pageTitle = `${player.player_name} Injury Update (${year}) - Status & Return Date`;
+  const returnDisplay = currentInjury?.return_date
+    ? `Returned: ${formatDate(currentInjury.return_date)}`
+    : currentInjury?.expected_return
+    ? `Expected return: ${formatDate(currentInjury.expected_return)}`
+    : "Return date: TBD";
   const pageDesc = currentInjury
-    ? `${player.player_name} injury status: ${currentInjury.status.toUpperCase()}. ${currentInjury.injury_type}. ${player.team_name} (${leagueLabel}). Expected return: ${currentInjury.expected_return ?? "TBD"}.`
+    ? `${player.player_name} injury status: ${currentInjury.status.toUpperCase().replace(/_/g, " ")}. ${currentInjury.injury_type}. ${player.team_name} (${leagueLabel}). ${returnDisplay}.`
     : `${player.player_name} injury history and status updates. ${player.team_name} (${leagueLabel}).`;
 
   const now = new Date().toISOString();
@@ -99,12 +211,14 @@ export default function PlayerInjuryPage() {
     url: `https://backinplay.app/player/${player.slug}`,
   });
 
-  // Build injury timeline from all injuries (most recent first → reverse for chronological)
-  const timeline: { date: string; label: string }[] = [];
-  for (const inj of [...player.injuries].reverse()) {
-    timeline.push({ date: inj.date_injured, label: `${inj.injury_type}${inj.side ? ` (${inj.side})` : ""}` });
-    if (inj.return_date) timeline.push({ date: inj.return_date, label: "Returned" });
-  }
+  // Group injuries by season for compact display
+  const seasonGroups = groupInjuriesBySeason(player.injuries, player.league_slug);
+  const totalInjuries = player.injuries.length;
+  const totalGamesMissed = player.injuries.reduce((sum, i) => sum + (i.games_missed ?? 0), 0);
+  const recoveries = player.injuries.filter(i => i.recovery_days && i.recovery_days > 0);
+  const avgRecovery = recoveries.length > 0
+    ? Math.round(recoveries.reduce((sum, i) => sum + (i.recovery_days ?? 0), 0) / recoveries.length)
+    : null;
 
   return (
     <div className="min-h-screen bg-[#0a0f1a] text-white">
@@ -167,15 +281,19 @@ export default function PlayerInjuryPage() {
           <div>
             <p className="text-sm font-semibold text-cyan-400">{player.player_name} Return Date</p>
             <p className="text-xs text-white/45 mt-0.5">
-              {currentInjury?.expected_return ? `Expected: ${currentInjury.expected_return}` : "View return timeline"}
+              {currentInjury?.expected_return ? `Expected: ${formatDate(currentInjury.expected_return)}` : "View return timeline"}
             </p>
           </div>
           <span className="text-cyan-400 text-lg group-hover:translate-x-0.5 transition-transform">&rarr;</span>
         </Link>
 
-        {/* Is [Player] Playing Tonight? — always show, huge search query */}
+        {/* Is [Player] Playing Tonight? — season-aware */}
         <div className="bg-white/5 border border-white/10 rounded-xl p-5 mb-6">
-          <h2 className="text-lg font-semibold mb-2">Is {player.player_name} Playing Tonight?</h2>
+          <h2 className="text-lg font-semibold mb-2">
+            {isSeasonActive(player.league_slug)
+              ? `Is ${player.player_name} Playing Tonight?`
+              : `${player.player_name} Availability Status`}
+          </h2>
           {currentInjury && currentInjury.status !== "returned" && currentInjury.status !== "active" ? (
             <div className="space-y-2">
               <div className="flex items-center gap-3">
@@ -190,7 +308,7 @@ export default function PlayerInjuryPage() {
                 {currentInjury.expected_return && (
                   <div className="flex gap-2">
                     <dt className="text-white/40">Expected return:</dt>
-                    <dd className="text-cyan-400">{currentInjury.expected_return}</dd>
+                    <dd className="text-cyan-400">{formatDate(currentInjury.expected_return)}</dd>
                   </div>
                 )}
                 {!currentInjury.expected_return && (
@@ -203,7 +321,9 @@ export default function PlayerInjuryPage() {
             </div>
           ) : (
             <p className="text-green-400 text-sm">
-              {player.player_name} is not currently listed on the injury report and is expected to be available.
+              {isSeasonActive(player.league_slug)
+                ? `${player.player_name} is not currently listed on the injury report and is expected to be available.`
+                : `${player.player_name} is not currently listed on the injury report. The ${leagueLabel} season is currently in the offseason.`}
             </p>
           )}
         </div>
@@ -343,28 +463,27 @@ export default function PlayerInjuryPage() {
           </div>
         )}
 
-        {/* Injury Timeline */}
-        {timeline.length > 1 && (
+        {/* Injury History — grouped by season */}
+        {player.injuries.length > 0 && (
           <div className="mb-8">
-            <h2 className="text-lg font-semibold mb-4">Injury Timeline</h2>
-            <div className="border-l-2 border-white/10 pl-5 space-y-4">
-              {timeline.map((entry, i) => {
-                const isLatest = i === timeline.length - 1;
-                const isReturn = entry.label === "Returned";
-                return (
-                  <div key={i} className="relative">
-                    <div className={`absolute -left-[23px] top-1 h-3 w-3 rounded-full border-2 ${
-                      isLatest ? "border-cyan-400 bg-cyan-400/30" : isReturn ? "border-green-400 bg-green-400/20" : "border-white/20 bg-[#0a0f1a]"
-                    }`} />
-                    <p className="text-xs text-white/40">{formatDate(entry.date)}</p>
-                    <p className={`text-sm font-medium ${
-                      isLatest ? "text-white" : isReturn ? "text-green-400" : "text-white/60"
-                    }`}>
-                      {entry.label}
-                    </p>
-                  </div>
-                );
-              })}
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Injury History</h2>
+              {/* Summary stats */}
+              <div className="flex gap-4 text-xs text-white/40">
+                <span>{totalInjuries} {totalInjuries === 1 ? "injury" : "injuries"}</span>
+                {totalGamesMissed > 0 && <span className="text-red-400/60">{totalGamesMissed} games missed</span>}
+                {avgRecovery && <span>{avgRecovery}d avg recovery</span>}
+              </div>
+            </div>
+            <div className="space-y-3">
+              {seasonGroups.map((group, i) => (
+                <SeasonGroup
+                  key={group.season}
+                  season={group.season}
+                  injuries={group.injuries}
+                  defaultOpen={i === 0}
+                />
+              ))}
             </div>
           </div>
         )}
@@ -385,35 +504,6 @@ export default function PlayerInjuryPage() {
                       <span className="text-white/30 text-xs ml-2">
                         ({sc.old_status} &rarr; {sc.new_status})
                       </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Injury History */}
-        {player.injuries.length > 1 && (
-          <div className="mb-6">
-            <h2 className="text-lg font-semibold mb-3">Injury History</h2>
-            <div className="space-y-3">
-              {player.injuries.map((inj) => (
-                <div key={inj.injury_id} className="bg-white/5 border border-white/10 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-sm">{inj.injury_type}</span>
-                      {inj.side && <span className="text-xs text-white/40">({inj.side})</span>}
-                    </div>
-                    <StatusBadge status={inj.status} />
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-white/50 mt-1">
-                    <span>{formatDate(inj.date_injured)}{inj.return_date ? ` — ${formatDate(inj.return_date)}` : ""}</span>
-                    {inj.recovery_days != null && inj.recovery_days > 0 && (
-                      <span>{inj.recovery_days} days recovery</span>
-                    )}
-                    {inj.games_missed != null && inj.games_missed > 0 && (
-                      <span className="text-red-400/70">{inj.games_missed} games missed</span>
                     )}
                   </div>
                 </div>
