@@ -371,7 +371,14 @@ function SectionBlock({
   const [showAll, setShowAll] = useState(false);
 
   if (injuries.length === 0) return null;
-  const sorted = [...injuries].sort(sortByImportance);
+  const sortedAll = [...injuries].sort(sortByImportance);
+  // Deduplicate by player — keep only the most recent (first after sort) injury per player
+  const seenPids = new Set<string>();
+  const sorted = sortedAll.filter((inj) => {
+    if (seenPids.has(inj.player_id)) return false;
+    seenPids.add(inj.player_id);
+    return true;
+  });
   const visible = showAll ? sorted : sorted.slice(0, INITIAL_SECTION_LIMIT);
   const hasMore = sorted.length > INITIAL_SECTION_LIMIT;
 

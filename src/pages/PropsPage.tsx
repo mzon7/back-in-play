@@ -33,6 +33,31 @@ const MARKET_TO_STAT: Record<string, string> = {
   batter_hits: "stat_h", batter_total_bases: "stat_h", batter_rbis: "stat_rbi",
 };
 
+/** Status → subtle border color for injury cards (same as HomePage) */
+const STATUS_BORDER_COLOR: Record<string, string> = {
+  out:          "rgba(239,68,68,0.25)",
+  ir:           "rgba(239,68,68,0.25)",
+  "il-10":      "rgba(239,68,68,0.25)",
+  "il-15":      "rgba(239,68,68,0.25)",
+  "il-60":      "rgba(239,68,68,0.25)",
+  doubtful:     "rgba(249,115,22,0.25)",
+  questionable: "rgba(234,179,8,0.25)",
+  "day-to-day": "rgba(245,158,11,0.25)",
+  probable:     "rgba(59,130,246,0.25)",
+  active:       "rgba(34,197,94,0.25)",
+  returned:     "rgba(34,197,94,0.25)",
+  active_today: "rgba(249,115,22,0.25)",
+  reduced_load: "rgba(245,158,11,0.25)",
+  back_in_play: "rgba(6,182,212,0.25)",
+  suspended:    "rgba(168,85,247,0.25)",
+};
+
+function injuryCardBorder(status: string | null | undefined): string {
+  if (!status) return "rgba(255,255,255,0.1)";
+  const key = status.toLowerCase().replace(/-/g, "_");
+  return STATUS_BORDER_COLOR[key] ?? STATUS_BORDER_COLOR[status] ?? "rgba(255,255,255,0.1)";
+}
+
 const SOURCE_LABELS: Record<string, string> = {
   draftkings: "DraftKings",
   fanduel: "FanDuel",
@@ -257,7 +282,7 @@ function usePropsWithPlayers() {
   });
 }
 
-function PlayerPropCard({ player, sourceFilter, multiLeague }: { player: PropsPlayer; sourceFilter: string; multiLeague: boolean }) {
+function PlayerPropCard({ player, sourceFilter }: { player: PropsPlayer; sourceFilter: string }) {
   const priority = ["player_points", "player_goals", "batter_hits", "player_pass_yds", "player_rush_yds",
     "player_rebounds", "player_assists", "player_threes", "player_shots_on_goal", "batter_total_bases"];
 
@@ -294,9 +319,14 @@ function PlayerPropCard({ player, sourceFilter, multiLeague }: { player: PropsPl
 
   return (
     <div
-      className="bg-white/[0.03] border border-white/10 rounded-xl p-4"
-      style={multiLeague ? { borderTopWidth: 3, borderTopColor: lColor } : undefined}
+      className="bg-white/[0.03] rounded-xl p-4 relative overflow-hidden"
+      style={{ border: `1px solid ${injuryCardBorder(player.status)}` }}
     >
+      {/* Left status accent */}
+      <div
+        className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
+        style={{ backgroundColor: injuryCardBorder(player.status).replace(/[\d.]+\)$/, '0.6)') }}
+      />
       <div className="flex items-start gap-3 mb-3">
         <PlayerAvatar src={player.headshot_url} name={player.player_name} size={48} />
         <div className="min-w-0 flex-1">
@@ -525,7 +555,7 @@ export default function PropsPage() {
         ) : (
           <div className="space-y-3">
             {filtered.map((p) => (
-              <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} multiLeague={leagueFilter === "all"} />
+              <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} />
             ))}
           </div>
         )}
