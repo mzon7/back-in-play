@@ -8,7 +8,9 @@ import { usePerformanceCurve, usePlayerReturnCase } from "../../features/perform
 import { PerformanceCurveChart } from "../../features/performance-curves/components/PerformanceCurveChart";
 import { SEO } from "../../components/seo/SEO";
 import { playerJsonLd } from "../../components/seo/seoHelpers";
+import { PlayerAvatar } from "../../components/PlayerAvatar";
 import { StatusBadge } from "../../components/StatusBadge";
+import { useSinglePlayerProps, type PropRow } from "../../hooks/useInjuries";
 
 const LEAGUE_LABELS: Record<string, string> = {
   nba: "NBA", nfl: "NFL", mlb: "MLB", nhl: "NHL", "premier-league": "EPL",
@@ -27,6 +29,11 @@ function formatDate(d: string): string {
 
 function formatDateLong(d: Date): string {
   return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+/** Display "unspecified" instead of "other" for injury types */
+function displayInjuryType(type: string): string {
+  return type.toLowerCase() === "other" ? "Unspecified" : type;
 }
 
 function teamSlug(name: string): string {
@@ -63,7 +70,7 @@ function formatDateShort(d: string): string {
 }
 
 function InjuryCard({ inj }: { inj: PlayerInjury }) {
-  const injLabel = inj.injury_type.toUpperCase() + (inj.side ? ` (${inj.side})` : "");
+  const injLabel = displayInjuryType(inj.injury_type).toUpperCase() + (inj.side ? ` (${inj.side})` : "");
   const dateRange = inj.return_date
     ? `${formatDateShort(inj.date_injured)} → ${formatDateShort(inj.return_date)}`
     : `${formatDateShort(inj.date_injured)} → present`;
@@ -132,26 +139,91 @@ function isSeasonActive(leagueSlug: string): boolean {
   }
 }
 
-function buildSeoBlurb(player: PlayerPageData, injury: PlayerInjury | undefined, league: string): string {
+function getMostCommonInjury(injuries: PlayerInjury[]): string | null {
+  if (!injuries.length) return null;
+  const counts = new Map<string, number>();
+  for (const inj of injuries) {
+    const key = inj.injury_type.toLowerCase();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  let best = "";
+  let bestCount = 0;
+  for (const [key, count] of counts) {
+    if (count > bestCount) { best = key; bestCount = count; }
+  }
+  return bestCount > 0 ? best : null;
+}
+
+function buildSeoBlurb(
+  player: PlayerPageData,
+  injury: PlayerInjury | undefined,
+  league: string,
+): string {
   const name = player.player_name;
   const team = player.team_name;
 
   if (!injury) {
-    return `${name} is not currently listed on the ${team} injury report. This page tracks ${name}'s injury status, recovery timeline, and injury history (${league}).`;
+    return `${name} is not currently listed on the ${team} injury report. This page tracks injury history, return timelines, and post-injury performance data.`;
   }
 
   const status = injury.status.replace(/_/g, " ");
-  const injType = injury.injury_type.toLowerCase();
-  const dateStr = formatDate(injury.date_injured);
+  const rawType = injury.injury_type.toLowerCase();
+  const injType = rawType === "other" ? "unspecified" : rawType;
 
   if (injury.status === "returned" || injury.status === "active") {
-    return `${name} is currently listed as ${status} for the ${team} after recovering from a ${injType} injury. This page tracks ${name}'s injury status, recovery timeline, and injury history (${league}).`;
+    return `${name} has returned to action for the ${team} after a ${injType} injury. This page tracks injury status, recovery timeline, and performance after returning.`;
   }
 
-  const returnInfo = injury.expected_return
-    ? `Expected return: ${injury.expected_return}.`
-    : "No official return date announced.";
-  return `${name} is currently listed as ${status} for the ${team} due to a ${injType} injury suffered on ${dateStr}. ${returnInfo} This page tracks ${name}'s injury status, recovery timeline, and injury history (${league}).`;
+  const dateStr = formatDate(injury.date_injured);
+  return `${name} is currently listed as ${status} for the ${team} after suffering a ${injType} on ${dateStr}. This page tracks injury status, expected return timeline, and post-injury performance.`;
+}
+
+const MARKET_LABELS: Record<string, string> = {
+  player_points: "PTS", player_rebounds: "REB", player_assists: "AST",
+  player_threes: "3PT", player_points_rebounds_assists: "PRA",
+  player_pass_yds: "Pass Yds", player_rush_yds: "Rush Yds",
+  player_reception_yds: "Rec Yds", player_receptions: "Rec",
+  player_goals: "Goals", player_shots_on_goal: "SOG",
+  player_shots: "Shots", player_shots_on_target: "SOT",
+  batter_hits: "Hits", batter_total_bases: "TB", batter_rbis: "RBI",
+};
+
+function PlayerPropsCard({ props, playerName }: { props: PropRow[]; playerName: string }) {
+  if (!props.length) return null;
+  const priority = ["player_points", "player_goals", "batter_hits", "player_pass_yds", "player_rush_yds"];
+  const sorted = [...props].sort((a, b) => {
+    const ai = priority.indexOf(a.market);
+    const bi = priority.indexOf(b.market);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+
+  return (
+    <div className="bg-emerald-500/5 border border-emerald-400/15 rounded-xl p-5 mb-6">
+      <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+        <span className="text-emerald-400">Player Props</span>
+        <span className="text-xs text-white/30 font-normal">Today's lines</span>
+      </h2>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {sorted.map((p) => (
+          <div key={p.id} className="bg-white/5 rounded-lg px-3 py-2.5">
+            <p className="text-xs text-emerald-400/70 font-medium mb-1">
+              {MARKET_LABELS[p.market] ?? p.market}
+            </p>
+            <p className="text-lg font-bold text-white">{p.line}</p>
+            <div className="flex gap-3 mt-1 text-xs">
+              {p.over_price && (
+                <span className="text-green-400/80">O {p.over_price}</span>
+              )}
+              {p.under_price && (
+                <span className="text-red-400/80">U {p.under_price}</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] text-white/25 mt-3">Source: {sorted[0]?.source ?? "draftkings"}</p>
+    </div>
+  );
 }
 
 export default function PlayerInjuryPage() {
@@ -169,6 +241,7 @@ export default function PlayerInjuryPage() {
   const injuryTypeSlug = currentInjury?.injury_type?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") ?? "";
   const { data: perfCurve } = usePerformanceCurve(player?.league_slug ?? "", injuryTypeSlug);
   const { data: returnCase } = usePlayerReturnCase(currentInjury?.injury_id ?? "");
+  const { data: playerProps } = useSinglePlayerProps(player?.player_id);
 
   if (isLoading) {
     return (
@@ -190,14 +263,16 @@ export default function PlayerInjuryPage() {
   const leagueLabel = LEAGUE_LABELS[player.league_slug] ?? player.league_name;
   const leagueFull = LEAGUE_FULL[player.league_slug] ?? leagueLabel;
   const year = new Date().getFullYear();
-  const pageTitle = `${player.player_name} Injury Update (${year}) - Status & Return Date`;
+  const pageTitle = `${player.player_name} Injury History & Performance After Injury (${leagueLabel})`;
   const returnDisplay = currentInjury?.return_date
     ? `Returned: ${formatDate(currentInjury.return_date)}`
     : currentInjury?.expected_return
-    ? `Expected return: ${formatDate(currentInjury.expected_return)}`
+    ? new Date(currentInjury.expected_return) < new Date()
+      ? `Expected return: ${formatDate(currentInjury.expected_return)} (overdue)`
+      : `Expected return: ${formatDate(currentInjury.expected_return)}`
     : "Return date: TBD";
   const pageDesc = currentInjury
-    ? `${player.player_name} injury status: ${currentInjury.status.toUpperCase().replace(/_/g, " ")}. ${currentInjury.injury_type}. ${player.team_name} (${leagueLabel}). ${returnDisplay}.`
+    ? `${player.player_name} injury status: ${currentInjury.status.toUpperCase().replace(/_/g, " ")}. ${displayInjuryType(currentInjury.injury_type)}. ${player.team_name} (${leagueLabel}). ${returnDisplay}.`
     : `${player.player_name} injury history and status updates. ${player.team_name} (${leagueLabel}).`;
 
   const now = new Date().toISOString();
@@ -219,6 +294,7 @@ export default function PlayerInjuryPage() {
   const avgRecovery = recoveries.length > 0
     ? Math.round(recoveries.reduce((sum, i) => sum + (i.recovery_days ?? 0), 0) / recoveries.length)
     : null;
+  const mostCommonInjury = getMostCommonInjury(player.injuries);
 
   return (
     <div className="min-h-screen bg-[#0a0f1a] text-white">
@@ -239,18 +315,12 @@ export default function PlayerInjuryPage() {
       <div className="max-w-3xl mx-auto px-4 pb-12">
         {/* Last Updated (freshness signal) */}
         <p className="text-xs text-white/40 mb-3">
-          Last updated: {formatDateLong(new Date())}
+          Updated with games through {formatDateLong(new Date())}
         </p>
 
         {/* Player Header */}
         <div className="flex items-start gap-4 mb-4">
-          {player.headshot_url ? (
-            <img src={player.headshot_url} alt={player.player_name} className="w-20 h-20 rounded-xl object-cover bg-white/5" />
-          ) : (
-            <div className="w-20 h-20 rounded-xl bg-white/5 flex items-center justify-center text-2xl text-white/20">
-              {player.player_name[0]}
-            </div>
-          )}
+          <PlayerAvatar src={player.headshot_url} name={player.player_name} size={80} />
           <div className="flex-1 min-w-0">
             <h1 className="text-2xl font-bold leading-tight">{player.player_name} Injury Status</h1>
             <div className="flex flex-wrap items-center gap-2 mt-1 text-sm text-white/50">
@@ -281,7 +351,11 @@ export default function PlayerInjuryPage() {
           <div>
             <p className="text-sm font-semibold text-cyan-400">{player.player_name} Return Date</p>
             <p className="text-xs text-white/45 mt-0.5">
-              {currentInjury?.expected_return ? `Expected: ${formatDate(currentInjury.expected_return)}` : "View return timeline"}
+              {currentInjury?.expected_return
+                ? new Date(currentInjury.expected_return) < new Date() && !currentInjury.return_date
+                  ? `Expected ${formatDate(currentInjury.expected_return)} (overdue)`
+                  : `Expected: ${formatDate(currentInjury.expected_return)}`
+                : "View return timeline"}
             </p>
           </div>
           <span className="text-cyan-400 text-lg group-hover:translate-x-0.5 transition-transform">&rarr;</span>
@@ -328,6 +402,11 @@ export default function PlayerInjuryPage() {
           )}
         </div>
 
+        {/* Player Props */}
+        {playerProps && playerProps.length > 0 && (
+          <PlayerPropsCard props={playerProps} playerName={player.player_name} />
+        )}
+
         {/* Current Status Card */}
         {currentInjury && (
           <div className="bg-white/5 border border-white/10 rounded-xl p-5 mb-6">
@@ -338,7 +417,7 @@ export default function PlayerInjuryPage() {
             <dl className="grid grid-cols-2 gap-3 text-sm">
               <div>
                 <dt className="text-white/50 text-xs">Injury</dt>
-                <dd className="font-medium">{currentInjury.injury_type}{currentInjury.side ? ` (${currentInjury.side})` : ""}</dd>
+                <dd className="font-medium">{displayInjuryType(currentInjury.injury_type)}{currentInjury.side ? ` (${currentInjury.side})` : ""}</dd>
               </div>
               <div>
                 <dt className="text-white/50 text-xs">Date Injured</dt>
@@ -347,7 +426,12 @@ export default function PlayerInjuryPage() {
               {currentInjury.expected_return && (
                 <div>
                   <dt className="text-white/50 text-xs">Expected Return</dt>
-                  <dd className="text-cyan-400">{currentInjury.expected_return}</dd>
+                  <dd className={new Date(currentInjury.expected_return) < new Date() && !currentInjury.return_date ? "text-amber-400" : "text-cyan-400"}>
+                    {formatDate(currentInjury.expected_return)}
+                    {new Date(currentInjury.expected_return) < new Date() && !currentInjury.return_date && (
+                      <span className="text-[10px] text-amber-400/70 ml-1.5">(overdue)</span>
+                    )}
+                  </dd>
                 </div>
               )}
               {currentInjury.return_date && (
@@ -377,6 +461,52 @@ export default function PlayerInjuryPage() {
             {currentInjury.injury_description && (
               <p className="mt-3 text-sm text-white/50 line-clamp-3">{currentInjury.injury_description}</p>
             )}
+          </div>
+        )}
+
+        {/* Key Findings */}
+        {player.injuries.length > 0 && (
+          <div className="bg-indigo-500/5 border border-indigo-400/15 rounded-xl p-5 mb-6">
+            <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+              <span className="text-indigo-400">Key Findings</span>
+              <span className="text-xs text-white/30 font-normal">Auto-generated from player data</span>
+            </h2>
+            <ul className="space-y-2 text-sm text-white/60">
+              <li className="flex items-start gap-2">
+                <span className="text-indigo-400 mt-0.5 shrink-0">&#8226;</span>
+                <span>{player.player_name} has sustained <strong className="text-white/80">{totalInjuries}</strong> recorded {totalInjuries === 1 ? "injury" : "injuries"}, missing a total of <strong className="text-white/80">{totalGamesMissed}</strong> {totalGamesMissed === 1 ? "game" : "games"}.</span>
+              </li>
+              {mostCommonInjury && (
+                <li className="flex items-start gap-2">
+                  <span className="text-indigo-400 mt-0.5 shrink-0">&#8226;</span>
+                  <span>Most common injury type: <strong className="text-white/80 capitalize">{mostCommonInjury}</strong>.</span>
+                </li>
+              )}
+              {avgRecovery && (
+                <li className="flex items-start gap-2">
+                  <span className="text-indigo-400 mt-0.5 shrink-0">&#8226;</span>
+                  <span>Average recovery time: <strong className="text-white/80">{avgRecovery} days</strong> across {recoveries.length} {recoveries.length === 1 ? "recovery" : "recoveries"}.</span>
+                </li>
+              )}
+              {perfCurve && perfCurve.avg_pct_recent && perfCurve.avg_pct_recent.length >= 10 && (
+                <li className="flex items-start gap-2">
+                  <span className="text-indigo-400 mt-0.5 shrink-0">&#8226;</span>
+                  <span>Expected performance after {perfCurve.injury_type}: Game 1 back at <strong className="text-white/80">{Math.round(perfCurve.avg_pct_recent[0])}%</strong> of baseline, Game 10 at <strong className="text-white/80">{Math.round(perfCurve.avg_pct_recent[9])}%</strong> (based on {perfCurve.sample_size} historical cases).</span>
+                </li>
+              )}
+              {perfCurve && perfCurve.avg_pct_recent && perfCurve.avg_pct_recent.length > 0 && perfCurve.avg_pct_recent.length < 10 && (
+                <li className="flex items-start gap-2">
+                  <span className="text-indigo-400 mt-0.5 shrink-0">&#8226;</span>
+                  <span>Expected Game 1 performance after {perfCurve.injury_type}: <strong className="text-white/80">{Math.round(perfCurve.avg_pct_recent[0])}%</strong> of baseline ({perfCurve.sample_size} historical cases).</span>
+                </li>
+              )}
+              {returnCase && returnCase.rest_of_season_avg != null && (
+                <li className="flex items-start gap-2">
+                  <span className="text-indigo-400 mt-0.5 shrink-0">&#8226;</span>
+                  <span>{player.player_name}'s rest-of-season performance after return: <strong className={returnCase.rest_of_season_avg >= 100 ? "text-green-400" : "text-orange-400"}>{Math.round(returnCase.rest_of_season_avg)}%</strong> of baseline on average — {returnCase.rest_of_season_avg >= 100 ? "above" : "below"} the typical recovery curve.</span>
+                </li>
+              )}
+            </ul>
           </div>
         )}
 
@@ -512,6 +642,32 @@ export default function PlayerInjuryPage() {
           </div>
         )}
 
+        {/* Similar Injuries in League */}
+        {currentInjury && injuryTypeSlug && (
+          <div className="bg-white/5 border border-white/10 rounded-xl p-5 mb-8">
+            <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wide mb-3">
+              Similar Injuries in the {leagueFull}
+            </h3>
+            <p className="text-sm text-white/50 mb-3">
+              See how other {leagueLabel} players have recovered from {currentInjury.injury_type.toLowerCase()} injuries, including average recovery time and post-injury performance data.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                to={`/${player.league_slug}/${injuryTypeSlug}-injury-performance`}
+                className="inline-flex items-center gap-2 bg-cyan-500/10 border border-cyan-400/20 rounded-lg px-4 py-2.5 hover:bg-cyan-500/15 transition-colors text-sm text-cyan-400"
+              >
+                {currentInjury.injury_type} performance in {leagueLabel} &rarr;
+              </Link>
+              <Link
+                to={`/injuries/${injuryTypeSlug}`}
+                className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 hover:bg-white/10 transition-colors text-sm text-white/60"
+              >
+                All {currentInjury.injury_type.toLowerCase()} recovery stats &rarr;
+              </Link>
+            </div>
+          </div>
+        )}
+
         {/* Related Links */}
         <div className="border-t border-white/10 pt-8 mb-8">
           <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wide mb-4">Related Links</h3>
@@ -527,6 +683,32 @@ export default function PlayerInjuryPage() {
             <Link to={`/${player.slug}-return-date`}
               className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-3 hover:bg-white/10 transition-colors text-sm">
               <span className="text-white/60">{player.player_name} return date</span>
+            </Link>
+            <Link to={`/${player.league_slug}-injury-performance`}
+              className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-3 hover:bg-white/10 transition-colors text-sm">
+              <span className="text-white/60">{leagueLabel} injury performance analysis</span>
+            </Link>
+            {currentInjury && (
+              <Link to={`/injuries/${injuryTypeSlug}`}
+                className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-3 hover:bg-white/10 transition-colors text-sm">
+                <span className="text-white/60">{currentInjury.injury_type} recovery statistics</span>
+              </Link>
+            )}
+            <Link to="/performance-curves"
+              className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-3 hover:bg-white/10 transition-colors text-sm">
+              <span className="text-white/60">All performance curves</span>
+            </Link>
+            <Link to="/recovery-stats"
+              className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-3 hover:bg-white/10 transition-colors text-sm">
+              <span className="text-white/60">Recovery statistics</span>
+            </Link>
+            <Link to={`/${player.league_slug}/returning-today`}
+              className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-3 hover:bg-white/10 transition-colors text-sm">
+              <span className="text-white/60">{leagueLabel} players returning today</span>
+            </Link>
+            <Link to={`/${player.league_slug}-injury-report`}
+              className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-lg px-4 py-3 hover:bg-white/10 transition-colors text-sm">
+              <span className="text-white/60">{leagueLabel} injury report today</span>
             </Link>
           </div>
         </div>

@@ -68,89 +68,74 @@ export function usePlayerPage(playerSlug: string) {
     queryKey: ["player-page", playerSlug],
     enabled: !!playerSlug,
     queryFn: async () => {
-      // Find player by slug
+      // 1. Player with team + league join (1 call)
       const { data: players } = await supabase
         .from("back_in_play_players")
-        .select("player_id, player_name, slug, position, team_id, league_id, headshot_url, espn_id, is_star, is_starter, league_rank, preseason_rank")
+        .select(`
+          player_id, player_name, slug, position, team_id, league_id,
+          headshot_url, espn_id, is_star, is_starter, league_rank, preseason_rank,
+          team:back_in_play_teams!inner(
+            team_name,
+            league:back_in_play_leagues(league_name, slug)
+          )
+        `)
         .eq("slug", playerSlug)
         .limit(1);
 
-      if (!players || players.length === 0) return null;
-      const player = players[0];
+      if (!players?.length) return null;
+      const raw = players[0] as any;
+      const player = {
+        player_id: raw.player_id,
+        player_name: raw.player_name,
+        slug: raw.slug,
+        position: raw.position ?? "",
+        team_id: raw.team_id,
+        league_id: raw.league_id,
+        headshot_url: raw.headshot_url,
+        espn_id: raw.espn_id,
+        is_star: raw.is_star ?? false,
+        is_starter: raw.is_starter ?? false,
+        league_rank: raw.league_rank,
+        preseason_rank: raw.preseason_rank,
+        team_name: raw.team?.team_name ?? "Unknown",
+        league_slug: raw.team?.league?.slug ?? "",
+        league_name: raw.team?.league?.league_name ?? "",
+      };
 
-      // Get team
-      const { data: teams } = await supabase
-        .from("back_in_play_teams")
-        .select("team_name, league_id")
-        .eq("team_id", player.team_id)
-        .limit(1);
-      const team = teams?.[0];
+      // 2. Parallel: injuries + status changes + teammates (3 calls in parallel)
+      const [injuriesRes, changesRes, teammatesRes] = await Promise.all([
+        supabase
+          .from("back_in_play_injuries")
+          .select("injury_id, injury_type, injury_description, date_injured, return_date, status, expected_return, games_missed, recovery_days, side, long_comment, short_comment")
+          .eq("player_id", player.player_id)
+          .order("date_injured", { ascending: false })
+          .limit(50),
+        supabase
+          .from("back_in_play_status_changes")
+          .select("id, old_status, new_status, change_type, summary, changed_at")
+          .eq("player_id", player.player_id)
+          .order("changed_at", { ascending: false })
+          .limit(50),
+        supabase
+          .from("back_in_play_players")
+          .select("player_name, slug, position")
+          .eq("team_id", player.team_id)
+          .neq("player_id", player.player_id)
+          .not("slug", "is", null)
+          .order("is_star", { ascending: false })
+          .limit(8),
+      ]);
 
-      // Get league
-      const { data: leagues } = await supabase
-        .from("back_in_play_leagues")
-        .select("league_name, slug")
-        .eq("league_id", player.league_id)
-        .limit(1);
-      const league = leagues?.[0];
-
-      // Get all injuries for this player (most recent first)
-      const { data: injuries } = await supabase
-        .from("back_in_play_injuries")
-        .select("injury_id, injury_type, injury_description, date_injured, return_date, status, expected_return, games_missed, recovery_days, side, long_comment, short_comment")
-        .eq("player_id", player.player_id)
-        .order("date_injured", { ascending: false })
-        .limit(50);
-
-      // Get status changes
-      const { data: changes } = await supabase
-        .from("back_in_play_status_changes")
-        .select("id, old_status, new_status, change_type, summary, changed_at")
-        .eq("player_id", player.player_id)
-        .order("changed_at", { ascending: false })
-        .limit(50);
-
-      // Get injured teammates
-      const { data: teammates } = await supabase
-        .from("back_in_play_players")
-        .select("player_name, slug, position")
-        .eq("team_id", player.team_id)
-        .neq("player_id", player.player_id)
-        .not("slug", "is", null)
-        .order("is_star", { ascending: false })
-        .limit(20);
-
-      // Filter to those with active injuries
-      const tmIds = (teammates ?? []).map((t: any) => t.slug);
-      const injuredTeammates: RelatedPlayer[] = [];
-      if (tmIds.length > 0) {
-        // Just show all teammates — many are injured. Cap at 8.
-        for (const t of (teammates ?? []).slice(0, 8)) {
-          if (t.slug) injuredTeammates.push({ player_name: t.player_name, slug: t.slug, position: t.position ?? "" });
-        }
-      }
-
-      const leagueSlug = league?.slug ?? "";
+      const leagueSlug = player.league_slug;
       return {
-        player_id: player.player_id,
-        player_name: player.player_name,
-        slug: player.slug,
-        position: player.position ?? "",
-        team_id: player.team_id,
-        team_name: team?.team_name ?? "Unknown",
-        team_slug: teamSlug(team?.team_name ?? ""),
-        league_slug: leagueSlug,
-        league_name: league?.league_name ?? "",
-        league_id: player.league_id,
+        ...player,
+        team_slug: teamSlug(player.team_name),
         headshot_url: player.headshot_url ?? espnHeadshot(player.espn_id, leagueSlug),
-        espn_id: player.espn_id,
-        is_star: player.is_star ?? false,
-        is_starter: player.is_starter ?? false,
-        league_rank: player.league_rank,
-        preseason_rank: player.preseason_rank,
-        injuries: injuries ?? [],
-        statusChanges: changes ?? [],
-        injuredTeammates,
+        injuries: injuriesRes.data ?? [],
+        statusChanges: changesRes.data ?? [],
+        injuredTeammates: (teammatesRes.data ?? [])
+          .filter((t: any) => t.slug)
+          .map((t: any) => ({ player_name: t.player_name, slug: t.slug, position: t.position ?? "" })),
       };
     },
     staleTime: 2 * 60 * 1000,

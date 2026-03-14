@@ -1,10 +1,14 @@
 // @refresh reset
-import { useParams, Link } from "react-router-dom";
+import { lazy } from "react";
+import { useParams, Link, Navigate } from "react-router-dom";
 import { SiteHeader } from "../../components/SiteHeader";
 import { useTeamPage } from "../../hooks/useTeamPage";
 import { SEO } from "../../components/seo/SEO";
 import { teamJsonLd } from "../../components/seo/seoHelpers";
 import { StatusBadge } from "../../components/StatusBadge";
+import { PlayerAvatar } from "../../components/PlayerAvatar";
+
+const LeagueInjuryTypePerformancePage = lazy(() => import("../league/LeagueInjuryTypePerformancePage"));
 
 const LEAGUE_LABELS: Record<string, string> = {
   nba: "NBA", nfl: "NFL", mlb: "MLB", nhl: "NHL", "premier-league": "EPL",
@@ -16,6 +20,17 @@ function daysAgo(d: string): number {
 
 export default function TeamInjuryPage() {
   const { leagueSlug, teamSlug } = useParams<{ leagueSlug: string; teamSlug: string }>();
+
+  // Delegate to injury-type performance page if slug matches pattern
+  if (teamSlug?.endsWith("-injury-performance")) {
+    return <LeagueInjuryTypePerformancePage />;
+  }
+
+  // Redirect /{league}-injury-performance/{injuryType} → /{league}/{injuryType}-injury-performance
+  if (leagueSlug?.endsWith("-injury-performance") && teamSlug) {
+    const actualLeague = leagueSlug.replace("-injury-performance", "");
+    return <Navigate to={`/${actualLeague}/${teamSlug}-injury-performance`} replace />;
+  }
 
   // teamSlug comes as "buffalo-bills-injuries" — strip the "-injuries" suffix
   const cleanTeamSlug = (teamSlug ?? "").replace(/-injuries$/, "");
@@ -85,11 +100,7 @@ export default function TeamInjuryPage() {
                   to={`/player/${inj.player_slug}`}
                   className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-lg p-3 hover:bg-white/10 transition-colors"
                 >
-                  {inj.headshot_url ? (
-                    <img src={inj.headshot_url} alt={inj.player_name} className="w-10 h-10 rounded-full object-cover bg-white/5" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-sm text-white/20">{inj.player_name[0]}</div>
-                  )}
+                  <PlayerAvatar src={inj.headshot_url} name={inj.player_name} size={40} className="rounded-full" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-sm truncate">{inj.player_name}</span>
@@ -124,11 +135,7 @@ export default function TeamInjuryPage() {
                   to={`/player/${inj.player_slug}`}
                   className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-lg p-3 hover:bg-white/10 transition-colors"
                 >
-                  {inj.headshot_url ? (
-                    <img src={inj.headshot_url} alt={inj.player_name} className="w-10 h-10 rounded-full object-cover bg-white/5" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-sm text-white/20">{inj.player_name[0]}</div>
-                  )}
+                  <PlayerAvatar src={inj.headshot_url} name={inj.player_name} size={40} className="rounded-full" />
                   <div className="flex-1 min-w-0">
                     <span className="font-medium text-sm">{inj.player_name}</span>
                     <span className="text-white/30 text-xs ml-2">{inj.injury_type}</span>

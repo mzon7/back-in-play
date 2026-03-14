@@ -17,18 +17,27 @@ function buildChartData(
 ): CurvePoint[] {
   const points: CurvePoint[] = [];
   for (let i = 0; i < 10; i++) {
+    const median = curve.median_pct_recent[i];
+    const stderr = curve.stderr_pct_recent[i];
+
     const point: CurvePoint = {
       game: i + 1,
       label: `G${i + 1}`,
       avg: curve.avg_pct_recent[i] != null ? Math.round(curve.avg_pct_recent[i]! * 100) : null,
-      median: curve.median_pct_recent[i] != null ? Math.round(curve.median_pct_recent[i]! * 100) : null,
+      median: median != null ? Math.round(median * 100) : null,
       p25: curve.p25_pct_recent[i] != null ? Math.round(curve.p25_pct_recent[i]! * 100) : null,
       p75: curve.p75_pct_recent[i] != null ? Math.round(curve.p75_pct_recent[i]! * 100) : null,
       minutesPct: curve.avg_minutes_pct[i] != null ? Math.round(curve.avg_minutes_pct[i]! * 100) : null,
+      // Stderr bands (median ± 1 stderr)
+      stddevUpper: median != null && stderr != null ? Math.round((median + stderr) * 100) : null,
+      stddevLower: median != null && stderr != null ? Math.round((median - stderr) * 100) : null,
     };
 
     if (playerCase) {
-      const entry = playerCase.post_game_composites.find((e) => e.game_num === i + 1);
+      const composites = Array.isArray(playerCase.post_game_composites)
+        ? playerCase.post_game_composites
+        : (playerCase.post_game_composites as any)?.games ?? [];
+      const entry = composites.find((e: any) => e.game_num === i + 1);
       if (entry && playerCase.pre_baseline_5g && playerCase.pre_baseline_5g > 0) {
         point.playerPct = Math.round((entry.composite / playerCase.pre_baseline_5g) * 100);
       }
@@ -79,9 +88,11 @@ export function PerformanceCurveChart({
             const labels: Record<string, string> = {
               median: "Median",
               avg: "Average",
-              p25: "25th percentile",
-              p75: "75th percentile",
+              p25: "25th pctl",
+              p75: "75th pctl",
               playerPct: "This player",
+              stddevUpper: "Median + SE",
+              stddevLower: "Median - SE",
             };
             return [`${value}%`, labels[String(name)] ?? String(name)];
           }}
@@ -111,6 +122,22 @@ export function PerformanceCurveChart({
         <Area
           type="monotone"
           dataKey="p25"
+          stroke="none"
+          fill="#0A0E1A"
+          connectNulls
+        />
+
+        {/* Stderr band (tighter than p25/p75) */}
+        <Area
+          type="monotone"
+          dataKey="stddevUpper"
+          stroke="none"
+          fill="rgba(28,124,255,0.08)"
+          connectNulls
+        />
+        <Area
+          type="monotone"
+          dataKey="stddevLower"
           stroke="none"
           fill="#0A0E1A"
           connectNulls

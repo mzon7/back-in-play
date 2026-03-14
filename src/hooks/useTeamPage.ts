@@ -36,16 +36,16 @@ export function useTeamPage(leagueSlug: string, teamSlug: string) {
     queryKey: ["team-page", leagueSlug, teamSlug],
     enabled: !!leagueSlug && !!teamSlug,
     queryFn: async () => {
-      // Get league
+      // 1. Get league
       const { data: leagues } = await supabase
         .from("back_in_play_leagues")
         .select("league_id, league_name, slug")
         .eq("slug", leagueSlug)
         .limit(1);
-      if (!leagues || leagues.length === 0) return null;
+      if (!leagues?.length) return null;
       const league = leagues[0];
 
-      // Get teams in league, match by slug
+      // 2. Get teams in league, match by slug
       const { data: teams } = await supabase
         .from("back_in_play_teams")
         .select("team_id, team_name")
@@ -58,39 +58,28 @@ export function useTeamPage(leagueSlug: string, teamSlug: string) {
       });
       if (!team) return null;
 
-      // Get players on this team
-      const { data: players } = await supabase
-        .from("back_in_play_players")
-        .select("player_id, player_name, slug, position, headshot_url, espn_id, is_star, is_starter")
-        .eq("team_id", team.team_id)
-        .limit(5000);
-
-      const playerMap = new Map<string, (typeof players extends (infer T)[] | null ? T : never)>();
-      (players ?? []).forEach((p) => playerMap.set(p.player_id, p));
-      const playerIds = Array.from(playerMap.keys());
-      if (playerIds.length === 0) return { team_id: team.team_id, team_name: team.team_name, league_slug: leagueSlug, league_name: league.league_name, injuries: [] };
-
-      // Get recent injuries for these players
+      // 3. Single query: injuries with player joins, filtered by team
       const cutoff = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
-      const injuries: any[] = [];
-      for (let i = 0; i < playerIds.length; i += 100) {
-        const chunk = playerIds.slice(i, i + 100);
-        const { data } = await supabase
-          .from("back_in_play_injuries")
-          .select("injury_id, player_id, injury_type, status, date_injured, expected_return, games_missed")
-          .in("player_id", chunk)
-          .gte("date_injured", cutoff)
-          .order("date_injured", { ascending: false });
-        if (data) injuries.push(...data);
-      }
+      const { data: injuries } = await supabase
+        .from("back_in_play_injuries")
+        .select(`
+          injury_id, injury_type, status, date_injured, expected_return, games_missed,
+          player:back_in_play_players!inner(
+            player_name, slug, position, headshot_url, espn_id, is_star, is_starter
+          )
+        `)
+        .eq("player.team_id", team.team_id)
+        .gte("date_injured", cutoff)
+        .order("date_injured", { ascending: false })
+        .limit(200);
 
       return {
         team_id: team.team_id,
         team_name: team.team_name,
         league_slug: leagueSlug,
         league_name: league.league_name,
-        injuries: injuries.map((inj) => {
-          const p = playerMap.get(inj.player_id);
+        injuries: (injuries ?? []).map((inj: any) => {
+          const p = inj.player;
           return {
             injury_id: inj.injury_id,
             player_name: p?.player_name ?? "Unknown",

@@ -4,6 +4,7 @@ import { SiteHeader } from "../../components/SiteHeader";
 import { usePlayerPage, type PlayerPageData, type PlayerInjury } from "../../hooks/usePlayerPage";
 import { SEO } from "../../components/seo/SEO";
 import { StatusBadge } from "../../components/StatusBadge";
+import { PlayerAvatar } from "../../components/PlayerAvatar";
 
 const LEAGUE_LABELS: Record<string, string> = {
   nba: "NBA", nfl: "NFL", mlb: "MLB", nhl: "NHL", "premier-league": "EPL",
@@ -26,6 +27,17 @@ function daysAgo(d: string): number {
 
 function teamSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function isSeasonActive(leagueSlug: string): boolean {
+  const m = new Date().getMonth();
+  switch (leagueSlug) {
+    case "nba": case "nhl": return m >= 9 || m <= 5;
+    case "nfl": return m >= 8 || m <= 1;
+    case "mlb": return m >= 2 && m <= 9;
+    case "premier-league": return m >= 7 || m <= 4;
+    default: return true;
+  }
 }
 
 function lastName(name: string): string {
@@ -142,13 +154,7 @@ export default function PlayerReturnDatePage() {
 
         {/* Header */}
         <div className="flex items-start gap-4 mb-4">
-          {player.headshot_url ? (
-            <img src={player.headshot_url} alt={player.player_name} className="w-20 h-20 rounded-xl object-cover bg-white/5" />
-          ) : (
-            <div className="w-20 h-20 rounded-xl bg-white/5 flex items-center justify-center text-2xl text-white/20">
-              {player.player_name[0]}
-            </div>
-          )}
+          <PlayerAvatar src={player.headshot_url} name={player.player_name} size={80} />
           <div>
             <h1 className="text-2xl font-bold leading-tight">{player.player_name} Return Date</h1>
             <div className="flex items-center gap-2 mt-1 text-sm text-white/50">
@@ -227,9 +233,13 @@ export default function PlayerReturnDatePage() {
           </div>
         )}
 
-        {/* Is [Player] Playing Tonight? */}
+        {/* Is [Player] Playing Tonight? — season-aware */}
         <div className="bg-white/5 border border-white/10 rounded-xl p-5 mb-6">
-          <h2 className="text-lg font-semibold mb-2">Is {player.player_name} Playing Tonight?</h2>
+          <h2 className="text-lg font-semibold mb-2">
+            {isSeasonActive(player.league_slug)
+              ? `Is ${player.player_name} Playing Tonight?`
+              : `${player.player_name} Availability Status`}
+          </h2>
           {currentInjury && currentInjury.status !== "returned" && currentInjury.status !== "active" ? (
             <div className="space-y-2">
               <div className="flex items-center gap-3">
@@ -251,7 +261,9 @@ export default function PlayerReturnDatePage() {
             </div>
           ) : (
             <p className="text-green-400 text-sm">
-              {player.player_name} is not currently listed on the injury report and is expected to be available.
+              {isSeasonActive(player.league_slug)
+                ? `${player.player_name} is not currently listed on the injury report and is expected to be available.`
+                : `${player.player_name} is not currently listed on the injury report. The ${LEAGUE_LABELS[player.league_slug] ?? player.league_slug.toUpperCase()} season is currently in the offseason.`}
             </p>
           )}
         </div>

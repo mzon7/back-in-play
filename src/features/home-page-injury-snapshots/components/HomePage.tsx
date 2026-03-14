@@ -10,8 +10,10 @@ import {
   type StatusChangeRow,
 } from "../../../hooks/useInjuries";
 import { StatusBadge } from "../../../components/StatusBadge";
+import { PlayerAvatar } from "../../../components/PlayerAvatar";
 import { SEO } from "../../../components/seo/SEO";
 import { supabase } from "../../../lib/supabase";
+import { leagueColor } from "../../../lib/leagueColors";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -39,12 +41,52 @@ const LEAGUE_DOT: Record<string, string> = {
   "premier-league": "bg-purple-400",
 };
 
-function classifySection(inj: InjuryRow): Section {
+// Time caps per section: Returned=14d, Reduced Load=10d, Active=7d
+const _daysAgoStr = (d: number) => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
+const FOURTEEN_DAYS_AGO = _daysAgoStr(14);
+const TEN_DAYS_AGO = _daysAgoStr(10);
+const SEVEN_DAYS_AGO = _daysAgoStr(7);
+
+function classifySection(inj: InjuryRow): Section | null {
   const s = (inj.status ?? "").toLowerCase().replace(/-/g, "_");
-  if (s === "back_in_play") return "back";
-  if (s === "reduced_load") return "reduced";
-  if (["active", "probable", "returned", "active_today"].includes(s)) return "active";
+  const relevantDate = inj.return_date ?? inj.date_injured ?? "";
+
+  // Active (fully back) — show for 7 days then gone
+  if (["active", "active_today", "probable"].includes(s)) {
+    if (relevantDate < SEVEN_DAYS_AGO) return null;
+    return "active";
+  }
+  // Reduced load — show for 10 days then hidden
+  if (s === "reduced_load") {
+    if (relevantDate < TEN_DAYS_AGO) return null;
+    return "reduced";
+  }
+  // Returned to play — show for 14 days then hidden
+  if (s === "back_in_play" || s === "returned") {
+    if (relevantDate < FOURTEEN_DAYS_AGO) return null;
+    return "back";
+  }
+  // Injured (out/day-to-day/questionable/etc) — always show
   return "out";
+}
+
+/** Off-season leagues get demoted so in-season injuries rank higher on the "Top Players" tab.
+ *  Each league maps to [startMonth, endMonth] (1-indexed). */
+const LEAGUE_SEASON: Record<string, [number, number]> = {
+  nba: [10, 6],
+  nfl: [9, 2],
+  mlb: [3, 10],
+  nhl: [10, 6],
+  "premier-league": [8, 5],
+};
+
+function isInSeason(leagueSlug: string | null | undefined): boolean {
+  if (!leagueSlug) return true;
+  const range = LEAGUE_SEASON[leagueSlug];
+  if (!range) return true;
+  const month = new Date().getMonth() + 1; // 1-12
+  const [start, end] = range;
+  return start <= end ? month >= start && month <= end : month >= start || month <= end;
 }
 
 /** High-value positions get a boost (NFL QB/RB, NBA PG, etc.) */
@@ -85,7 +127,10 @@ function importanceScore(inj: InjuryRow): number {
   const days = daysAgo(inj.date_injured);
   const recency = days <= 1 ? 1.0 : days <= 7 ? 0.8 : days <= 14 ? 0.6 : days <= 30 ? 0.3 : 0.1;
 
-  return importance * recency;
+  // Demote off-season leagues so in-season injuries surface first
+  const seasonMultiplier = isInSeason(inj.league_slug) ? 1.0 : 0.15;
+
+  return importance * recency * seasonMultiplier;
 }
 
 function sortByImportance(a: InjuryRow, b: InjuryRow): number {
@@ -136,6 +181,31 @@ function StatusTimeline({ playerId }: { playerId: string }) {
   );
 }
 
+/** Status → subtle border color for injury cards */
+const STATUS_BORDER_COLOR: Record<string, string> = {
+  out:          "rgba(239,68,68,0.25)",
+  ir:           "rgba(239,68,68,0.25)",
+  "il-10":      "rgba(239,68,68,0.25)",
+  "il-15":      "rgba(239,68,68,0.25)",
+  "il-60":      "rgba(239,68,68,0.25)",
+  doubtful:     "rgba(249,115,22,0.25)",
+  questionable: "rgba(234,179,8,0.25)",
+  "day-to-day": "rgba(245,158,11,0.25)",
+  probable:     "rgba(59,130,246,0.25)",
+  active:       "rgba(34,197,94,0.25)",
+  returned:     "rgba(34,197,94,0.25)",
+  active_today: "rgba(249,115,22,0.25)",
+  reduced_load: "rgba(245,158,11,0.25)",
+  back_in_play: "rgba(6,182,212,0.25)",
+  suspended:    "rgba(168,85,247,0.25)",
+};
+
+function injuryCardBorder(status: string | null | undefined): string {
+  if (!status) return "rgba(255,255,255,0.1)";
+  const key = status.toLowerCase().replace(/-/g, "_");
+  return STATUS_BORDER_COLOR[key] ?? STATUS_BORDER_COLOR[status] ?? "rgba(255,255,255,0.1)";
+}
+
 function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean }) {
   const rank = inj.preseason_rank ?? inj.league_rank ?? inj.rank_at_injury;
   const [expanded, setExpanded] = useState(false);
@@ -143,24 +213,22 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
   const playerUrl = `/player/${inj.player_slug || (inj.player_name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 transition-colors hover:bg-white/[0.07]">
+    <div
+      className="rounded-xl bg-white/5 transition-colors hover:bg-white/[0.07] overflow-hidden"
+      style={{ border: `1px solid ${injuryCardBorder(inj.status)}` }}
+    >
       <Link
         to={playerUrl}
-        className="block p-4"
+        className="block p-4 relative"
       >
+        {/* Left status accent */}
+        <div
+          className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
+          style={{ backgroundColor: injuryCardBorder(inj.status).replace(/[\d.]+\)$/, '0.6)') }}
+        />
         <div className="flex items-start gap-3">
           {/* Headshot or rank badge */}
-          {inj.headshot_url ? (
-            <img
-              src={inj.headshot_url}
-              alt={inj.player_name}
-              className="h-11 w-11 rounded-full bg-white/10 object-cover shrink-0"
-            />
-          ) : rank ? (
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 shrink-0">
-              <span className="text-xs font-bold text-white/60">#{rank}</span>
-            </div>
-          ) : null}
+          <PlayerAvatar src={inj.headshot_url} name={inj.player_name} size={44} className="rounded-full" />
 
           <div className="min-w-0 flex-1 leading-relaxed">
             <div className="flex items-center justify-between gap-2">
@@ -244,14 +312,19 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
             {/* Injury details */}
             <div className="mt-2 space-y-0.5">
               <div className="flex items-center gap-2 text-sm">
-                <span className="text-white/70 font-medium">{inj.injury_type}</span>
+                <span className="text-white/70 font-medium">{inj.injury_type?.toLowerCase() === "other" ? "Unspecified" : inj.injury_type}</span>
                 {inj.side && <span className="text-white/40">({inj.side})</span>}
               </div>
               {inj.injury_description && (
                 <p className="text-xs text-white/45 line-clamp-2 leading-relaxed">{inj.injury_description}</p>
               )}
               {inj.expected_return && (
-                <p className="text-xs text-cyan-300/70">Est. return: {inj.expected_return}</p>
+                <p className={`text-xs ${new Date(inj.expected_return) < new Date() && !inj.return_date ? "text-amber-400/70" : "text-cyan-300/70"}`}>
+                  Est. return: {inj.expected_return}
+                  {new Date(inj.expected_return) < new Date() && !inj.return_date && (
+                    <span className="ml-1 text-amber-400/60">(overdue)</span>
+                  )}
+                </p>
               )}
               {inj.long_comment && (
                 <p className="text-xs text-white/40 line-clamp-2 italic leading-relaxed">{inj.long_comment}</p>
@@ -419,14 +492,15 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function StatusUpdatesBlock({ showLeague, leagueSlug, teamFilter }: { showLeague?: boolean; leagueSlug?: string; teamFilter?: string | null }) {
-  const { data: rawChanges = [], isLoading } = useStatusChanges(50);
+function StatusUpdatesBlock({ statusChanges, isLoadingChanges, showLeague, leagueSlug, teamFilter }: { statusChanges: StatusChangeRow[]; isLoadingChanges: boolean; showLeague?: boolean; leagueSlug?: string; teamFilter?: string | null }) {
+  const isLoading = isLoadingChanges;
 
-  // Filter by league and team, then deduplicate
+  // Filter by league and team, exclude "active" status transitions, then deduplicate
   const seen = new Set<string>();
-  const changes = rawChanges
+  const changes = statusChanges
     .filter((c) => !leagueSlug || c.league_slug === leagueSlug)
     .filter((c) => !teamFilter || c.team_name === teamFilter)
+    .filter((c) => c.new_status !== "active")
     .filter((c) => {
       if (seen.has(c.player_id)) return false;
       seen.add(c.player_id);
@@ -466,17 +540,7 @@ function StatusUpdatesBlock({ showLeague, leagueSlug, teamFilter }: { showLeague
             to={`/player/${c.player_slug || (c.player_name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
             className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/[0.07] transition-colors"
           >
-            {c.headshot_url ? (
-              <img
-                src={c.headshot_url}
-                alt={c.player_name}
-                className="h-9 w-9 rounded-full bg-white/10 object-cover shrink-0"
-              />
-            ) : (
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 shrink-0">
-                <span className="text-xs text-white/50">{(c.player_name ?? "?")[0]}</span>
-              </div>
-            )}
+            <PlayerAvatar src={c.headshot_url} name={c.player_name ?? "?"} size={36} className="rounded-full" />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="text-[15px] font-semibold text-white truncate">{c.player_name}</span>
@@ -517,10 +581,10 @@ function StatusUpdatesBlock({ showLeague, leagueSlug, teamFilter }: { showLeague
 
 /* -- Headline Stories: square cards for high-impact events -- */
 
-const HEADLINE_TYPE_LABEL: Record<string, { text: string; color: string }> = {
-  injury: { text: "NEW INJURY", color: "text-red-400 bg-red-400/10" },
-  return: { text: "RETURNED", color: "text-green-400 bg-green-400/10" },
-  status_change: { text: "STATUS CHANGE", color: "text-amber-400 bg-amber-400/10" },
+const HEADLINE_TYPE_LABEL: Record<string, { text: string; color: string; cardBorder: string; cardBorderHover: string; cardTint: string; cta: string }> = {
+  injury:        { text: "NEW INJURY",     color: "text-red-400 bg-red-500/15 border border-red-500/25",       cardBorder: "rgba(239,68,68,0.22)",  cardBorderHover: "rgba(239,68,68,0.38)",  cardTint: "rgba(239,68,68,0.04)",  cta: "See injury outlook \u2192" },
+  return:        { text: "RETURNED",       color: "text-green-400 bg-green-500/15 border border-green-500/25", cardBorder: "rgba(34,197,94,0.22)",  cardBorderHover: "rgba(34,197,94,0.38)",  cardTint: "rgba(34,197,94,0.04)",  cta: "See return analysis \u2192" },
+  status_change: { text: "STATUS CHANGE",  color: "text-amber-400 bg-amber-500/15 border border-amber-500/25", cardBorder: "rgba(245,158,11,0.18)", cardBorderHover: "rgba(245,158,11,0.32)", cardTint: "rgba(245,158,11,0.03)", cta: "See details \u2192" },
 };
 
 type HeadlineCard = {
@@ -561,9 +625,6 @@ function recencyFactor(dateStr: string | null | undefined): number {
   return 0.3;
 }
 
-function headlineScore(inj: InjuryRow): number {
-  return starRating(inj) * recencyFactor(inj.date_injured);
-}
 
 function impactFromScore(score: number): HeadlineCard["impact"] {
   if (score >= 7) return "Critical";
@@ -587,13 +648,16 @@ function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[], m
   // Candidates from injuries
   for (const inj of injuries) {
     const status = (inj.status ?? "out").toLowerCase().replace(/-/g, "_");
-    const isReturning = ["active", "active_today", "back_in_play", "returned"].includes(status);
+    // Skip "active" — player is healthy, not newsworthy as an injury
+    if (status === "active") continue;
+    const isReturning = ["active_today", "back_in_play", "returned"].includes(status);
 
     // For returns, use return_date for recency; skip if older than 14 days
     const relevantDate = isReturning ? (inj.return_date ?? inj.date_injured) : inj.date_injured;
     if (isReturning && daysAgo(relevantDate) > 14) continue;
 
-    const score = starRating(inj) * recencyFactor(relevantDate);
+    const seasonMult = isInSeason(inj.league_slug) ? 1.0 : 0.15;
+    const score = starRating(inj) * recencyFactor(relevantDate) * seasonMult;
     if (score < minScore) continue;
 
     const impact = impactFromScore(score);
@@ -610,7 +674,7 @@ function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[], m
         team_name: (inj.team_name && inj.team_name !== "Unknown") ? inj.team_name : "",
         league_slug: inj.league_slug ?? "",
         status: inj.status ?? "out",
-        summary: isReturning ? "Returning to action" : `${inj.injury_type ?? "Injury"} — ${inj.status}`,
+        summary: isReturning ? "Returning to action" : `${(inj.injury_type?.toLowerCase() === "other" ? "Unspecified" : inj.injury_type) ?? "Injury"} — ${inj.status}`,
         impact,
         impactColor: IMPACT_COLORS[impact],
         timeAgo: days === 0 ? "Today" : days === 1 ? "Yesterday" : `${days}d ago`,
@@ -622,14 +686,17 @@ function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[], m
   // Candidates from status changes (scored equally with injuries)
   for (const c of changes) {
     if (c.change_type === "updated") continue;
+    // Skip any change where the player ends up "active" — they're healthy, not news
+    if (c.new_status === "active") continue;
     const isDowngrade = c.summary?.toLowerCase().includes("downgraded");
-    const isActivation = c.change_type === "activated" || c.new_status === "active";
+    const isActivation = c.change_type === "activated";
     if (!isActivation && !isDowngrade && c.change_type !== "new_injury") continue;
 
-    // Score: higher = more newsworthy, scaled by recency
+    // Score: higher = more newsworthy, scaled by recency and season
     const recency = recencyFactor(c.changed_at);
     const eventWeight = c.change_type === "new_injury" ? 9 : isActivation ? 8 : isDowngrade ? 7 : 6;
-    const score = eventWeight * recency;
+    const seasonMult = isInSeason(c.league_slug) ? 1.0 : 0.15;
+    const score = eventWeight * recency * seasonMult;
     if (score < minScore) continue;
 
     const impact = impactFromScore(score);
@@ -669,9 +736,36 @@ function buildHeadlineCards(injuries: InjuryRow[], changes: StatusChangeRow[], m
   return cards;
 }
 
-function HeadlineStories({ injuries, showLeague, leagueSlug, teamFilter }: { injuries: InjuryRow[]; showLeague?: boolean; leagueSlug?: string; teamFilter?: string | null }) {
-  const { data: rawChanges = [] } = useStatusChanges(30);
-  const filteredChanges = rawChanges
+/** Higher-contrast status badge for headline cards only */
+const HEADLINE_BADGE: Record<string, { label: string; classes: string }> = {
+  out:          { label: "OUT",          classes: "bg-red-500/25 text-red-300 border-red-400/40" },
+  ir:           { label: "IR",           classes: "bg-red-500/25 text-red-300 border-red-400/40" },
+  "il-10":      { label: "IL-10",        classes: "bg-red-500/25 text-red-300 border-red-400/40" },
+  "il-15":      { label: "IL-15",        classes: "bg-red-500/25 text-red-300 border-red-400/40" },
+  "il-60":      { label: "IL-60",        classes: "bg-red-500/25 text-red-300 border-red-400/40" },
+  doubtful:     { label: "DOUBTFUL",     classes: "bg-orange-500/25 text-orange-300 border-orange-400/40" },
+  questionable: { label: "QUESTIONABLE", classes: "bg-yellow-500/25 text-yellow-300 border-yellow-400/40" },
+  "day-to-day": { label: "DAY-TO-DAY",  classes: "bg-amber-500/25 text-amber-300 border-amber-400/40" },
+  probable:     { label: "PROBABLE",     classes: "bg-blue-500/25 text-blue-300 border-blue-400/40" },
+  active:       { label: "ACTIVE",       classes: "bg-green-500/25 text-green-300 border-green-400/40" },
+  returned:     { label: "RETURNED",     classes: "bg-green-500/25 text-green-300 border-green-400/40" },
+  active_today: { label: "PLAYING NOW",  classes: "bg-orange-500/25 text-orange-300 border-orange-400/40 animate-pulse" },
+  reduced_load: { label: "REDUCED LOAD", classes: "bg-amber-500/25 text-amber-300 border-amber-400/40" },
+  back_in_play: { label: "BACK IN PLAY", classes: "bg-cyan-500/25 text-cyan-300 border-cyan-400/40" },
+  suspended:    { label: "SUSPENDED",    classes: "bg-purple-500/25 text-purple-300 border-purple-400/40" },
+};
+
+function HeadlineStatusBadge({ status }: { status: string }) {
+  const cfg = HEADLINE_BADGE[status] ?? HEADLINE_BADGE.out;
+  return (
+    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide border ${cfg.classes}`}>
+      {cfg.label}
+    </span>
+  );
+}
+
+function HeadlineStories({ injuries, statusChanges, showLeague, leagueSlug, teamFilter }: { injuries: InjuryRow[]; statusChanges: StatusChangeRow[]; showLeague?: boolean; leagueSlug?: string; teamFilter?: string | null }) {
+  const filteredChanges = statusChanges
     .filter((c) => !leagueSlug || c.league_slug === leagueSlug)
     .filter((c) => !teamFilter || c.team_name === teamFilter);
   const cards = buildHeadlineCards(injuries, filteredChanges, teamFilter ? 5 : 8);
@@ -688,35 +782,35 @@ function HeadlineStories({ injuries, showLeague, leagueSlug, teamFilter }: { inj
         <span className="text-xs text-white/40">({cards.length})</span>
         <span className="ml-auto text-white/25 text-xs animate-pulse">scroll &rarr;</span>
       </div>
-      <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1 snap-x snap-mandatory">
+      <div className="relative">
+        {/* Left/right edge fades */}
+        <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-6 z-10 bg-gradient-to-r from-[#0A0E1A] to-transparent" />
+        <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-6 z-10 bg-gradient-to-l from-[#0A0E1A] to-transparent" />
+      <div className="flex gap-3 overflow-x-auto pb-2 px-1 snap-x snap-mandatory headline-carousel">
         {cards.map((card) => {
           const typeLabel = HEADLINE_TYPE_LABEL[card.type];
           return (
             <Link
               key={card.key}
               to={`/player/${card.player_slug || card.player_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
-              className="shrink-0 w-[170px] sm:w-[190px] rounded-xl border border-white/10 bg-white/5 p-3.5 snap-start hover:bg-white/[0.07] transition-colors block"
+              className="shrink-0 w-[170px] sm:w-[190px] rounded-xl p-3.5 snap-start transition-all duration-[180ms] ease-out block headline-card"
+              style={{
+                border: `1px solid ${typeLabel.cardBorder}`,
+                backgroundColor: typeLabel.cardTint,
+                boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
+                ["--hover-border" as string]: typeLabel.cardBorderHover,
+              }}
             >
               {/* Type label */}
               <div className="mb-2">
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${typeLabel.color}`}>
+                <span className={`text-[10px] font-bold px-2.5 py-1 rounded ${typeLabel.color}`}>
                   {typeLabel.text}
                 </span>
               </div>
 
               {/* Headshot */}
               <div className="flex justify-center mb-2">
-                {card.headshot_url ? (
-                  <img
-                    src={card.headshot_url}
-                    alt={card.player_name}
-                    className="h-16 w-16 rounded-full bg-white/10 object-cover"
-                  />
-                ) : (
-                  <div className="h-16 w-16 rounded-full bg-white/10 flex items-center justify-center">
-                    <span className="text-lg text-white/30">{card.player_name[0]}</span>
-                  </div>
-                )}
+                <PlayerAvatar src={card.headshot_url} name={card.player_name} size={64} className="rounded-full" />
               </div>
 
               {/* Name */}
@@ -747,12 +841,18 @@ function HeadlineStories({ injuries, showLeague, leagueSlug, teamFilter }: { inj
 
               {/* Status + Time */}
               <div className="flex items-center justify-between mt-2.5">
-                <StatusBadge status={card.status} />
+                <HeadlineStatusBadge status={card.status} />
                 <span className="text-[10px] text-white/30">{card.timeAgo}</span>
               </div>
+
+              {/* CTA */}
+              <p className="headline-cta text-[10px] text-white/30 text-right mt-2 transition-colors duration-[180ms]">
+                {typeLabel.cta}
+              </p>
             </Link>
           );
         })}
+      </div>
       </div>
     </div>
   );
@@ -836,11 +936,12 @@ function TeamDropdown({
  * Merges TopPlayersView (was 1 hook) and LeagueInjuries (was 3 hooks) so React
  * never sees a different hook count at this position in the tree. -- */
 function InjuriesView({ activeTab }: { activeTab: string }) {
-  // All four hooks called unconditionally every render — React rules of hooks.
+  // All hooks called unconditionally every render — React rules of hooks.
   const { data: topInjuries = [], isLoading: topLoading } = useTopPlayerInjuries();
   const { data: leagueInjuries = [], isLoading: leagueLoading } = useCurrentInjuries(
     activeTab === "top" ? "" : activeTab,
   );
+  const { data: statusChanges = [], isLoading: changesLoading } = useStatusChanges(50);
   const [teamFilter, setTeamFilter] = useState<string | null>(null);
   useEffect(() => { setTeamFilter(null); }, [activeTab]);
 
@@ -867,14 +968,15 @@ function InjuriesView({ activeTab }: { activeTab: string }) {
 
   const grouped: Record<Section, InjuryRow[]> = { out: [], active: [], reduced: [], back: [] };
   for (const inj of filtered) {
-    grouped[classifySection(inj)].push(inj);
+    const section = classifySection(inj);
+    if (section) grouped[section].push(inj);
   }
 
   if (isTop) {
     return (
       <div className="space-y-6">
-        <HeadlineStories injuries={injuries} showLeague />
-        <StatusUpdatesBlock showLeague />
+        <HeadlineStories injuries={injuries} statusChanges={statusChanges} showLeague />
+        <StatusUpdatesBlock statusChanges={statusChanges} isLoadingChanges={changesLoading} showLeague />
         {SECTIONS.map((sec) => (
           <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} showLeague />
         ))}
@@ -891,8 +993,8 @@ function InjuriesView({ activeTab }: { activeTab: string }) {
     <div className="space-y-10">
       <TeamDropdown teams={teams} counts={injuries} teamFilter={teamFilter} setTeamFilter={setTeamFilter} />
       <JumpNav grouped={grouped} />
-      <HeadlineStories injuries={filtered} leagueSlug={activeTab} teamFilter={teamFilter} />
-      <StatusUpdatesBlock leagueSlug={activeTab} teamFilter={teamFilter} />
+      <HeadlineStories injuries={filtered} statusChanges={statusChanges} leagueSlug={activeTab} teamFilter={teamFilter} />
+      <StatusUpdatesBlock statusChanges={statusChanges} isLoadingChanges={changesLoading} leagueSlug={activeTab} teamFilter={teamFilter} />
       {SECTIONS.map((sec) => (
         <SectionBlock key={sec.key} section={sec} injuries={grouped[sec.key]} defaultCollapsed={sec.key === "reduced" || sec.key === "active"} />
       ))}
@@ -939,10 +1041,13 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
             </span>
           </Link>
 
-          <div className="flex items-center gap-1 sm:gap-4 text-[15px] font-medium">
+          <div className="flex items-center gap-1 sm:gap-4 text-[13px] sm:text-[15px] font-medium overflow-x-auto">
             <Link to="/" className="px-2 py-1 text-[#1C7CFF] shrink-0">Home</Link>
-            <Link to="/recovery-stats" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Recovery Stats</Link>
-            <Link to="/performance-curves" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Performance Curves</Link>
+            {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (
+              <Link to="/recovery-stats" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Stats</Link>
+            )}
+            <Link to="/props" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Props</Link>
+            <Link to="/performance-curves" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Curves</Link>
           </div>
         </div>
 
@@ -960,11 +1065,15 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
                 }`}
               >
                 {key === "top" && "\uD83D\uDC51 "}
+                {key !== "top" && (
+                  <span className="inline-block h-2 w-2 rounded-full mr-1.5" style={{ backgroundColor: leagueColor(key) }} />
+                )}
                 {label}
                 {activeTab === key && (
-                  <span className={`absolute bottom-0 left-2 right-2 h-[3px] rounded-full ${
-                    key === "top" ? "bg-amber-400" : "bg-[#1C7CFF]"
-                  }`} />
+                  <span
+                    className="absolute bottom-0 left-2 right-2 h-[3px] rounded-full"
+                    style={{ backgroundColor: key === "top" ? "#fbbf24" : leagueColor(key) }}
+                  />
                 )}
               </button>
             ))}
@@ -977,9 +1086,27 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
         <InjuriesView activeTab={activeTab} />
       </main>
 
+      {/* SEO intro — homepage only */}
+      {activeTab === "top" && (
+        <section className="max-w-5xl mx-auto px-4 pb-8">
+          <div className="border-t border-white/5 pt-8">
+            <h2 className="text-base font-semibold text-white/60 mb-2">Sports Injury Tracker and Recovery Analysis</h2>
+            <p className="text-sm text-white/40 leading-relaxed mb-2">
+              Back In Play tracks injuries across the NBA, NFL, MLB, NHL, and EPL, including real-time injury updates, expected return dates, recovery timelines, and performance after returning from injury.
+            </p>
+            <p className="text-sm text-white/40 leading-relaxed">
+              Our database analyzes how injuries impact minutes played, player stats, and performance trends in the games following a return to play.
+            </p>
+          </div>
+        </section>
+      )}
+
       {/* Footer */}
       <footer className="border-t border-white/5 py-8 text-center text-sm text-white/25">
-        Back In Play · Sports Injury Intelligence Platform
+        <p>Back In Play · Sports Injury Intelligence Platform</p>
+        <p className="mt-1 text-white/15 text-xs">
+          Analyzing 140,000+ injuries across 5 leagues with 3.4M+ game log entries
+        </p>
       </footer>
     </div>
   );

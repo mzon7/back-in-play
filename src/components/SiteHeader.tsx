@@ -30,8 +30,14 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
 
         <div className="flex items-center gap-1 sm:gap-3 text-sm font-medium">
           <Link to="/" className="px-2 py-1 text-[#1C7CFF] shrink-0">Home</Link>
-          <Link to="/recovery-stats" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Recovery Stats</Link>
+          {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (
+            <Link to="/recovery-stats" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Recovery Stats</Link>
+          )}
+          <Link to="/props" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Props</Link>
           <Link to="/performance-curves" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Performance Curves</Link>
+          {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (
+            <Link to="/returning-today" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Returning Today</Link>
+          )}
         </div>
       </div>
 

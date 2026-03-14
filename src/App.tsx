@@ -14,6 +14,11 @@ const PlayerReturnPage = lazy(() => import("./pages/player/PlayerReturnAliasPage
 const TeamInjuryPage = lazy(() => import("./pages/team/TeamInjuryPage"));
 const SlugRouter = lazy(() => import("./pages/SlugRouter"));
 const PerformanceCurvesPage = lazy(() => import("./features/performance-curves/components/PerformanceCurvesPage"));
+const PropsPage = lazy(() => import("./pages/PropsPage"));
+const ReturningTodayPage = lazy(() => import("./pages/ReturningTodayPage"));
+const ReturningThisWeekPage = lazy(() => import("./pages/ReturningThisWeekPage"));
+const MinutesRestrictionPage = lazy(() => import("./pages/MinutesRestrictionPage"));
+const LeagueInjuryTypePerformancePage = lazy(() => import("./pages/league/LeagueInjuryTypePerformancePage"));
 
 function Loading() {
   return (
@@ -37,10 +42,23 @@ function routeKey(pathname: string): string {
   if (segments[0] === "recovery-stats") return "recovery-stats";
   if (segments[0] === "injuries") return `injuries-${segments[1] ?? ""}`;
   if (segments[0] === "performance-curves") return "performance-curves";
+  if (segments[0] === "props") return "props";
+  if (segments[0] === "returning-today") return "returning-today";
+  if (segments[0] === "players-returning-from-injury-this-week") return "returning-week";
+  if (segments[0] === "minutes-restriction-after-injury") return "minutes-restriction";
+  if (segments.length === 2 && segments[1] === "returning-today") return `returning-today-${segments[0]}`;
+  if (segments.length === 2 && segments[1] === "players-returning-from-injury-this-week") return `returning-week-${segments[0]}`;
+  if (segments.length === 2 && segments[1] === "minutes-restriction-after-injury") return `minutes-restriction-${segments[0]}`;
+  if (segments.length >= 2 && segments[1].endsWith("-injury-performance")) return `injury-perf-${segments[0]}-${segments[1]}`;
   if (segments.length === 2) return `team-${segments[0]}-${segments[1]}`;
-  // top-level slug (league hub or player return date)
+  // top-level slug (league hub, injury performance, or player return date)
+  if (segments[0].endsWith("-injury-performance")) return `perf-${segments[0]}`;
+  if (segments[0].endsWith("-injury-analysis")) return `analysis-${segments[0]}`;
+  if (segments[0].includes("-injury-report")) return `report-${segments[0]}`;
   return `slug-${segments[0]}`;
 }
+
+const IS_LOCAL = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
 function AppRoutes() {
   const location = useLocation();
@@ -54,8 +72,12 @@ function AppRoutes() {
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/auth/callback" element={<AuthCallback supabase={supabase} redirectTo="/" />} />
 
-          <Route path="/recovery-stats" element={<RecoveryStatsPage />} />
+          {IS_LOCAL && <Route path="/recovery-stats" element={<RecoveryStatsPage />} />}
           <Route path="/performance-curves" element={<PerformanceCurvesPage />} />
+          <Route path="/props" element={<PropsPage />} />
+          {IS_LOCAL && <Route path="/returning-today" element={<ReturningTodayPage />} />}
+          {IS_LOCAL && <Route path="/players-returning-from-injury-this-week" element={<ReturningThisWeekPage />} />}
+          <Route path="/minutes-restriction-after-injury" element={<MinutesRestrictionPage />} />
 
           {/* League-specific view (pre-selects the league tab on home) */}
           <Route path="/league/:leagueSlug" element={<HomePage />} />
@@ -66,9 +88,17 @@ function AppRoutes() {
           <Route path="/player/:playerSlug/return" element={<PlayerReturnPage />} />
 
           {/* SEO: Injury type pages */}
-          <Route path="/injuries/:injurySlug" element={<RecoveryStatsPage />} />
+          {IS_LOCAL && <Route path="/injuries/:injurySlug" element={<RecoveryStatsPage />} />}
 
-          {/* SEO: Team injury pages (must be before /:slug to match 2-segment paths) */}
+          {/* SEO: League-specific returning today/this week */}
+          {IS_LOCAL && <Route path="/:leagueSlug/returning-today" element={<ReturningTodayPage />} />}
+          {IS_LOCAL && <Route path="/:leagueSlug/players-returning-from-injury-this-week" element={<ReturningThisWeekPage />} />}
+          <Route path="/:leagueSlug/minutes-restriction-after-injury" element={<MinutesRestrictionPage />} />
+
+          {/* SEO: League + injury type performance with position (e.g., /nba/hamstring-injury-performance/guards) */}
+          <Route path="/:leagueSlug/:injuryPerf/:position" element={<LeagueInjuryTypePerformancePage />} />
+
+          {/* SEO: Team injury pages + league/injury-type performance (2-segment paths) */}
           <Route path="/:leagueSlug/:teamSlug" element={<TeamInjuryPage />} />
 
           {/* SEO: Top-level slug — dispatches to league hub or player return date */}

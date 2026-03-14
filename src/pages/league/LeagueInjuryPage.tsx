@@ -5,6 +5,7 @@ import { useParams, Link } from "react-router-dom";
 import { useCurrentInjuries, type InjuryRow } from "../../hooks/useInjuries";
 import { SEO } from "../../components/seo/SEO";
 import { StatusBadge } from "../../components/StatusBadge";
+import { PlayerAvatar } from "../../components/PlayerAvatar";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../../lib/supabase";
 
@@ -64,11 +65,26 @@ export default function LeagueInjuryPage() {
   const leagueFull = LEAGUE_FULL[leagueSlug] ?? leagueLabel;
   const year = new Date().getFullYear();
 
-  const allActive = (injuries ?? []).filter((i) => i.status !== "returned" && i.status !== "active");
-  const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+  const _dago = (d: number) => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
+  const fourteenDaysAgo = _dago(14);
+  const tenDaysAgo = _dago(10);
+  const sevenDaysAgo = _dago(7);
+  const GENUINELY_OUT = ["out", "day-to-day", "day_to_day", "questionable", "doubtful", "ir", "season_ending"];
+  const allActive = (injuries ?? []).filter((i) => {
+    const s = (i.status ?? "").toLowerCase().replace(/-/g, "_");
+    const d = i.return_date ?? i.date_injured ?? "";
+    if (GENUINELY_OUT.includes(s)) return true;
+    // Returned to play: 14 days
+    if (s === "returned" || s === "back_in_play") return d >= fourteenDaysAgo;
+    // Reduced load: 10 days
+    if (s === "reduced_load") return d >= tenDaysAgo;
+    // Active (fully back): 7 days then gone
+    if (["active", "active_today", "probable"].includes(s)) return d >= sevenDaysAgo;
+    return false;
+  });
   const allReturning = (injuries ?? []).filter((i) =>
     (i.status === "returned" || i.status === "back_in_play") &&
-    (i.return_date ?? i.updated_at ?? "") >= fourteenDaysAgo
+    (i.return_date ?? i.date_injured ?? "") >= fourteenDaysAgo
   );
 
   const activeInjuries = teamFilter ? allActive.filter((i) => i.team_name === teamFilter) : allActive;
@@ -82,6 +98,33 @@ export default function LeagueInjuryPage() {
   allActive.forEach((i) => {
     if (i.team_name) teamCounts.set(i.team_name, (teamCounts.get(i.team_name) ?? 0) + 1);
   });
+
+  // --- Computed SEO data ---
+  const totalTeams = teams?.length ?? 0;
+  const totalTracked = allActive.length;
+  const updateDate = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+
+  // Most common injury type
+  const injuryTypeCounts = new Map<string, number>();
+  allActive.forEach((i) => {
+    const t = i.injury_type ?? "Unknown";
+    injuryTypeCounts.set(t, (injuryTypeCounts.get(t) ?? 0) + 1);
+  });
+  const mostCommonInjury = [...injuryTypeCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+  const mostCommonInjuryType = mostCommonInjury?.[0] ?? "N/A";
+  const mostCommonInjuryCount = mostCommonInjury?.[1] ?? 0;
+
+  // Team with most injuries
+  const topTeamEntry = [...teamCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+  const topTeamName = topTeamEntry?.[0] ?? "N/A";
+  const topTeamCount = topTeamEntry?.[1] ?? 0;
+
+  // Average recovery days (from players that have recovery_days)
+  const recoveryValues = allActive.filter((i) => i.recovery_days && i.recovery_days > 0).map((i) => i.recovery_days!);
+  const avgRecovery = recoveryValues.length > 0 ? Math.round(recoveryValues.reduce((a, b) => a + b, 0) / recoveryValues.length) : null;
+
+  // Other league slugs for internal links
+  const otherLeagues = Object.entries(LEAGUE_LABELS).filter(([k]) => k !== leagueSlug);
 
   const pageTitle = `${leagueLabel} Injuries (${year}) - Injury Report & Updates`;
   const pageDesc = `${leagueFull} injury report — ${allActive.length} players currently injured. Latest ${leagueLabel} injury updates, return dates, and status changes.`;
@@ -151,6 +194,76 @@ export default function LeagueInjuryPage() {
             })}
           </div>
         )}
+
+        {/* Latest Data Update */}
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 mb-6">
+          <h2 className="text-sm font-semibold text-white/70 uppercase tracking-wide mb-2">Latest Data Update</h2>
+          <p className="text-xs text-white/50">Updated with games through <span className="text-white/80 font-medium">{updateDate}</span></p>
+          <div className="flex gap-6 mt-2 text-xs text-white/50">
+            <span>{totalTracked} injuries tracked</span>
+            <span>{totalTeams} teams</span>
+          </div>
+        </div>
+
+        {/* Key Findings */}
+        {totalTracked > 0 && (
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 mb-6">
+            <h2 className="text-sm font-semibold text-white/70 uppercase tracking-wide mb-3">Key Findings</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div className="bg-white/5 rounded-lg p-3">
+                <div className="text-white/40 text-xs mb-0.5">Most Common Injury</div>
+                <div className="font-medium">{mostCommonInjuryType} <span className="text-white/40 text-xs">({mostCommonInjuryCount} players)</span></div>
+              </div>
+              <div className="bg-white/5 rounded-lg p-3">
+                <div className="text-white/40 text-xs mb-0.5">Most Affected Team</div>
+                <div className="font-medium">{topTeamName} <span className="text-white/40 text-xs">({topTeamCount} injuries)</span></div>
+              </div>
+              {avgRecovery && (
+                <div className="bg-white/5 rounded-lg p-3">
+                  <div className="text-white/40 text-xs mb-0.5">Avg Recovery Time</div>
+                  <div className="font-medium">{avgRecovery} days</div>
+                </div>
+              )}
+              <div className="bg-white/5 rounded-lg p-3">
+                <div className="text-white/40 text-xs mb-0.5">Players Returning</div>
+                <div className="font-medium">{returning.length} <span className="text-white/40 text-xs">back in play</span></div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Contextual SEO text */}
+        <div className="text-sm text-white/50 leading-relaxed mb-6 space-y-3">
+          <p>
+            The {leagueFull} ({leagueLabel}) injury landscape in {year} is tracked in real time on Back In Play.
+            We are currently monitoring <strong className="text-white/70">{totalTracked} active injuries</strong> across{" "}
+            <strong className="text-white/70">{totalTeams} {leagueLabel} teams</strong>, with data updated daily as new
+            injury reports, return-to-play designations, and roster moves are published. Every entry includes the
+            injury type, date injured, estimated return timeline, and current status so that fantasy managers,
+            bettors, and fans can make informed decisions.
+          </p>
+          <p>
+            {mostCommonInjuryType !== "N/A" && (
+              <>{mostCommonInjuryType} injuries are the most prevalent in the {leagueLabel} right now, accounting for{" "}
+              {mostCommonInjuryCount} of the {totalTracked} tracked cases. </>
+            )}
+            {topTeamName !== "N/A" && (
+              <>The {topTeamName} currently lead the league with {topTeamCount} players on the injury report. </>
+            )}
+            {avgRecovery && (
+              <>On average, {leagueLabel} players are missing approximately {avgRecovery} days per injury this season. </>
+            )}
+            Understanding these trends helps evaluate lineup decisions, over/under totals, and waiver-wire targets
+            throughout the {leagueLabel} season.
+          </p>
+          <p>
+            Beyond raw counts, Back In Play analyzes how injuries affect on-court and on-field performance.
+            Players returning from injury often face minutes restrictions or reduced usage rates in their first
+            games back. Our performance curves and recovery statistics pages break down post-injury production
+            across positions, injury types, and recovery windows — giving you an edge whether you are setting
+            a fantasy lineup or evaluating prop bets.
+          </p>
+        </div>
 
         {/* Jump navigation */}
         <nav className="flex flex-wrap gap-1.5 py-3 border-b border-white/8 mb-6">
@@ -225,22 +338,47 @@ export default function LeagueInjuryPage() {
         )}
 
         {/* Internal Links */}
-        <div className="border-t border-white/10 pt-6 space-y-2 text-sm">
-          <h3 className="text-white/40 text-xs uppercase tracking-wide mb-2">Other Leagues</h3>
-          {Object.entries(LEAGUE_LABELS)
-            .filter(([k]) => k !== leagueSlug)
-            .map(([slug, label]) => (
-              <Link key={slug} to={`/${slug}-injuries`} className="block text-cyan-400 hover:underline">
+        <div className="border-t border-white/10 pt-6 text-sm">
+          <h3 className="text-white/40 text-xs uppercase tracking-wide mb-3">{leagueLabel} Resources</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mb-4">
+            <Link to={`/${leagueSlug}-injury-performance`} className="text-cyan-400 hover:underline">
+              {leagueLabel} Injury Performance Impact
+            </Link>
+            <Link to={`/${leagueSlug}-injury-analysis`} className="text-cyan-400 hover:underline">
+              {leagueLabel} Injury Analysis
+            </Link>
+            <Link to={`/${leagueSlug}/returning-today`} className="text-cyan-400 hover:underline">
+              {leagueLabel} Players Returning Today
+            </Link>
+            <Link to={`/${leagueSlug}/minutes-restriction-after-injury`} className="text-cyan-400 hover:underline">
+              {leagueLabel} Minutes Restrictions
+            </Link>
+            <Link to="/performance-curves" className="text-cyan-400 hover:underline">
+              Performance Curves After Injury
+            </Link>
+            <Link to="/recovery-stats" className="text-cyan-400 hover:underline">
+              Recovery Statistics
+            </Link>
+            <Link to="/players-returning-from-injury-this-week" className="text-cyan-400 hover:underline">
+              Players Returning This Week
+            </Link>
+            <Link to="/" className="text-cyan-400 hover:underline">
+              All Injury Updates
+            </Link>
+          </div>
+
+          <h3 className="text-white/40 text-xs uppercase tracking-wide mb-3 mt-4">Other Leagues</h3>
+          <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+            {otherLeagues.map(([slug, label]) => (
+              <Link key={slug} to={`/${slug}-injuries`} className="text-cyan-400 hover:underline">
                 {label} Injury Report
               </Link>
             ))}
-          <Link to="/" className="block text-cyan-400 hover:underline mt-2">
-            All injury updates
-          </Link>
+          </div>
         </div>
 
         <p className="mt-6 text-xs text-white/35">
-          Last updated: {new Date().toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
+          Updated: {updateDate}
         </p>
       </div>
     </div>
@@ -317,13 +455,7 @@ function InjuryRowItem({ inj }: { inj: InjuryRow }) {
       to={`/player/${slug}`}
       className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-lg p-3 hover:bg-white/10 transition-colors"
     >
-      {inj.headshot_url ? (
-        <img src={inj.headshot_url} alt={inj.player_name ?? ""} className="w-10 h-10 rounded-full object-cover bg-white/5" />
-      ) : (
-        <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-sm text-white/20">
-          {(inj.player_name ?? "?")[0]}
-        </div>
-      )}
+      <PlayerAvatar src={inj.headshot_url} name={inj.player_name ?? "?"} size={40} className="rounded-full" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="font-medium text-sm truncate">{inj.player_name}</span>

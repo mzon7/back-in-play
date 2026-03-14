@@ -3,6 +3,7 @@ export interface PerformanceCurve {
   league_slug: string;
   injury_type_slug: string;
   injury_type: string;
+  position: string;
   sample_size: number;
   games_missed_avg: number | null;
   recovery_days_avg: number | null;
@@ -19,6 +20,11 @@ export interface PerformanceCurve {
   rest_of_season_sample: number | null;
   games_to_full: number | null;
   computed_at: string;
+  // Per-stat breakdowns
+  stat_avg_pct: Record<string, (number | null)[]> | null;
+  stat_median_pct: Record<string, (number | null)[]> | null;
+  stat_stddev_pct: Record<string, (number | null)[]> | null;
+  stat_stderr_pct: Record<string, (number | null)[]> | null;
 }
 
 export interface ReturnCase {
@@ -58,6 +64,9 @@ export interface CurvePoint {
   p75: number | null;
   minutesPct: number | null;
   playerPct?: number | null;
+  // Error bars
+  stddevUpper?: number | null;
+  stddevLower?: number | null;
 }
 
 export type LeagueFilter = "all" | "nfl" | "nba" | "mlb" | "nhl" | "premier-league";
@@ -69,4 +78,34 @@ export const LEAGUE_LABELS: Record<string, string> = {
   mlb: "MLB",
   nhl: "NHL",
   "premier-league": "EPL",
+};
+
+export const STAT_LABELS: Record<string, string> = {
+  stat_pts: "Points",
+  stat_reb: "Rebounds",
+  stat_ast: "Assists",
+  stat_stl: "Steals",
+  stat_blk: "Blocks",
+  stat_pass_yds: "Pass Yards",
+  stat_pass_td: "Pass TDs",
+  stat_rush_yds: "Rush Yards",
+  stat_rush_td: "Rush TDs",
+  stat_rec: "Receptions",
+  stat_rec_yds: "Rec Yards",
+  stat_goals: "Goals",
+  stat_assists: "Assists",
+  stat_sog: "Shots on Goal",
+  stat_h: "Hits",
+  stat_hr: "Home Runs",
+  stat_rbi: "RBI",
+  stat_r: "Runs",
+  stat_sb: "Stolen Bases",
+};
+
+export const LEAGUE_STATS: Record<string, string[]> = {
+  nba: ["stat_pts", "stat_reb", "stat_ast", "stat_stl", "stat_blk"],
+  nfl: ["stat_pass_yds", "stat_pass_td", "stat_rush_yds", "stat_rush_td", "stat_rec", "stat_rec_yds"],
+  nhl: ["stat_goals", "stat_assists", "stat_sog"],
+  mlb: ["stat_h", "stat_hr", "stat_rbi", "stat_r", "stat_sb"],
+  "premier-league": ["stat_goals", "stat_assists"],
 };

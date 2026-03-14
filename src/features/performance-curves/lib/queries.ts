@@ -10,6 +10,15 @@ function parseJsonArray(val: unknown): number[] {
   return [];
 }
 
+function parseJsonObj(val: unknown): Record<string, (number | null)[]> | null {
+  if (val == null) return null;
+  if (typeof val === "object" && !Array.isArray(val)) return val as Record<string, (number | null)[]>;
+  if (typeof val === "string") {
+    try { return JSON.parse(val); } catch { return null; }
+  }
+  return null;
+}
+
 function mapCurve(raw: Record<string, unknown>): PerformanceCurve {
   return {
     ...raw,
@@ -21,12 +30,16 @@ function mapCurve(raw: Record<string, unknown>): PerformanceCurve {
     avg_minutes_pct: parseJsonArray(raw.avg_minutes_pct),
     stddev_pct_recent: parseJsonArray(raw.stddev_pct_recent),
     stderr_pct_recent: parseJsonArray(raw.stderr_pct_recent),
+    stat_avg_pct: parseJsonObj(raw.stat_avg_pct),
+    stat_median_pct: parseJsonObj(raw.stat_median_pct),
+    stat_stddev_pct: parseJsonObj(raw.stat_stddev_pct),
+    stat_stderr_pct: parseJsonObj(raw.stat_stderr_pct),
   } as PerformanceCurve;
 }
 
-export function usePerformanceCurves(leagueSlug?: string, injuryTypeSlug?: string) {
+export function usePerformanceCurves(leagueSlug?: string, injuryTypeSlug?: string, position?: string) {
   return useQuery<PerformanceCurve[]>({
-    queryKey: ["performance-curves", leagueSlug ?? "all", injuryTypeSlug ?? "all"],
+    queryKey: ["performance-curves", leagueSlug ?? "all", injuryTypeSlug ?? "all", position ?? "all"],
     queryFn: async () => {
       let q = supabase
         .from(dbTable("performance_curves"))
@@ -39,6 +52,12 @@ export function usePerformanceCurves(leagueSlug?: string, injuryTypeSlug?: strin
       }
       if (injuryTypeSlug) {
         q = q.eq("injury_type_slug", injuryTypeSlug);
+      }
+      // Filter by position: "" = all positions combined, specific position = that position only
+      if (position && position !== "all") {
+        q = q.eq("position", position);
+      } else {
+        q = q.eq("position", "");
       }
 
       const { data, error } = await q;
@@ -59,11 +78,36 @@ export function usePerformanceCurve(leagueSlug: string, injuryTypeSlug: string) 
         .select("*")
         .eq("league_slug", leagueSlug)
         .eq("injury_type_slug", injuryTypeSlug)
+        .eq("position", "")
         .maybeSingle();
 
       if (error) throw new Error(error.message);
       if (!data) return null;
       return mapCurve(data as Record<string, unknown>);
+    },
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
+/** Get distinct positions that have curves for a given league */
+export function usePositionsWithCurves(leagueSlug?: string) {
+  return useQuery<string[]>({
+    queryKey: ["curve-positions", leagueSlug ?? "all"],
+    queryFn: async () => {
+      let q = supabase
+        .from(dbTable("performance_curves"))
+        .select("position")
+        .gte("sample_size", 3)
+        .neq("position", "");
+
+      if (leagueSlug && leagueSlug !== "all") {
+        q = q.eq("league_slug", leagueSlug);
+      }
+
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      const positions = Array.from(new Set((data ?? []).map((d: { position: string }) => d.position))).filter(Boolean);
+      return positions.sort();
     },
     staleTime: 10 * 60 * 1000,
   });

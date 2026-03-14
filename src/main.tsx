@@ -7,6 +7,7 @@ import { AuthProvider } from "@mzon7/zon-incubator-sdk/auth";
 import { supabase } from "./lib/supabase";
 import { installFrontendErrorCapture } from "./lib/errorReporting";
 import { Analytics } from "@vercel/analytics/react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import App from "./App";
 import "./index.css";
 
@@ -31,6 +32,7 @@ createRoot(document.getElementById("root")!).render(
           <AuthProvider supabase={supabase}>
             <App />
             <Analytics />
+            <SpeedInsights />
           </AuthProvider>
         </QueryClientProvider>
       </BrowserRouter>
