@@ -790,7 +790,7 @@ async function main() {
   let allInjuries = [];
   offset = 0;
   while (true) {
-    const batch = await sbGet("back_in_play_injuries", `select=injury_id,player_id,injury_type,status,date_injured,return_date,expected_return,games_missed,recovery_days,side&date_injured=gte.${cutoff}&order=date_injured.desc&limit=1000&offset=${offset}`);
+    const batch = await sbGet("back_in_play_injuries", `select=injury_id,player_id,injury_type,status,date_injured,return_date,expected_return,games_missed,recovery_days,side,rank_at_injury&date_injured=gte.${cutoff}&order=date_injured.desc&limit=1000&offset=${offset}`);
     allInjuries.push(...batch);
     if (batch.length < 1000) break;
     offset += 1000;
@@ -848,8 +848,8 @@ async function main() {
       league_slug: p?.league_slug ?? "",
       league_name: p?.league_name ?? "",
       league_rank: p?.league_rank ?? null,
-      preseason_rank: null,
-      rank_at_injury: null,
+      preseason_rank: p?.preseason_rank ?? null,
+      rank_at_injury: inj.rank_at_injury ?? null,
       headshot_url: p?.headshot_url ?? null,
       espn_id: null,
       is_star: p?.is_star ?? false,
@@ -859,10 +859,19 @@ async function main() {
 
   let pageCount = 0;
 
-  // 1. Homepage
+  // 1. Homepage — mirror useTopPlayerInjuries() client query:
+  //    injuries with rank_at_injury <= 50 OR player league_rank/preseason_rank <= 50
+  const cutoff60 = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
   const topInjuries = enrichedInjuries
     .filter(i => i.status !== "returned" && i.status !== "active")
-    .slice(0, 30);
+    .filter(i => i.date_injured >= cutoff60)
+    .filter(i =>
+      (i.rank_at_injury != null && i.rank_at_injury <= 50) ||
+      (i.league_rank != null && i.league_rank <= 50) ||
+      (i.preseason_rank != null && i.preseason_rank <= 50) ||
+      i.is_star
+    )
+    .slice(0, 100);
   writePage("/", {
     title: "Back In Play - Sports Injury Tracker & Return Dates",
     description: "Live sports injury updates for NBA, NFL, MLB, NHL, and EPL. Track player injuries, expected return dates, status changes, and recovery timelines.",
