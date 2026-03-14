@@ -15,7 +15,7 @@ import { InjuryPlayerCard } from "../../../components/InjuryPlayerCard";
 import { SEO } from "../../../components/seo/SEO";
 import { supabase } from "../../../lib/supabase";
 import { leagueColor } from "../../../lib/leagueColors";
-import { trackHeadlineClick, trackPlayerCardClick, trackLeagueFilter } from "../../../lib/analytics";
+import { trackHeadlineClick } from "../../../lib/analytics";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
