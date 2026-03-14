@@ -55,6 +55,7 @@ async function sbGet(table, params = "") {
 // --- HTML helpers ---
 const LEAGUE_LABELS = { nba: "NBA", nfl: "NFL", mlb: "MLB", nhl: "NHL", "premier-league": "EPL" };
 const LEAGUE_FULL = { nba: "National Basketball Association", nfl: "National Football League", mlb: "Major League Baseball", nhl: "National Hockey League", "premier-league": "English Premier League" };
+const LEAGUE_SPORT = { nba: "basketball", nfl: "football", mlb: "baseball", nhl: "hockey", "premier-league": "football" };
 
 function esc(s) { return (s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 function slugify(s) { return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
