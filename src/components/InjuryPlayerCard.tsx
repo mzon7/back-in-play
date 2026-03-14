@@ -140,17 +140,6 @@ export function InjuryPlayerCard({
 
   const cardBody = (
     <div className="p-4 relative">
-      {/* Track star — top-right */}
-      <button
-        onClick={handleTrackClick}
-        title={tracked ? "Tracking player" : "Track player"}
-        className="absolute top-2 right-2 z-10 p-1.5 rounded-full transition-colors hover:bg-white/10"
-      >
-        {tracked
-          ? <span className="text-amber-400 text-sm">&#9733;</span>
-          : <span className="text-white/25 text-sm hover:text-white/50">&#9734;</span>
-        }
-      </button>
       {/* Left status accent */}
       <div
         className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
@@ -168,6 +157,16 @@ export function InjuryPlayerCard({
           {/* Row 1: name, badges, status */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
+              <button
+                onClick={handleTrackClick}
+                title={tracked ? "Tracking player" : "Track player"}
+                className="shrink-0 p-0.5 rounded transition-colors hover:bg-white/10"
+              >
+                {tracked
+                  ? <span className="text-amber-400 text-sm">&#9733;</span>
+                  : <span className="text-white/25 text-sm hover:text-white/50">&#9734;</span>
+                }
+              </button>
               <span className="text-[15px] font-semibold text-white truncate">
                 {player_name}
               </span>

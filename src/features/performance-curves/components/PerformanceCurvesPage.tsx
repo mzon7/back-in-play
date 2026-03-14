@@ -19,19 +19,28 @@ function getStatsForCurve(curve: PerformanceCurve): string[] {
   return LEAGUE_STATS[curve.league_slug] ?? [];
 }
 
-function StatDrillDown({ curve }: { curve: PerformanceCurve }) {
-  const [selectedStat, setSelectedStat] = useState<string | null>(null);
+
+function StatFilterBar({ curve, selectedStat, onSelect }: { curve: PerformanceCurve; selectedStat: string | null; onSelect: (s: string | null) => void }) {
   const stats = getStatsForCurve(curve);
   const availableStats = stats.filter(
     (s) => curve.stat_avg_pct?.[s]?.some((v) => v != null)
   );
-
   if (availableStats.length === 0) return null;
 
   return (
-    <div className="mt-4">
-      <p className="text-[11px] text-white/40 font-medium uppercase tracking-wide mb-2">Per-Stat Breakdown</p>
-      <div className="flex flex-wrap gap-1 mb-3">
+    <div className="mb-3">
+      <p className="text-[10px] text-white/35 mb-1.5">Stat performance relative to pre-injury baseline</p>
+      <div className="flex flex-wrap gap-1">
+        <button
+          onClick={() => onSelect(null)}
+          className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+            selectedStat === null
+              ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border border-[#1C7CFF]/30"
+              : "bg-white/5 text-white/50 hover:text-white/70 border border-transparent"
+          }`}
+        >
+          All Stats
+        </button>
         {availableStats.map((stat) => {
           const avg10 = curve.stat_avg_pct?.[stat]?.[9];
           const pctColor = avg10 != null
@@ -40,7 +49,7 @@ function StatDrillDown({ curve }: { curve: PerformanceCurve }) {
           return (
             <button
               key={stat}
-              onClick={() => { setSelectedStat(selectedStat === stat ? null : stat); if (selectedStat !== stat) trackStatDrillDown(stat, curve.injury_type_slug); }}
+              onClick={() => { onSelect(selectedStat === stat ? null : stat); if (selectedStat !== stat) trackStatDrillDown(stat, curve.injury_type_slug); }}
               className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
                 selectedStat === stat
                   ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border border-[#1C7CFF]/30"
@@ -55,36 +64,13 @@ function StatDrillDown({ curve }: { curve: PerformanceCurve }) {
           );
         })}
       </div>
-
-      {selectedStat && curve.stat_avg_pct?.[selectedStat] && (
-        <div className="bg-white/[0.03] rounded-lg p-3 border border-white/5">
-          <p className="text-xs text-white/50 mb-2">
-            {STAT_LABELS[selectedStat]} — % of pre-injury average over 10 games
-            <span className="text-white/25 ml-2">(n={curve.sample_size} total cases — actual count for this stat may be lower as not all positions track it)</span>
-          </p>
-          <div className="grid grid-cols-10 gap-1">
-            {(curve.stat_avg_pct[selectedStat] ?? []).map((val, i) => {
-              const pct = val != null ? Math.round(val * 100) : null;
-              const color = pct == null ? "text-white/20"
-                : pct >= 100 ? "text-green-400"
-                : pct >= 80 ? "text-amber-400"
-                : "text-red-400";
-              return (
-                <div key={i} className="text-center">
-                  <p className="text-[9px] text-white/30">G{i + 1}</p>
-                  <p className={`text-xs font-bold ${color}`}>{pct != null ? `${pct}%` : "—"}</p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
 function CurveCard({ curve }: { curve: PerformanceCurve }) {
   const [expanded, setExpanded] = useState(false);
+  const [selectedStat, setSelectedStat] = useState<string | null>(null);
 
   const median10 = curve.median_pct_recent[9];
   const reachedFull = median10 != null && median10 >= 1.0;
@@ -148,7 +134,7 @@ function CurveCard({ curve }: { curve: PerformanceCurve }) {
           ) : (
             <div className="text-lg font-bold text-white/20">—</div>
           )}
-          <div className="text-[10px] text-white/30">by game 10</div>
+          <div className="text-[10px] text-white/30">of baseline by G10</div>
         </div>
 
         <span className="text-white/30 text-sm ml-2 transition-transform" style={{ transform: expanded ? "rotate(0)" : "rotate(-90deg)" }}>
@@ -158,14 +144,46 @@ function CurveCard({ curve }: { curve: PerformanceCurve }) {
 
       {expanded && (
         <div className="px-5 pb-5 border-t border-white/5">
+          {/* Stat filter pills ABOVE chart */}
           <div className="mt-4">
+            <StatFilterBar curve={curve} selectedStat={selectedStat} onSelect={setSelectedStat} />
+          </div>
+
+          {/* Selected stat detail (if a specific stat is chosen) */}
+          {selectedStat && curve.stat_avg_pct?.[selectedStat] && (
+            <div className="bg-white/[0.03] rounded-lg p-3 border border-white/5 mb-3">
+              <p className="text-xs text-white/50 mb-2">
+                {STAT_LABELS[selectedStat]} — % of pre-injury average over 10 games
+                <span className="text-white/25 ml-2">(n={curve.sample_size})</span>
+              </p>
+              <div className="grid grid-cols-10 gap-1">
+                {(curve.stat_avg_pct[selectedStat] ?? []).map((val, i) => {
+                  const pct = val != null ? Math.round(val * 100) : null;
+                  const color = pct == null ? "text-white/20"
+                    : pct >= 100 ? "text-green-400"
+                    : pct >= 80 ? "text-amber-400"
+                    : "text-red-400";
+                  return (
+                    <div key={i} className="text-center">
+                      <p className="text-[9px] text-white/30">G{i + 1}</p>
+                      <p className={`text-xs font-bold ${color}`}>{pct != null ? `${pct}%` : "—"}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Chart */}
+          <div>
             <PerformanceCurveChart curve={curve} />
+            <p className="text-[10px] text-white/25 text-center mt-1">Typical recovery range based on historical outcomes</p>
           </div>
 
           {/* Key stats */}
           <div className="grid grid-cols-3 gap-3 mt-4">
             <div className="bg-white/5 rounded-lg p-3 text-center">
-              <p className="text-xs text-white/40 mb-1">Game 1 Back</p>
+              <p className="text-xs text-white/40 mb-1">Game 1 Return</p>
               <p className="text-sm font-bold text-white">
                 {curve.median_pct_recent[0] != null ? `${Math.round(curve.median_pct_recent[0] * 100)}%` : "—"}
               </p>
@@ -174,7 +192,7 @@ function CurveCard({ curve }: { curve: PerformanceCurve }) {
               )}
             </div>
             <div className="bg-white/5 rounded-lg p-3 text-center">
-              <p className="text-xs text-white/40 mb-1">Game 5 Back</p>
+              <p className="text-xs text-white/40 mb-1">Game 5 Return</p>
               <p className="text-sm font-bold text-white">
                 {curve.median_pct_recent[4] != null ? `${Math.round(curve.median_pct_recent[4] * 100)}%` : "—"}
               </p>
@@ -183,24 +201,17 @@ function CurveCard({ curve }: { curve: PerformanceCurve }) {
               )}
             </div>
             <div className="bg-white/5 rounded-lg p-3 text-center">
-              <p className="text-xs text-white/40 mb-1">Rest of Season</p>
+              <p className="text-xs text-white/40 mb-1">By Game 10</p>
               <p className="text-sm font-bold text-white">
-                {curve.rest_of_season_pct_recent != null ? `${Math.round(curve.rest_of_season_pct_recent * 100)}%` : "—"}
+                {curve.median_pct_recent[9] != null ? `${Math.round(curve.median_pct_recent[9] * 100)}%` : "—"}
               </p>
-              {curve.rest_of_season_sample != null && (
-                <p className="text-[10px] text-white/25">n={curve.rest_of_season_sample}</p>
+              {curve.games_to_full != null ? (
+                <p className="text-[10px] text-white/25">~{Math.round(curve.games_to_full)} games to full</p>
+              ) : (
+                <p className="text-[10px] text-white/25">of baseline performance</p>
               )}
             </div>
           </div>
-
-          {curve.games_to_full != null && (
-            <p className="text-xs text-white/40 mt-3 text-center">
-              Estimated {Math.round(curve.games_to_full)} games to reach pre-injury performance
-            </p>
-          )}
-
-          {/* Per-stat drill-down */}
-          <StatDrillDown curve={curve} />
         </div>
       )}
     </div>

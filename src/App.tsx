@@ -8,6 +8,7 @@ import SignupPage from "./pages/SignupPage";
 import HomePage from "./features/home-page-injury-snapshots/components/HomePage";
 import { RecoveryStatsPage } from "./features/historical-injury-data-system/components/RecoveryStatsPage";
 import { HooksErrorBoundary } from "./components/HooksErrorBoundary";
+import { MobileTabBar } from "./components/MobileTabBar";
 import { usePageTracking } from "./lib/analytics";
 
 // Wraps lazy() so that chunk-load failures (stale deploy hashes) trigger a
@@ -135,6 +136,7 @@ export default function App() {
   return (
     <HooksErrorBoundary>
       <AppRoutes />
+      <MobileTabBar />
     </HooksErrorBoundary>
   );
 }

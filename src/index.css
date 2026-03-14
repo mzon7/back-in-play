@@ -4,15 +4,24 @@
 html {
   touch-action: manipulation;
   overscroll-behavior: none;
+  overflow-x: hidden;
   -webkit-tap-highlight-color: transparent;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
 body {
   overscroll-behavior: none;
+  overflow-x: hidden;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+}
+
+/* Bottom padding for mobile tab bar */
+@media (max-width: 767px) {
+  body {
+    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
+  }
 }
 
 /* Allow text selection in inputs, textareas, and content areas */

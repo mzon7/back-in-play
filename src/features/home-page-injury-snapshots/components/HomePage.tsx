@@ -946,7 +946,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
     : `${LEAGUE_LABELS[activeTab] ?? activeTab.toUpperCase()} injury report - latest player injuries, return dates, and status updates.`;
 
   return (
-    <div className="min-h-screen bg-[#0A0E1A] text-white">
+    <div className="min-h-screen bg-[#0A0E1A] text-white overflow-x-hidden">
       <SEO title={seoTitle} description={seoDesc} path={activeTab === "top" ? "/" : `/league/${activeTab}`} />
       {/* Top Nav */}
       <nav className="sticky top-0 z-50 border-b border-white/10 bg-[#0A0E1A]/90 backdrop-blur-md">
@@ -960,7 +960,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
             <span className="text-[9px] font-semibold tracking-wide rounded-full px-2 py-0.5 bg-[#1C7CFF]/10 text-[#1C7CFF]/60 border border-[#1C7CFF]/15">Early Access</span>
           </Link>
 
-          <div className="flex items-center gap-1 sm:gap-4 text-[13px] sm:text-[15px] font-medium overflow-x-auto">
+          <div className="hidden md:flex items-center gap-1 sm:gap-4 text-[13px] sm:text-[15px] font-medium overflow-x-auto">
             <Link to="/" className="px-2 py-1 text-[#1C7CFF] shrink-0">Home</Link>
             {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (<>
               <Link to="/recovery-stats" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Recovery Stats</Link>
@@ -968,6 +968,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
             </>)}
             <Link to="/props" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Props</Link>
             <Link to="/performance-curves" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Performance Curves</Link>
+            <Link to="/tracked-players" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0" title="Tracked Players">&#9733; <span className="hidden sm:inline">Tracked</span></Link>
           </div>
         </div>
 
