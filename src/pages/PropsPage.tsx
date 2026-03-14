@@ -6,7 +6,8 @@ import { SiteHeader } from "../components/SiteHeader";
 import { SEO } from "../components/seo/SEO";
 import { StatusBadge } from "../components/StatusBadge";
 import { PlayerAvatar } from "../components/PlayerAvatar";
-import { leagueColor } from "../lib/leagueColors";
+import { InjuryPlayerCard } from "../components/InjuryPlayerCard";
+import { trackLeagueFilter } from "../lib/analytics";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -32,31 +33,6 @@ const MARKET_TO_STAT: Record<string, string> = {
   player_shots: "stat_sog", player_shots_on_target: "stat_sog",
   batter_hits: "stat_h", batter_total_bases: "stat_h", batter_rbis: "stat_rbi",
 };
-
-/** Status → subtle border color for injury cards (same as HomePage) */
-const STATUS_BORDER_COLOR: Record<string, string> = {
-  out:          "rgba(239,68,68,0.25)",
-  ir:           "rgba(239,68,68,0.25)",
-  "il-10":      "rgba(239,68,68,0.25)",
-  "il-15":      "rgba(239,68,68,0.25)",
-  "il-60":      "rgba(239,68,68,0.25)",
-  doubtful:     "rgba(249,115,22,0.25)",
-  questionable: "rgba(234,179,8,0.25)",
-  "day-to-day": "rgba(245,158,11,0.25)",
-  probable:     "rgba(59,130,246,0.25)",
-  active:       "rgba(34,197,94,0.25)",
-  returned:     "rgba(34,197,94,0.25)",
-  active_today: "rgba(249,115,22,0.25)",
-  reduced_load: "rgba(245,158,11,0.25)",
-  back_in_play: "rgba(6,182,212,0.25)",
-  suspended:    "rgba(168,85,247,0.25)",
-};
-
-function injuryCardBorder(status: string | null | undefined): string {
-  if (!status) return "rgba(255,255,255,0.1)";
-  const key = status.toLowerCase().replace(/-/g, "_");
-  return STATUS_BORDER_COLOR[key] ?? STATUS_BORDER_COLOR[status] ?? "rgba(255,255,255,0.1)";
-}
 
 const SOURCE_LABELS: Record<string, string> = {
   draftkings: "DraftKings",
@@ -299,57 +275,37 @@ function PlayerPropCard({ player, sourceFilter }: { player: PropsPlayer; sourceF
 
   if (sorted.length === 0) return null;
 
-  const leagueLabel = LEAGUE_LABELS[player.league_slug] ?? "";
-  const lColor = leagueColor(player.league_slug);
-
   return (
-    <div
-      className="bg-white/[0.03] rounded-xl p-4 relative overflow-hidden"
-      style={{ border: `1px solid ${injuryCardBorder(player.status)}` }}
+    <InjuryPlayerCard
+      player_name={player.player_name}
+      player_slug={player.player_slug}
+      position={player.position}
+      team_name={player.team_name}
+      league_slug={player.league_slug}
+      headshot_url={player.headshot_url}
+      status={player.status}
+      injury_type={player.injury_type}
+      is_star={player.is_star}
+      is_starter={player.is_starter}
+      expected_return={player.expected_return}
+      date_injured={player.injury_date}
+      showLeague
+      avatarSize={48}
+      linkToPlayer={false}
     >
-      {/* Left status accent */}
-      <div
-        className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
-        style={{ backgroundColor: injuryCardBorder(player.status).replace(/[\d.]+\)$/, '0.6)') }}
-      />
-      <div className="flex items-start gap-3 mb-3">
-        <PlayerAvatar src={player.headshot_url} name={player.player_name} size={48} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <Link to={`/player/${player.player_slug}`} className="text-sm font-semibold hover:text-cyan-400 transition-colors truncate">
-              {player.player_name}
-            </Link>
-            {player.is_star && <span className="text-[9px] bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded-full font-bold shrink-0">STAR</span>}
-            {player.is_starter && !player.is_star && <span className="text-[9px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full font-bold shrink-0">STARTER</span>}
-          </div>
-          <div className="flex items-center gap-2 text-xs text-white/40 mt-0.5">
-            <span>{player.position}</span>
-            <span>·</span>
-            <span>{player.team_name}</span>
-            {leagueLabel && (
-              <span className="inline-flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: lColor }} />
-                <span>{leagueLabel}</span>
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2 mt-1">
-            <StatusBadge status={player.status} />
-            {player.injury_type && <span className="text-xs text-white/35">{player.injury_type}</span>}
-          </div>
-          {/* Pre-injury minutes + games back */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-[11px] text-white/30">
-            {player.avg10?.minutes != null && (
-              <span>Pre-injury: {player.avg10.minutes} min/g</span>
-            )}
-            {player.gamesBack > 0 && (
-              <span>{player.gamesBack} game{player.gamesBack !== 1 ? "s" : ""} back{player.avgSinceReturn?.minutes != null ? ` · ${player.avgSinceReturn.minutes} min/g since return` : ""}</span>
-            )}
-          </div>
+      {/* Pre-injury minutes + games back */}
+      <div className="px-4 pb-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-[11px] text-white/30">
+          {player.avg10?.minutes != null && (
+            <span>Pre-injury: {player.avg10.minutes} min/g</span>
+          )}
+          {player.gamesBack > 0 && (
+            <span>{player.gamesBack} game{player.gamesBack !== 1 ? "s" : ""} back{player.avgSinceReturn?.minutes != null ? ` · ${player.avgSinceReturn.minutes} min/g since return` : ""}</span>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 px-4 pb-4">
         {sorted.map((p) => {
           const statKey = MARKET_TO_STAT[p.market];
           const avg5Val = statKey && player.avg5 ? player.avg5[statKey] : null;
@@ -384,7 +340,7 @@ function PlayerPropCard({ player, sourceFilter }: { player: PropsPlayer; sourceF
           );
         })}
       </div>
-    </div>
+    </InjuryPlayerCard>
   );
 }
 
@@ -507,7 +463,7 @@ export default function PropsPage() {
             return (
               <button
                 key={slug}
-                onClick={() => setLeagueFilter(slug)}
+                onClick={() => { setLeagueFilter(slug); trackLeagueFilter(slug, "props"); }}
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
                   leagueFilter === slug ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
                 }`}

@@ -11,9 +11,11 @@ import {
 } from "../../../hooks/useInjuries";
 import { StatusBadge } from "../../../components/StatusBadge";
 import { PlayerAvatar } from "../../../components/PlayerAvatar";
+import { InjuryPlayerCard } from "../../../components/InjuryPlayerCard";
 import { SEO } from "../../../components/seo/SEO";
 import { supabase } from "../../../lib/supabase";
 import { leagueColor } from "../../../lib/leagueColors";
+import { trackHeadlineClick, trackPlayerCardClick, trackLeagueFilter } from "../../../lib/analytics";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -181,165 +183,36 @@ function StatusTimeline({ playerId }: { playerId: string }) {
   );
 }
 
-/** Status → subtle border color for injury cards */
-const STATUS_BORDER_COLOR: Record<string, string> = {
-  out:          "rgba(239,68,68,0.25)",
-  ir:           "rgba(239,68,68,0.25)",
-  "il-10":      "rgba(239,68,68,0.25)",
-  "il-15":      "rgba(239,68,68,0.25)",
-  "il-60":      "rgba(239,68,68,0.25)",
-  doubtful:     "rgba(249,115,22,0.25)",
-  questionable: "rgba(234,179,8,0.25)",
-  "day-to-day": "rgba(245,158,11,0.25)",
-  probable:     "rgba(59,130,246,0.25)",
-  active:       "rgba(34,197,94,0.25)",
-  returned:     "rgba(34,197,94,0.25)",
-  active_today: "rgba(249,115,22,0.25)",
-  reduced_load: "rgba(245,158,11,0.25)",
-  back_in_play: "rgba(6,182,212,0.25)",
-  suspended:    "rgba(168,85,247,0.25)",
-};
-
-function injuryCardBorder(status: string | null | undefined): string {
-  if (!status) return "rgba(255,255,255,0.1)";
-  const key = status.toLowerCase().replace(/-/g, "_");
-  return STATUS_BORDER_COLOR[key] ?? STATUS_BORDER_COLOR[status] ?? "rgba(255,255,255,0.1)";
-}
-
 function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean }) {
-  const rank = inj.preseason_rank ?? inj.league_rank ?? inj.rank_at_injury;
   const [expanded, setExpanded] = useState(false);
-  const days = daysAgo(inj.date_injured);
-  const playerUrl = `/player/${inj.player_slug || (inj.player_name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+  const rank = inj.preseason_rank ?? inj.league_rank ?? inj.rank_at_injury;
 
   return (
-    <div
-      className="rounded-xl bg-white/5 transition-colors hover:bg-white/[0.07] overflow-hidden"
-      style={{ border: `1px solid ${injuryCardBorder(inj.status)}` }}
+    <InjuryPlayerCard
+      player_name={inj.player_name ?? ""}
+      player_slug={inj.player_slug}
+      position={inj.position}
+      team_name={inj.team_name}
+      league_slug={inj.league_slug}
+      league_name={inj.league_name}
+      headshot_url={inj.headshot_url}
+      status={inj.status}
+      injury_type={inj.injury_type}
+      injury_description={inj.injury_description}
+      date_injured={inj.date_injured}
+      expected_return={inj.expected_return}
+      return_date={inj.return_date}
+      is_star={inj.is_star}
+      is_starter={inj.is_starter}
+      side={inj.side}
+      long_comment={inj.long_comment}
+      source={inj.source}
+      games_missed={inj.games_missed}
+      game_minutes={inj.game_minutes}
+      pre_injury_avg_minutes={inj.pre_injury_avg_minutes}
+      rank={rank}
+      showLeague={showLeague}
     >
-      <Link
-        to={playerUrl}
-        className="block p-4 relative"
-      >
-        {/* Left status accent */}
-        <div
-          className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
-          style={{ backgroundColor: injuryCardBorder(inj.status).replace(/[\d.]+\)$/, '0.6)') }}
-        />
-        <div className="flex items-start gap-3">
-          {/* Headshot or rank badge */}
-          <PlayerAvatar src={inj.headshot_url} name={inj.player_name ?? ""} size={44} className="rounded-full" />
-
-          <div className="min-w-0 flex-1 leading-relaxed">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="text-[15px] font-semibold text-white truncate">{inj.player_name}</span>
-                {inj.is_star && (
-                  <span className="shrink-0 text-[11px]" title="Star player">{"\u2B50"}</span>
-                )}
-                {inj.is_starter && !inj.is_star && (
-                  <span className="shrink-0 text-[10px] font-bold text-emerald-400 border border-emerald-400/40 rounded px-1" title="Starter">S</span>
-                )}
-                {inj.position && (
-                  <span className="text-xs text-white/50 shrink-0">{inj.position}</span>
-                )}
-                {rank && rank <= 50 && (
-                  <span className="text-xs text-amber-400/80 shrink-0">#{rank}</span>
-                )}
-              </div>
-              <StatusBadge status={inj.status ?? "out"} />
-            </div>
-
-            <div className="flex items-center gap-2 mt-1">
-              {inj.team_name && inj.team_name !== "Unknown" && (
-                <p className="text-sm text-white/50 truncate">{inj.team_name}</p>
-              )}
-              {showLeague && inj.league_slug && (
-                <span className="flex items-center gap-1 text-xs text-white/40">
-                  <span className={`h-1.5 w-1.5 rounded-full ${LEAGUE_DOT[inj.league_slug] ?? "bg-white/30"}`} />
-                  {LEAGUE_LABELS[inj.league_slug] ?? inj.league_name}
-                </span>
-              )}
-            </div>
-
-            {/* Games missed & days since injury */}
-            <div className="flex items-center gap-3 mt-1.5 text-xs">
-              {days > 0 && (
-                <span className="text-white/45">
-                  {days === 1 ? "1 day" : `${days} days`} since injury
-                </span>
-              )}
-              {inj.games_missed != null && inj.games_missed > 0 && (
-                <span className="text-red-400/70 font-medium">
-                  {inj.games_missed} game{inj.games_missed !== 1 ? "s" : ""} missed
-                </span>
-              )}
-            </div>
-
-            {/* Minutes bar (for reduced_load / back_in_play / active_today) */}
-            {inj.game_minutes != null && inj.game_minutes > 0 && (
-              <div className="mt-2">
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-white/70 font-medium">{inj.game_minutes} min</span>
-                  {inj.pre_injury_avg_minutes != null && inj.pre_injury_avg_minutes > 0 && (
-                    <>
-                      <span className="text-white/40">/ {inj.pre_injury_avg_minutes} usual</span>
-                      <span className={`text-xs font-bold ${
-                        (inj.game_minutes / inj.pre_injury_avg_minutes) >= 0.8
-                          ? "text-cyan-400"
-                          : "text-amber-400"
-                      }`}>
-                        {Math.round((inj.game_minutes / inj.pre_injury_avg_minutes) * 100)}%
-                      </span>
-                    </>
-                  )}
-                </div>
-                {inj.pre_injury_avg_minutes != null && inj.pre_injury_avg_minutes > 0 && (
-                  <div className="mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        (inj.game_minutes / inj.pre_injury_avg_minutes) >= 0.8
-                          ? "bg-cyan-400"
-                          : "bg-amber-400"
-                      }`}
-                      style={{ width: `${Math.min(100, (inj.game_minutes / inj.pre_injury_avg_minutes) * 100)}%` }}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Injury details */}
-            <div className="mt-2 space-y-0.5">
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-white/70 font-medium">{inj.injury_type?.toLowerCase() === "other" ? "Unspecified" : inj.injury_type}</span>
-                {inj.side && <span className="text-white/40">({inj.side})</span>}
-              </div>
-              {inj.injury_description && (
-                <p className="text-xs text-white/45 line-clamp-2 leading-relaxed">{inj.injury_description}</p>
-              )}
-              {inj.expected_return && (
-                <p className={`text-xs ${new Date(inj.expected_return) < new Date() && !inj.return_date ? "text-amber-400/70" : "text-cyan-300/70"}`}>
-                  Est. return: {inj.expected_return}
-                  {new Date(inj.expected_return) < new Date() && !inj.return_date && (
-                    <span className="ml-1 text-amber-400/60">(overdue)</span>
-                  )}
-                </p>
-              )}
-              {inj.long_comment && (
-                <p className="text-xs text-white/40 line-clamp-2 italic leading-relaxed">{inj.long_comment}</p>
-              )}
-            </div>
-
-            {/* Meta */}
-            <div className="mt-2 flex items-center gap-3 text-xs text-white/35">
-              <span>{inj.date_injured}</span>
-              {inj.source && <span>{inj.source}</span>}
-            </div>
-          </div>
-        </div>
-      </Link>
-
       {/* Timeline toggle — separate from the navigable card */}
       <div className="px-4 pb-3">
         <button
@@ -350,7 +223,7 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
         </button>
         {expanded && <StatusTimeline playerId={inj.player_id} />}
       </div>
-    </div>
+    </InjuryPlayerCard>
   );
 }
 
@@ -800,6 +673,7 @@ function HeadlineStories({ injuries, statusChanges, showLeague, leagueSlug, team
             <Link
               key={card.key}
               to={`/player/${card.player_slug || card.player_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
+              onClick={() => trackHeadlineClick(card.player_slug || card.player_name, card.league_slug ?? "", card.status ?? "")}
               className="shrink-0 w-[170px] sm:w-[190px] rounded-xl p-3.5 snap-start transition-all duration-[180ms] ease-out block headline-card"
               style={{
                 border: `1px solid ${typeLabel.cardBorder}`,

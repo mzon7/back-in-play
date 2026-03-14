@@ -8,6 +8,7 @@ import SignupPage from "./pages/SignupPage";
 import HomePage from "./features/home-page-injury-snapshots/components/HomePage";
 import { RecoveryStatsPage } from "./features/historical-injury-data-system/components/RecoveryStatsPage";
 import { HooksErrorBoundary } from "./components/HooksErrorBoundary";
+import { usePageTracking } from "./lib/analytics";
 
 const PlayerInjuryPage = lazy(() => import("./pages/player/PlayerInjuryPage"));
 const PlayerReturnPage = lazy(() => import("./pages/player/PlayerReturnAliasPage"));
@@ -62,6 +63,7 @@ const IS_LOCAL = typeof window !== "undefined" && (window.location.hostname === 
 
 function AppRoutes() {
   const location = useLocation();
+  usePageTracking();
   return (
     <Fragment key={routeKey(location.pathname)}>
       <Suspense fallback={<Loading />}>

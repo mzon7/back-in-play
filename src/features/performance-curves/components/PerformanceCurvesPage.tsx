@@ -7,6 +7,7 @@ import { usePerformanceCurves, usePositionsWithCurves } from "../lib/queries";
 import { PerformanceCurveChart } from "./PerformanceCurveChart";
 import type { PerformanceCurve, LeagueFilter } from "../lib/types";
 import { LEAGUE_LABELS, STAT_LABELS, LEAGUE_STATS } from "../lib/types";
+import { trackCurveExpand, trackStatDrillDown, trackLeagueFilter } from "../../../lib/analytics";
 
 const LEAGUE_ORDER: LeagueFilter[] = ["all", "nba", "nfl", "mlb", "nhl", "premier-league"];
 
@@ -31,7 +32,7 @@ function StatDrillDown({ curve }: { curve: PerformanceCurve }) {
           return (
             <button
               key={stat}
-              onClick={() => setSelectedStat(selectedStat === stat ? null : stat)}
+              onClick={() => { setSelectedStat(selectedStat === stat ? null : stat); if (selectedStat !== stat) trackStatDrillDown(stat, curve.injury_type_slug); }}
               className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
                 selectedStat === stat
                   ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border border-[#1C7CFF]/30"
@@ -96,7 +97,7 @@ function CurveCard({ curve }: { curve: PerformanceCurve }) {
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => { if (!expanded) trackCurveExpand(curve.injury_type_slug, curve.league_slug); setExpanded(!expanded); }}
         className="w-full text-left px-5 py-4 flex items-center gap-3 hover:bg-white/[0.03] transition-colors"
       >
         <div className="flex-1 min-w-0">
@@ -422,7 +423,7 @@ export default function PerformanceCurvesPage() {
           {LEAGUE_ORDER.map((slug) => (
             <button
               key={slug}
-              onClick={() => { setLeague(slug); setPosition("all"); }}
+              onClick={() => { setLeague(slug); setPosition("all"); trackLeagueFilter(slug, "performance_curves"); }}
               className={`shrink-0 px-4 py-2 rounded-lg text-sm font-semibold border transition-colors ${
                 league === slug
                   ? "border-[#1C7CFF]/50 bg-[#1C7CFF]/15 text-[#1C7CFF]"
