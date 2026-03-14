@@ -157,7 +157,7 @@ function getMostCommonInjury(injuries: PlayerInjury[]): string | null {
 function buildSeoBlurb(
   player: PlayerPageData,
   injury: PlayerInjury | undefined,
-  league: string,
+  _league: string,
 ): string {
   const name = player.player_name;
   const team = player.team_name;
@@ -188,7 +188,7 @@ const MARKET_LABELS: Record<string, string> = {
   batter_hits: "Hits", batter_total_bases: "TB", batter_rbis: "RBI",
 };
 
-function PlayerPropsCard({ props, playerName }: { props: PropRow[]; playerName: string }) {
+function PlayerPropsCard({ props, playerName: _playerName }: { props: PropRow[]; playerName: string }) {
   if (!props.length) return null;
   const priority = ["player_points", "player_goals", "batter_hits", "player_pass_yds", "player_rush_yds"];
   const sorted = [...props].sort((a, b) => {
@@ -262,7 +262,6 @@ export default function PlayerInjuryPage() {
 
   const leagueLabel = LEAGUE_LABELS[player.league_slug] ?? player.league_name;
   const leagueFull = LEAGUE_FULL[player.league_slug] ?? leagueLabel;
-  const year = new Date().getFullYear();
   const pageTitle = `${player.player_name} Injury History & Performance After Injury (${leagueLabel})`;
   const returnDisplay = currentInjury?.return_date
     ? `Returned: ${formatDate(currentInjury.return_date)}`

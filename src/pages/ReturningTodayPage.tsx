@@ -296,7 +296,6 @@ export default function ReturningTodayPage() {
 
   const { data: players = [], isLoading } = useReturningPlayers(league === "all" ? undefined : league);
 
-  const year = new Date().getFullYear();
   const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 
   const returning = useMemo(() => players.filter((p) => p.status !== "returned"), [players]);

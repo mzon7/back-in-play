@@ -26,10 +26,6 @@ const SEVERITY_LABEL: Record<string, string> = {
   minor: "Minor",
 };
 
-function slugify(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
-
 /** Compute age impact buckets from return case data */
 function computeAgeBuckets(rows: { age_at_injury: number | null; recovery_days: number | null }[]) {
   const buckets: { label: string; min: number; max: number; cases: number; avgDays: number }[] = [

@@ -446,6 +446,148 @@ def load_nhl(league_id):
     return total_loaded
 
 
+# ─── NHL API loader (for players missing from moneypuck CSV) ─────────────────
+
+NHL_API_SEASONS = ["20102011", "20112012", "20122013", "20132014", "20142015",
+                   "20152016", "20162017", "20172018", "20182019", "20192020",
+                   "20202021", "20212022", "20222023", "20232024", "20242025", "20252026"]
+
+
+def _nhl_api_search(player_name):
+    """Search NHL API for a player by name, return NHL playerId or None."""
+    q = urllib.parse.quote(player_name)
+    url = f"https://search.d3.nhle.com/api/v1/search/player?culture=en-us&limit=3&q={q}"
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode())
+        if data:
+            return str(data[0].get("playerId", ""))
+    except Exception:
+        pass
+    return None
+
+
+def _nhl_api_game_log(nhl_player_id, season_str):
+    """Fetch game log from NHL API. Returns list of game dicts."""
+    url = f"https://api-web.nhle.com/v1/player/{nhl_player_id}/game-log/{season_str}/2"
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json.loads(resp.read().decode())
+        return data.get("gameLog", [])
+    except Exception:
+        return []
+
+
+def _parse_toi(toi_str):
+    """Parse TOI like '17:31' to minutes float."""
+    if not toi_str or ":" not in toi_str:
+        return None
+    parts = toi_str.split(":")
+    try:
+        return float(parts[0]) + float(parts[1]) / 60.0
+    except (ValueError, IndexError):
+        return None
+
+
+def load_nhl_api(league_id):
+    """Load NHL game logs via NHL API for players missing from moneypuck CSV."""
+    from supabase import create_client
+    sb = create_client(SB_URL, SB_KEY)
+
+    # Get all NHL players
+    players = []
+    offset = 0
+    while True:
+        batch = sb.table("back_in_play_players").select(
+            "player_id,player_name"
+        ).eq("league_id", league_id).range(offset, offset + 999).execute()
+        if not batch.data:
+            break
+        players.extend(batch.data)
+        if len(batch.data) < 1000:
+            break
+        offset += 1000
+
+    # Find players without game logs
+    missing = []
+    for p in players:
+        pid = p["player_id"]
+        existing = sb.table("back_in_play_player_game_logs").select(
+            "id"
+        ).eq("player_id", pid).limit(1).execute()
+        if not existing.data:
+            missing.append(p)
+
+    print(f"  {len(missing)} NHL players without game logs (out of {len(players)} total)", flush=True)
+    if not missing:
+        return 0
+
+    total_loaded = 0
+    total_searched = 0
+
+    for i, p in enumerate(missing):
+        name = p["player_name"]
+        # Strip position prefixes
+        clean_name = name
+        for prefix in ("F ", "C ", "D ", "G ", "LW ", "RW ", "Ds ", "C/F ", "F/C "):
+            if name.startswith(prefix):
+                clean_name = name[len(prefix):]
+                break
+
+        nhl_id = _nhl_api_search(clean_name)
+        total_searched += 1
+        if not nhl_id:
+            if (i + 1) % 100 == 0:
+                print(f"  [{i + 1}/{len(missing)}] searched ({total_loaded} loaded)...", flush=True)
+            time.sleep(0.3)
+            continue
+
+        # Fetch game logs for recent seasons
+        db_rows = []
+        for season_str in NHL_API_SEASONS[-6:]:  # last 6 seasons
+            games = _nhl_api_game_log(nhl_id, season_str)
+            season_year = int(season_str[:4]) + 1
+
+            for g in games:
+                gd = g.get("gameDate", "")
+                if not gd:
+                    continue
+                goals = g.get("goals", 0) or 0
+                assists = g.get("assists", 0) or 0
+                shots = g.get("shots", 0) or 0
+                minutes = _parse_toi(g.get("toi"))
+
+                db_rows.append({
+                    "player_id": p["player_id"],
+                    "league_slug": "nhl",
+                    "season": season_year,
+                    "game_date": gd,
+                    "opponent": g.get("opponentAbbrev", ""),
+                    "started": True,
+                    "minutes": minutes,
+                    "stat_goals": goals,
+                    "stat_assists": assists,
+                    "stat_sog": shots,
+                    "composite": 3.0 * goals + 2.0 * assists + 0.5 * shots,
+                })
+
+            time.sleep(0.3)
+
+        if db_rows:
+            n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+            total_loaded += n
+            if total_loaded % 500 < len(db_rows):
+                print(f"  [{i + 1}/{len(missing)}] {clean_name}: {len(db_rows)} games loaded", flush=True)
+
+        if (i + 1) % 100 == 0:
+            print(f"  [{i + 1}/{len(missing)}] searched ({total_loaded} loaded)...", flush=True)
+
+    print(f"\nNHL API: {total_loaded} game logs loaded for {total_searched} players searched", flush=True)
+    return total_loaded
+
+
 # ─── EPL loader (FPL CSV) ───────────────────────────────────────────────────
 
 FPL_SEASONS = [
@@ -668,7 +810,20 @@ def load_mlb(league_id):
 def main():
     parser = argparse.ArgumentParser(description="Load historical game logs from public datasets")
     parser.add_argument("--league", type=str, help="Single league (nba, nfl, nhl, mlb, premier-league)")
+    parser.add_argument("--nhl-api", action="store_true",
+                        help="Use NHL API to fill missing NHL players (after moneypuck CSV load)")
     args = parser.parse_args()
+
+    if args.nhl_api:
+        leagues = sb_get("back_in_play_leagues", "select=league_id,slug")
+        lid_map = {l["slug"]: l["league_id"] for l in (leagues or [])}
+        nhl_id = lid_map.get("nhl")
+        if nhl_id:
+            print(f"\n{'=' * 50}")
+            print(f"Loading NHL game logs via NHL API (missing players)")
+            print(f"{'=' * 50}\n")
+            load_nhl_api(nhl_id)
+        return
 
     # Get league IDs
     leagues = sb_get("back_in_play_leagues", "select=league_id,slug")

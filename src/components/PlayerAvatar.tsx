@@ -12,15 +12,6 @@ interface PlayerAvatarProps {
  */
 export function PlayerAvatar({ src, name, size = 48, className = "" }: PlayerAvatarProps) {
   const [failed, setFailed] = useState(false);
-  const initials = name
-    .split(" ")
-    .map((w) => w[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
-
-  const sizeClass = `w-[${size}px] h-[${size}px]`;
   const style = { width: size, height: size };
 
   if (!src || failed) {

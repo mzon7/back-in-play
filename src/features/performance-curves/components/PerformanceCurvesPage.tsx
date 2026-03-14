@@ -465,7 +465,7 @@ export default function PerformanceCurvesPage() {
               <span className="text-base">&#x1F525;</span> Most Performance Impacting Injuries
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-              {mostImpactful.map((curve, idx) => {
+              {mostImpactful.map((curve) => {
                 const g1 = curve.median_pct_recent[0] != null ? Math.round(curve.median_pct_recent[0] * 100) : null;
                 const g10 = curve.median_pct_recent[9] != null ? Math.round(curve.median_pct_recent[9] * 100) : null;
                 const leagueLabel = LEAGUE_LABELS[curve.league_slug] ?? "";

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { SiteHeader } from "../components/SiteHeader";
 import { SEO } from "../components/seo/SEO";
 import {
@@ -9,8 +9,6 @@ import {
   jsonLdGraph,
 } from "../components/seo/seoHelpers";
 import { usePerformanceCurves } from "../features/performance-curves/lib/queries";
-import type { PerformanceCurve } from "../features/performance-curves/lib/types";
-
 const LEAGUE_LABELS: Record<string, string> = {
   nba: "NBA",
   nfl: "NFL",
@@ -38,8 +36,6 @@ function fmt(val: number | undefined | null): string {
 
 export default function MinutesRestrictionPage() {
   const { leagueSlug } = useParams<{ leagueSlug?: string }>();
-  const [searchParams] = useSearchParams();
-
   const league = leagueSlug && LEAGUE_LABELS[leagueSlug] ? leagueSlug : undefined;
   const leagueLabel = league ? LEAGUE_LABELS[league] : undefined;
   const leagueFull = league ? LEAGUE_FULL[league] : undefined;

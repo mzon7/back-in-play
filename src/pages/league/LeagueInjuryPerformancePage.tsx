@@ -9,7 +9,6 @@ import {
 import { usePerformanceCurves, usePositionsWithCurves } from "../../features/performance-curves/lib/queries";
 import { PerformanceCurveChart } from "../../features/performance-curves/components/PerformanceCurveChart";
 import type { PerformanceCurve } from "../../features/performance-curves/lib/types";
-import { LEAGUE_LABELS, STAT_LABELS, LEAGUE_STATS } from "../../features/performance-curves/lib/types";
 
 const LEAGUE_FULL: Record<string, string> = {
   nba: "NBA",
@@ -32,7 +31,6 @@ function slugify(s: string) {
 }
 
 function InjuryTypeRow({ curve }: { curve: PerformanceCurve }) {
-  const leagueSlug = curve.league_slug;
   const median10 = curve.median_pct_recent[9];
   const median1 = curve.median_pct_recent[0];
 

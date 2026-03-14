@@ -270,6 +270,11 @@ function playerContent(player, injuries) {
   h += `<li><a href="/${player.slug}-return-date">${esc(player.player_name)} return date</a></li>`;
   h += `<li><a href="/${player.league_slug}/${slugify(player.team_name)}-injuries">${esc(player.team_name)} injury report</a></li>`;
   h += `<li><a href="/${player.league_slug}-injuries">All ${esc(label)} injuries</a></li>`;
+  h += `<li><a href="/${player.league_slug}-injury-performance">${esc(label)} injury performance analysis</a></li>`;
+  h += `<li><a href="/performance-curves">Performance curves</a></li>`;
+  h += `<li><a href="/recovery-stats">Recovery statistics</a></li>`;
+  h += `<li><a href="/${player.league_slug}/returning-today">${esc(label)} players returning today</a></li>`;
+  h += `<li><a href="/${player.league_slug}-injury-analysis">${esc(label)} injury analysis</a></li>`;
   h += `</ul>`;
   h += `</div>`;
   return h;
@@ -394,6 +399,355 @@ function injuryTypeContent(injuryType, injurySlug, injuriesByLeague) {
   h += `</ul>`;
   h += `</div>`;
   return h;
+}
+
+// --- New page generators ---
+
+function returningTodayContent(leagueSlug, returningPlayers) {
+  const today = todayStr();
+  const year = new Date().getFullYear();
+  const isAll = !leagueSlug;
+  const label = isAll ? "All Leagues" : (LEAGUE_LABELS[leagueSlug] ?? leagueSlug.toUpperCase());
+
+  let h = `<div style="max-width:48rem;margin:0 auto;padding:1rem">`;
+  h += `<p style="font-size:11px;color:#666">Last updated: ${today}</p>`;
+  h += `<nav><a href="/">Home</a>${isAll ? "" : ` / <a href="/${leagueSlug}-injuries">${esc(label)} Injuries</a>`} / Returning Today</nav>`;
+  h += `<h1>${esc(label)} Players Returning From Injury Today (${year})</h1>`;
+  h += `<p>Track which ${isAll ? "" : esc(label) + " "}players are expected to return from injury today. Updated daily with the latest return-to-play updates.</p>`;
+
+  if (returningPlayers.length > 0) {
+    h += `<h2>${returningPlayers.length} Players Returning</h2><ul>`;
+    for (const p of returningPlayers) {
+      h += `<li><a href="/player/${esc(p.slug)}">${esc(p.player_name)}</a> — ${esc(p.team_name)} — ${esc(p.injury_type)}</li>`;
+    }
+    h += `</ul>`;
+  } else {
+    h += `<p>No players are currently expected to return today. Check back later for updates.</p>`;
+  }
+
+  // Cross-links
+  h += `<h3>Related</h3><ul>`;
+  if (isAll) {
+    for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+      h += `<li><a href="/${s}/returning-today">${l} Players Returning Today</a></li>`;
+    }
+  } else {
+    h += `<li><a href="/returning-today">All Leagues — Returning Today</a></li>`;
+    h += `<li><a href="/${leagueSlug}-injuries">${esc(label)} Injury Report</a></li>`;
+    h += `<li><a href="/${leagueSlug}-injury-performance">${esc(label)} Injury Performance Analysis</a></li>`;
+  }
+  h += `</ul></div>`;
+  return h;
+}
+
+function leagueInjuryPerformanceContent(leagueSlug, curveSummaries) {
+  const label = LEAGUE_LABELS[leagueSlug] ?? leagueSlug.toUpperCase();
+  const full = LEAGUE_FULL[leagueSlug] ?? label;
+  const year = new Date().getFullYear();
+  const totalCases = curveSummaries.reduce((s, c) => s + c.sample_size, 0);
+
+  let h = `<div style="max-width:48rem;margin:0 auto;padding:1rem">`;
+  h += `<nav><a href="/">Home</a> / <a href="/${leagueSlug}-injuries">${esc(label)} Injuries</a> / Injury Performance</nav>`;
+  h += `<h1>${esc(label)} Player Performance After Injury (${year})</h1>`;
+  h += `<p>How do ${esc(full)} players perform after returning from injury? Analysis of recovery curves across ${curveSummaries.length} injury types based on ${totalCases.toLocaleString()} historical cases.</p>`;
+
+  if (curveSummaries.length > 0) {
+    h += `<h2>Recovery Curves by Injury Type</h2>`;
+    h += `<table><thead><tr><th>Injury</th><th>Cases</th><th>Avg Recovery</th><th>Game 1</th><th>Game 10</th></tr></thead><tbody>`;
+    for (const c of curveSummaries) {
+      const g1 = c.game1 != null ? `${Math.round(c.game1 * 100)}%` : "—";
+      const g10 = c.game10 != null ? `${Math.round(c.game10 * 100)}%` : "—";
+      const recov = c.recovery_avg != null ? `${Math.round(c.recovery_avg)}d` : "—";
+      h += `<tr><td><a href="/injuries/${esc(slugify(c.injury_type))}">${esc(c.injury_type)}</a></td>`;
+      h += `<td>${c.sample_size}</td><td>${recov}</td><td>${g1}</td><td>${g10}</td></tr>`;
+    }
+    h += `</tbody></table>`;
+  }
+
+  h += `<h2>How ${esc(label)} Injuries Affect Player Performance</h2>`;
+  h += `<p>Understanding post-injury performance is critical for fantasy sports managers, sports bettors, and team analysts. Our data tracks ${esc(label)} players in their first 10 games back, comparing post-return stats against pre-injury baselines.</p>`;
+
+  h += `<h3>Related</h3><ul>`;
+  h += `<li><a href="/performance-curves">All Leagues — Performance Curves</a></li>`;
+  h += `<li><a href="/${leagueSlug}-injuries">${esc(label)} Injury Report</a></li>`;
+  h += `<li><a href="/recovery-stats">Recovery Statistics</a></li>`;
+  for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+    if (s !== leagueSlug) h += `<li><a href="/${s}-injury-performance">${l} Injury Performance</a></li>`;
+  }
+  h += `</ul></div>`;
+  return h;
+}
+
+function performanceCurvesContent(allCurveSummaries) {
+  const year = new Date().getFullYear();
+  const totalCases = allCurveSummaries.reduce((s, c) => s + c.sample_size, 0);
+
+  let h = `<div style="max-width:48rem;margin:0 auto;padding:1rem">`;
+  h += `<nav><a href="/">Home</a> / Performance Curves</nav>`;
+  h += `<h1>Post-Injury Performance Curves — All Leagues (${year})</h1>`;
+  h += `<p>How do professional athletes perform after returning from injury? Explore recovery curves across NBA, NFL, MLB, NHL, and EPL based on ${totalCases.toLocaleString()} historical cases.</p>`;
+
+  // Per-league links
+  h += `<h2>Performance by League</h2><ul>`;
+  for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+    h += `<li><a href="/${s}-injury-performance">${l} Injury Performance Analysis</a></li>`;
+  }
+  h += `</ul>`;
+
+  // Top injuries across all leagues
+  const top = [...allCurveSummaries].sort((a, b) => b.sample_size - a.sample_size).slice(0, 20);
+  if (top.length > 0) {
+    h += `<h2>Most Common Injuries</h2><ul>`;
+    for (const c of top) {
+      const g10 = c.game10 != null ? ` — Game 10: ${Math.round(c.game10 * 100)}%` : "";
+      h += `<li>${esc(c.injury_type)} (${esc(c.league)}) — ${c.sample_size} cases${g10}</li>`;
+    }
+    h += `</ul>`;
+  }
+
+  h += `<h2>About Performance Curves</h2>`;
+  h += `<p>Each performance curve tracks a player's composite stat score in their first 10 games back from injury, expressed as a percentage of their pre-injury baseline. Curves are computed using a 10-game pre-injury window with per-minute normalization, ratio capping at 3x, and trimmed means to handle outliers.</p>`;
+
+  h += `<h3>Related</h3><ul>`;
+  h += `<li><a href="/recovery-stats">Recovery Statistics</a></li>`;
+  h += `<li><a href="/returning-today">Players Returning Today</a></li>`;
+  for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+    h += `<li><a href="/${s}-injuries">${l} Injury Report</a></li>`;
+  }
+  h += `</ul></div>`;
+  return h;
+}
+
+function recoveryStatsContent(injuryTypeStats) {
+  const year = new Date().getFullYear();
+  const totalTypes = injuryTypeStats.length;
+
+  let h = `<div style="max-width:48rem;margin:0 auto;padding:1rem">`;
+  h += `<nav><a href="/">Home</a> / Recovery Statistics</nav>`;
+  h += `<h1>Sports Injury Recovery Statistics (${year})</h1>`;
+  h += `<p>Comprehensive recovery statistics for ${totalTypes} injury types across professional sports. Average recovery times, games missed, and severity analysis.</p>`;
+
+  if (injuryTypeStats.length > 0) {
+    h += `<h2>Recovery by Injury Type</h2>`;
+    h += `<table><thead><tr><th>Injury</th><th>Cases</th><th>Avg Recovery</th><th>Avg Games Missed</th></tr></thead><tbody>`;
+    for (const s of injuryTypeStats.slice(0, 30)) {
+      h += `<tr><td><a href="/injuries/${esc(slugify(s.type))}">${esc(s.type)}</a></td>`;
+      h += `<td>${s.count}</td><td>${s.avgRecov ? s.avgRecov + "d" : "—"}</td><td>${s.avgMissed ?? "—"}</td></tr>`;
+    }
+    h += `</tbody></table>`;
+  }
+
+  h += `<h3>Related</h3><ul>`;
+  h += `<li><a href="/performance-curves">Performance Curves</a></li>`;
+  h += `<li><a href="/returning-today">Players Returning Today</a></li>`;
+  for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+    h += `<li><a href="/${s}-injuries">${l} Injury Report</a></li>`;
+  }
+  h += `</ul></div>`;
+  return h;
+}
+
+function leagueInjuryAnalysisContent(leagueSlug, curveSummaries, injuryStats) {
+  const label = LEAGUE_LABELS[leagueSlug] ?? leagueSlug.toUpperCase();
+  const full = LEAGUE_FULL[leagueSlug] ?? label;
+  const year = new Date().getFullYear();
+  const totalCases = curveSummaries.reduce((s, c) => s + c.sample_size, 0);
+
+  let h = `<div style="max-width:48rem;margin:0 auto;padding:1rem">`;
+  h += `<nav><a href="/">Home</a> / <a href="/${leagueSlug}-injuries">${esc(label)} Injuries</a> / Injury Analysis</nav>`;
+  h += `<h1>${esc(label)} Injury Analysis Hub (${year})</h1>`;
+  h += `<p>Comprehensive ${esc(label)} injury analytics: recovery timelines, performance after injury, and return-to-play analysis based on ${totalCases.toLocaleString()} historical cases across ${curveSummaries.length} injury types.</p>`;
+
+  // Injury type analysis links
+  if (curveSummaries.length > 0) {
+    h += `<h2>Injury Type Analysis</h2><ul>`;
+    for (const c of curveSummaries.slice(0, 25)) {
+      h += `<li><a href="/injuries/${esc(slugify(c.injury_type))}">${esc(c.injury_type)}</a> — ${c.sample_size} cases`;
+      if (c.recovery_avg) h += `, ${Math.round(c.recovery_avg)}d avg recovery`;
+      h += `</li>`;
+    }
+    h += `</ul>`;
+  }
+
+  // Performance analysis links
+  h += `<h2>Performance After Injury</h2><ul>`;
+  h += `<li><a href="/${leagueSlug}-injury-performance">${esc(label)} Post-Injury Performance Curves</a></li>`;
+  for (const c of curveSummaries.slice(0, 5)) {
+    h += `<li><a href="/${leagueSlug}/${slugify(c.injury_type)}-injury-performance">${esc(c.injury_type)} Performance in ${esc(label)}</a></li>`;
+  }
+  h += `</ul>`;
+
+  // Related links
+  h += `<h2>Related Analysis</h2><ul>`;
+  h += `<li><a href="/${leagueSlug}/returning-today">${esc(label)} Players Returning Today</a></li>`;
+  h += `<li><a href="/${leagueSlug}/minutes-restriction-after-injury">${esc(label)} Minutes Restrictions</a></li>`;
+  h += `<li><a href="/performance-curves">All Leagues — Performance Curves</a></li>`;
+  h += `<li><a href="/recovery-stats">Recovery Statistics</a></li>`;
+  for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+    if (s !== leagueSlug) h += `<li><a href="/${s}-injury-analysis">${l} Injury Analysis</a></li>`;
+  }
+  h += `</ul>`;
+
+  // SEO text
+  h += `<h2>About ${esc(label)} Injury Analysis</h2>`;
+  h += `<p>Back In Play provides the most comprehensive ${esc(label)} injury analytics available. Our database tracks every ${esc(full)} injury, computes recovery curves from historical game log data, and analyzes how injuries impact player performance. Whether you're a fantasy ${esc(label)} manager looking for edges on returning players, a sports bettor evaluating injury impact on lines, or a team analyst studying injury trends — our data covers ${curveSummaries.length} injury types with ${totalCases.toLocaleString()} historical return cases.</p>`;
+  h += `</div>`;
+  return h;
+}
+
+function leagueInjuryTypePerformanceContent(leagueSlug, injuryType, curveSummary) {
+  const label = LEAGUE_LABELS[leagueSlug] ?? leagueSlug.toUpperCase();
+  const year = new Date().getFullYear();
+
+  let h = `<div style="max-width:48rem;margin:0 auto;padding:1rem">`;
+  h += `<nav><a href="/">Home</a> / <a href="/${leagueSlug}-injuries">${esc(label)} Injuries</a> / <a href="/injuries/${esc(slugify(injuryType))}">${esc(injuryType)}</a> / Performance</nav>`;
+  h += `<h1>${esc(injuryType)} Injury Performance in the ${esc(label)} (${year})</h1>`;
+
+  if (curveSummary) {
+    const g1 = curveSummary.game1 != null ? Math.round(curveSummary.game1 * 100) : null;
+    const g10 = curveSummary.game10 != null ? Math.round(curveSummary.game10 * 100) : null;
+    h += `<p>Analysis of how ${esc(label)} players perform after ${esc(injuryType.toLowerCase())} injuries, based on ${curveSummary.sample_size} historical cases.`;
+    if (g1) h += ` Players average ${g1}% of pre-injury performance in game 1`;
+    if (g10) h += ` and ${g10}% by game 10.`;
+    h += `</p>`;
+
+    h += `<h2>Recovery Overview</h2><dl>`;
+    h += `<dt>Sample Size</dt><dd>${curveSummary.sample_size} cases</dd>`;
+    if (curveSummary.recovery_avg) h += `<dt>Avg Recovery</dt><dd>${Math.round(curveSummary.recovery_avg)} days</dd>`;
+    if (g1) h += `<dt>Game 1 Performance</dt><dd>${g1}% of baseline</dd>`;
+    if (g10) h += `<dt>Game 10 Performance</dt><dd>${g10}% of baseline</dd>`;
+    h += `</dl>`;
+  }
+
+  // Related links
+  h += `<h2>Related</h2><ul>`;
+  h += `<li><a href="/${leagueSlug}-injury-performance">${esc(label)} All Injury Performance</a></li>`;
+  h += `<li><a href="/injuries/${esc(slugify(injuryType))}">${esc(injuryType)} Recovery Statistics</a></li>`;
+  h += `<li><a href="/${leagueSlug}-injury-analysis">${esc(label)} Injury Analysis Hub</a></li>`;
+  h += `<li><a href="/${leagueSlug}-injuries">${esc(label)} Injury Report</a></li>`;
+  h += `<li><a href="/performance-curves">All Performance Curves</a></li>`;
+  h += `<li><a href="/recovery-stats">Recovery Statistics</a></li>`;
+  h += `<li><a href="/${leagueSlug}/returning-today">${esc(label)} Returning Today</a></li>`;
+  h += `<li><a href="/${leagueSlug}/minutes-restriction-after-injury">${esc(label)} Minutes Restrictions</a></li>`;
+  h += `</ul>`;
+
+  h += `<p>${esc(injuryType)} injuries in the ${esc(label)} require careful monitoring of post-return performance. Our analysis tracks player stats across the first 10 games back from ${esc(injuryType.toLowerCase())} injuries, comparing them against pre-injury baselines to quantify the true performance impact. This data helps fantasy managers set realistic expectations and bettors adjust their models for returning players.</p>`;
+  h += `</div>`;
+  return h;
+}
+
+function minutesRestrictionContent(leagueSlug, curveSummaries) {
+  const isAll = !leagueSlug;
+  const label = isAll ? "All Leagues" : (LEAGUE_LABELS[leagueSlug] ?? leagueSlug.toUpperCase());
+  const year = new Date().getFullYear();
+
+  // Compute average minutes pct from curves
+  const withMinutes = curveSummaries.filter(c => c.minutes_g1 != null);
+  const avgG1 = withMinutes.length > 0 ? Math.round(withMinutes.reduce((s, c) => s + c.minutes_g1, 0) / withMinutes.length * 100) : null;
+  const avgG10 = withMinutes.length > 0 ? Math.round(withMinutes.reduce((s, c) => s + c.minutes_g10, 0) / withMinutes.length * 100) : null;
+
+  let h = `<div style="max-width:48rem;margin:0 auto;padding:1rem">`;
+  h += `<nav><a href="/">Home</a>${isAll ? "" : ` / <a href="/${leagueSlug}-injuries">${esc(label)} Injuries</a>`} / Minutes Restriction</nav>`;
+  h += `<h1>${isAll ? "" : esc(label) + " "}Minutes Restriction After Injury (${year})</h1>`;
+  h += `<p>How long do players have minutes restrictions after returning from injury? `;
+  if (avgG1) h += `On average, ${isAll ? "" : esc(label) + " "}players play ${avgG1}% of pre-injury minutes in game 1 and ${avgG10 ?? "N/A"}% by game 10. `;
+  h += `Analysis based on historical return-to-play data.</p>`;
+
+  if (withMinutes.length > 0) {
+    h += `<h2>Minutes by Injury Type</h2>`;
+    h += `<table><thead><tr><th>Injury</th><th>Cases</th><th>Game 1 Min%</th><th>Game 10 Min%</th></tr></thead><tbody>`;
+    for (const c of withMinutes.sort((a, b) => (a.minutes_g1 ?? 1) - (b.minutes_g1 ?? 1)).slice(0, 20)) {
+      h += `<tr><td>${esc(c.injury_type)}</td><td>${c.sample_size}</td>`;
+      h += `<td>${c.minutes_g1 != null ? Math.round(c.minutes_g1 * 100) + "%" : "—"}</td>`;
+      h += `<td>${c.minutes_g10 != null ? Math.round(c.minutes_g10 * 100) + "%" : "—"}</td></tr>`;
+    }
+    h += `</tbody></table>`;
+  }
+
+  // FAQ
+  h += `<h2>FAQ</h2>`;
+  h += `<h3>How long do players typically have minutes restrictions?</h3>`;
+  h += `<p>Most players return to near-full workloads within 3-5 games. ${avgG1 ? `Game 1 averages ${avgG1}% minutes, ` : ""}reaching near baseline by game 10.</p>`;
+  h += `<h3>Which injuries cause the longest minutes restrictions?</h3>`;
+  h += `<p>ACL injuries, fractures, and surgeries typically result in the most significant and prolonged minutes restrictions.</p>`;
+
+  // Links
+  h += `<h3>Related</h3><ul>`;
+  if (isAll) {
+    for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+      h += `<li><a href="/${s}/minutes-restriction-after-injury">${l} Minutes Restrictions</a></li>`;
+    }
+  }
+  h += `<li><a href="/performance-curves">Performance Curves</a></li>`;
+  h += `<li><a href="/recovery-stats">Recovery Statistics</a></li>`;
+  h += `<li><a href="/returning-today">Players Returning Today</a></li>`;
+  h += `<li><a href="/players-returning-from-injury-this-week">Returning This Week</a></li>`;
+  for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+    h += `<li><a href="/${s}-injuries">${l} Injury Report</a></li>`;
+  }
+  h += `</ul></div>`;
+  return h;
+}
+
+function returningThisWeekContent(leagueSlug, returningPlayers) {
+  const isAll = !leagueSlug;
+  const label = isAll ? "All Leagues" : (LEAGUE_LABELS[leagueSlug] ?? leagueSlug.toUpperCase());
+  const year = new Date().getFullYear();
+
+  let h = `<div style="max-width:48rem;margin:0 auto;padding:1rem">`;
+  h += `<nav><a href="/">Home</a>${isAll ? "" : ` / <a href="/${leagueSlug}-injuries">${esc(label)} Injuries</a>`} / Returning This Week</nav>`;
+  h += `<h1>${isAll ? "" : esc(label) + " "}Players Returning From Injury This Week (${year})</h1>`;
+  h += `<p>Track which ${isAll ? "" : esc(label) + " "}players are expected to return from injury this week. Essential for fantasy managers and bettors.</p>`;
+
+  if (returningPlayers.length > 0) {
+    h += `<h2>${returningPlayers.length} Expected Returns</h2><ul>`;
+    for (const p of returningPlayers) {
+      h += `<li><a href="/player/${esc(p.slug)}">${esc(p.player_name)}</a> — ${esc(p.team_name)} — ${esc(p.injury_type)}`;
+      if (p.games_missed) h += ` (${p.games_missed} games missed)`;
+      h += `</li>`;
+    }
+    h += `</ul>`;
+  } else {
+    h += `<p>No players are currently expected to return this week.</p>`;
+  }
+
+  h += `<p>Players returning from injury often face minutes restrictions and reduced performance in their first games back. Check our <a href="/performance-curves">performance curves</a> to see typical recovery trajectories.</p>`;
+
+  h += `<h3>Related</h3><ul>`;
+  h += `<li><a href="/returning-today">Returning Today</a></li>`;
+  h += `<li><a href="/performance-curves">Performance Curves</a></li>`;
+  h += `<li><a href="/minutes-restriction-after-injury">Minutes Restrictions</a></li>`;
+  h += `<li><a href="/recovery-stats">Recovery Statistics</a></li>`;
+  h += `<li><a href="/props">Player Props</a></li>`;
+  for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+    h += `<li><a href="/${s}-injuries">${l} Injury Report</a></li>`;
+  }
+  h += `</ul></div>`;
+  return h;
+}
+
+// --- Sitemap generation ---
+function generateSitemapIndex(segments) {
+  let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+  xml += '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
+  for (const seg of segments) {
+    xml += `  <sitemap>\n    <loc>${SITE}/${seg.file}</loc>\n    <lastmod>${new Date().toISOString().slice(0, 10)}</lastmod>\n  </sitemap>\n`;
+  }
+  xml += '</sitemapindex>';
+  return xml;
+}
+
+function generateSitemapSegment(urls) {
+  const today = new Date().toISOString().slice(0, 10);
+  let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+  xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
+  for (const u of urls) {
+    xml += `  <url>\n    <loc>${SITE}${u.loc}</loc>\n    <lastmod>${today}</lastmod>\n`;
+    xml += `    <changefreq>${u.changefreq ?? "daily"}</changefreq>\n`;
+    xml += `    <priority>${u.priority ?? "0.5"}</priority>\n  </url>\n`;
+  }
+  xml += '</urlset>';
+  return xml;
 }
 
 // --- Main ---
@@ -589,9 +943,7 @@ async function main() {
     const year = new Date().getFullYear();
 
     const current = realInjuries[0];
-    const title = current && current.status !== "returned"
-      ? `${player.player_name} Injury Update (${year}) - Status & Return Date`
-      : `Is ${player.player_name} Injured? (${year}) - Injury Status & History`;
+    const title = `${player.player_name} Injury History & Performance After Injury (${label})`;
 
     const description = current
       ? `${player.player_name} injury status: ${current.status.replace(/_/g, " ")}. ${current.injury_type}. ${player.team_name} (${label}).`
@@ -624,7 +976,367 @@ async function main() {
     }
   }
 
+  // 6. Returning Today pages
+  // Find players returning today (status = "returned" with return_date = today)
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const returningToday = enrichedInjuries.filter(i =>
+    (i.status === "returned" || i.status === "active") && i.return_date === todayISO
+  ).map(i => ({ slug: i.player_slug, player_name: i.player_name, team_name: i.team_name, injury_type: i.injury_type, league_slug: i.league_slug }));
+
+  writePage("/returning-today", {
+    title: `Players Returning From Injury Today (${new Date().getFullYear()})`,
+    description: "Which players are returning from injury today? Live tracker for NBA, NFL, MLB, NHL, and EPL players coming back from injury.",
+    content: returningTodayContent(null, returningToday),
+  });
+  pageCount++;
+
+  for (const [slug, label] of Object.entries(LEAGUE_LABELS)) {
+    const leagueReturning = returningToday.filter(p => p.league_slug === slug);
+    writePage(`/${slug}/returning-today`, {
+      title: `${label} Players Returning From Injury Today`,
+      description: `Which ${label} players are returning from injury today? Daily return-to-play tracker.`,
+      content: returningTodayContent(slug, leagueReturning),
+    });
+    pageCount++;
+  }
+
+  // 7. Performance curves & league injury performance pages
+  // Fetch curve summaries from performance_curves table
+  let curveSummaries = [];
+  try {
+    let cOffset = 0;
+    while (true) {
+      const batch = await sbGet("performance_curves",
+        `select=curve_id,league_slug,injury_type,injury_type_slug,position,sample_size,recovery_days_avg,games_missed_avg,median_pct_recent&position=is.null&injury_type_slug=neq.other&order=sample_size.desc&limit=1000&offset=${cOffset}`
+      );
+      curveSummaries.push(...batch);
+      if (batch.length < 1000) break;
+      cOffset += 1000;
+    }
+  } catch (e) {
+    console.warn("Prerender: Could not fetch performance_curves:", e.message);
+  }
+
+  if (curveSummaries.length > 0) {
+    // All-leagues performance curves page
+    const allCurveSummary = curveSummaries.map(c => ({
+      injury_type: c.injury_type,
+      league: LEAGUE_LABELS[c.league_slug] ?? c.league_slug,
+      sample_size: c.sample_size,
+      game1: Array.isArray(c.median_pct_recent) ? c.median_pct_recent[0] : null,
+      game10: Array.isArray(c.median_pct_recent) ? c.median_pct_recent[9] : null,
+      recovery_avg: c.recovery_days_avg,
+    }));
+
+    writePage("/performance-curves", {
+      title: `Post-Injury Performance Curves (${new Date().getFullYear()}) - All Leagues`,
+      description: "How do athletes perform after returning from injury? Recovery curves for NBA, NFL, MLB, NHL, and EPL based on historical data.",
+      content: performanceCurvesContent(allCurveSummary),
+    });
+    pageCount++;
+
+    // Per-league injury performance pages
+    for (const [slug, label] of Object.entries(LEAGUE_LABELS)) {
+      const leagueCurves = curveSummaries
+        .filter(c => c.league_slug === slug)
+        .map(c => ({
+          injury_type: c.injury_type,
+          sample_size: c.sample_size,
+          game1: Array.isArray(c.median_pct_recent) ? c.median_pct_recent[0] : null,
+          game10: Array.isArray(c.median_pct_recent) ? c.median_pct_recent[9] : null,
+          recovery_avg: c.recovery_days_avg,
+        }));
+
+      writePage(`/${slug}-injury-performance`, {
+        title: `${label} Injury Performance Analysis (${new Date().getFullYear()})`,
+        description: `How do ${label} players perform after returning from injury? Recovery curves across ${leagueCurves.length} injury types.`,
+        content: leagueInjuryPerformanceContent(slug, leagueCurves),
+      });
+      pageCount++;
+    }
+  }
+
+  // 8. Recovery stats page
+  const injuryTypeStats = [];
+  for (const [typeSlug, { type, byLeague }] of injuryTypeMap) {
+    const allInjs = Object.values(byLeague).flat();
+    const recovDays = allInjs.filter(i => i.recovery_days > 0).map(i => i.recovery_days);
+    const missed = allInjs.filter(i => i.games_missed > 0).map(i => i.games_missed);
+    injuryTypeStats.push({
+      type,
+      count: allInjs.length,
+      avgRecov: recovDays.length > 0 ? Math.round(recovDays.reduce((a, b) => a + b, 0) / recovDays.length) : null,
+      avgMissed: missed.length > 0 ? Math.round(missed.reduce((a, b) => a + b, 0) / missed.length) : null,
+    });
+  }
+  injuryTypeStats.sort((a, b) => b.count - a.count);
+
+  writePage("/recovery-stats", {
+    title: `Sports Injury Recovery Statistics (${new Date().getFullYear()})`,
+    description: "Recovery statistics for sports injuries across NBA, NFL, MLB, NHL, EPL. Average recovery times, games missed, and severity data.",
+    content: recoveryStatsContent(injuryTypeStats),
+  });
+  pageCount++;
+
+  // 9a. League injury report pages (highest traffic potential)
+  for (const [slug, label] of Object.entries(LEAGUE_LABELS)) {
+    const leagueInjuries = enrichedInjuries.filter(i => i.league_slug === slug);
+    const active = leagueInjuries.filter(i => i.status !== "returned" && i.status !== "active");
+    const outCount = active.filter(i => ["out", "ir", "injured_reserve"].includes(i.status)).length;
+    const questionable = active.filter(i => ["questionable", "doubtful", "day_to_day", "probable"].includes(i.status)).length;
+    const leagueTeams = allTeams.filter(t => teamMap.get(t.team_id)?.league_slug === slug || leagueMap.get(t.league_id)?.slug === slug);
+
+    // Today's date for archive URL
+    const todayLong = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+    let h = `<div style="max-width:48rem;margin:0 auto;padding:1rem">`;
+    h += `<p style="font-size:11px;color:#666">Updated: ${todayStr()}</p>`;
+    h += `<nav><a href="/">Home</a> / <a href="/${slug}-injuries">${esc(label)} Injuries</a> / Injury Report</nav>`;
+    h += `<h1>${esc(label)} Injury Report Today &mdash; ${todayStr()}</h1>`;
+    h += `<p>${active.length} ${esc(label)} players currently injured. ${outCount} confirmed out, ${questionable} questionable or day-to-day. Updated throughout the day with the latest ${esc(label)} injury news.</p>`;
+
+    // Major injuries
+    const majorOut = active.filter(i => ["out", "ir", "injured_reserve"].includes(i.status)).slice(0, 30);
+    if (majorOut.length > 0) {
+      h += `<h2>Players Out</h2><ul>`;
+      for (const inj of majorOut) {
+        h += `<li><a href="/player/${esc(inj.player_slug)}">${esc(inj.player_name)}</a> — ${esc(inj.team_name)} — ${esc(inj.injury_type)} (${esc(inj.status.replace(/_/g, " "))})</li>`;
+      }
+      h += `</ul>`;
+    }
+
+    // Questionable
+    const quest = active.filter(i => ["questionable", "doubtful", "day_to_day", "probable"].includes(i.status)).slice(0, 20);
+    if (quest.length > 0) {
+      h += `<h2>Questionable / Day-to-Day</h2><ul>`;
+      for (const inj of quest) {
+        h += `<li><a href="/player/${esc(inj.player_slug)}">${esc(inj.player_name)}</a> — ${esc(inj.team_name)} — ${esc(inj.injury_type)} (${esc(inj.status.replace(/_/g, " "))})</li>`;
+      }
+      h += `</ul>`;
+    }
+
+    // Returning
+    const recentReturn = leagueInjuries.filter(i => (i.status === "returned" || i.status === "active") && i.return_date === todayISO).slice(0, 10);
+    if (recentReturn.length > 0) {
+      h += `<h2>Players Returning Today</h2><ul>`;
+      for (const inj of recentReturn) {
+        h += `<li><a href="/player/${esc(inj.player_slug)}">${esc(inj.player_name)}</a> — ${esc(inj.team_name)} — recovered from ${esc(inj.injury_type)}</li>`;
+      }
+      h += `</ul>`;
+    }
+
+    // Analytics text
+    const injTypes = new Map();
+    for (const inj of active) { injTypes.set(inj.injury_type, (injTypes.get(inj.injury_type) ?? 0) + 1); }
+    const topType = [...injTypes.entries()].sort((a, b) => b[1] - a[1])[0];
+
+    h += `<h2>${esc(label)} Injury Analysis</h2>`;
+    h += `<p>The ${esc(LEAGUE_FULL[slug] ?? label)} currently has ${active.length} players on the injury report. `;
+    if (topType) h += `The most common injury type is ${esc(topType[0])} with ${topType[1]} cases. `;
+    h += `This injury report is updated throughout the day as new information becomes available from team reports and official league sources. `;
+    h += `For detailed recovery analysis, see our <a href="/${slug}-injury-performance">${esc(label)} performance curves</a> which track how players perform in their first 10 games back from each injury type. `;
+    h += `Fantasy ${esc(LEAGUE_SPORT[slug] ?? "sports")} managers and bettors can use our <a href="/${slug}/minutes-restriction-after-injury">minutes restriction data</a> to anticipate workload limitations for returning players.</p>`;
+
+    // Related links
+    h += `<h3>Related</h3><ul>`;
+    h += `<li><a href="/${slug}-injuries">${esc(label)} Injury Report — Full List</a></li>`;
+    h += `<li><a href="/${slug}-injury-performance">${esc(label)} Injury Performance Analysis</a></li>`;
+    h += `<li><a href="/${slug}-injury-analysis">${esc(label)} Injury Analysis Hub</a></li>`;
+    h += `<li><a href="/${slug}/returning-today">${esc(label)} Players Returning Today</a></li>`;
+    h += `<li><a href="/${slug}/minutes-restriction-after-injury">${esc(label)} Minutes Restrictions</a></li>`;
+    h += `<li><a href="/performance-curves">All Performance Curves</a></li>`;
+    h += `<li><a href="/recovery-stats">Recovery Statistics</a></li>`;
+    h += `<li><a href="/props">Player Props</a></li>`;
+    for (const [s, l] of Object.entries(LEAGUE_LABELS)) {
+      if (s !== slug) h += `<li><a href="/${s}-injury-report">${l} Injury Report</a></li>`;
+    }
+    h += `</ul></div>`;
+
+    // Write today's report
+    writePage(`/${slug}-injury-report`, {
+      title: `${label} Injury Report Today (${todayStr()})`,
+      description: `${label} injury report for ${todayStr()}. ${active.length} players injured, ${questionable} questionable. Latest ${label} injury updates.`,
+      content: h,
+    });
+    pageCount++;
+
+    // Write dated archive version
+    writePage(`/${slug}-injury-report-${todayLong}`, {
+      title: `${label} Injury Report — ${todayStr()}`,
+      description: `${label} injury report for ${todayStr()}. ${active.length} players injured. Full injury list with return dates.`,
+      content: h,
+    });
+    pageCount++;
+  }
+
+  // 9b. League injury analysis hub pages
+  for (const [slug, label] of Object.entries(LEAGUE_LABELS)) {
+    const leagueCurves = curveSummaries
+      .filter(c => c.league_slug === slug)
+      .map(c => ({
+        injury_type: c.injury_type,
+        sample_size: c.sample_size,
+        game1: Array.isArray(c.median_pct_recent) ? c.median_pct_recent[0] : null,
+        game10: Array.isArray(c.median_pct_recent) ? c.median_pct_recent[9] : null,
+        recovery_avg: c.recovery_days_avg,
+      }));
+
+    writePage(`/${slug}-injury-analysis`, {
+      title: `${label} Injury Analysis (${new Date().getFullYear()})`,
+      description: `Comprehensive ${label} injury analysis: recovery data, performance impact, and return-to-play analytics.`,
+      content: leagueInjuryAnalysisContent(slug, leagueCurves, []),
+    });
+    pageCount++;
+  }
+
+  // 10. League + injury type performance pages (e.g., /nba/hamstring-injury-performance)
+  if (curveSummaries.length > 0) {
+    for (const c of curveSummaries) {
+      const typeSlug = slugify(c.injury_type);
+      if (!typeSlug || typeSlug === "other") continue;
+      const curveSummary = {
+        injury_type: c.injury_type,
+        sample_size: c.sample_size,
+        game1: Array.isArray(c.median_pct_recent) ? c.median_pct_recent[0] : null,
+        game10: Array.isArray(c.median_pct_recent) ? c.median_pct_recent[9] : null,
+        recovery_avg: c.recovery_days_avg,
+      };
+      const label = LEAGUE_LABELS[c.league_slug] ?? c.league_slug.toUpperCase();
+
+      writePage(`/${c.league_slug}/${typeSlug}-injury-performance`, {
+        title: `${c.injury_type} Performance — ${label} (${new Date().getFullYear()})`,
+        description: `How do ${label} players perform after ${c.injury_type.toLowerCase()} injuries? ${c.sample_size} cases analyzed.`,
+        content: leagueInjuryTypePerformanceContent(c.league_slug, c.injury_type, curveSummary),
+      });
+      pageCount++;
+    }
+  }
+
+  // 11. Minutes restriction pages
+  const curvesWithMinutes = curveSummaries.map(c => ({
+    injury_type: c.injury_type,
+    sample_size: c.sample_size,
+    minutes_g1: Array.isArray(c.median_pct_recent) ? c.median_pct_recent[0] : null, // approximate
+    minutes_g10: Array.isArray(c.median_pct_recent) ? c.median_pct_recent[9] : null,
+    league_slug: c.league_slug,
+  }));
+
+  writePage("/minutes-restriction-after-injury", {
+    title: `Minutes Restriction After Injury (${new Date().getFullYear()})`,
+    description: "How long do athletes have minutes restrictions after injury? Data analysis across NBA, NFL, MLB, NHL, EPL.",
+    content: minutesRestrictionContent(null, curvesWithMinutes),
+  });
+  pageCount++;
+
+  for (const [slug, label] of Object.entries(LEAGUE_LABELS)) {
+    writePage(`/${slug}/minutes-restriction-after-injury`, {
+      title: `${label} Minutes Restriction After Injury`,
+      description: `How long do ${label} players have minutes restrictions after injury? Data-driven analysis.`,
+      content: minutesRestrictionContent(slug, curvesWithMinutes.filter(c => c.league_slug === slug)),
+    });
+    pageCount++;
+  }
+
+  // 12. Returning this week pages
+  const endOfWeek = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  const returningThisWeek = enrichedInjuries.filter(i =>
+    i.expected_return && i.expected_return >= todayISO && i.expected_return <= endOfWeek &&
+    i.status !== "returned" && i.status !== "active"
+  ).map(i => ({ slug: i.player_slug, player_name: i.player_name, team_name: i.team_name, injury_type: i.injury_type, league_slug: i.league_slug, games_missed: i.games_missed }));
+
+  writePage("/players-returning-from-injury-this-week", {
+    title: `Players Returning This Week (${new Date().getFullYear()})`,
+    description: `${returningThisWeek.length} players expected to return from injury this week across NBA, NFL, MLB, NHL, EPL.`,
+    content: returningThisWeekContent(null, returningThisWeek),
+  });
+  pageCount++;
+
+  for (const [slug, label] of Object.entries(LEAGUE_LABELS)) {
+    const leagueReturning = returningThisWeek.filter(p => p.league_slug === slug);
+    writePage(`/${slug}/players-returning-from-injury-this-week`, {
+      title: `${label} Players Returning This Week`,
+      description: `${leagueReturning.length} ${label} players expected to return from injury this week.`,
+      content: returningThisWeekContent(slug, leagueReturning),
+    });
+    pageCount++;
+  }
+
   console.log(`Prerender: Generated ${pageCount} pages`);
+
+  // 13. Generate segmented sitemaps
+  const sitemapUrls = {
+    core: [
+      { loc: "/", priority: "1.0", changefreq: "hourly" },
+      { loc: "/returning-today", priority: "0.8", changefreq: "daily" },
+      { loc: "/players-returning-from-injury-this-week", priority: "0.8", changefreq: "daily" },
+      { loc: "/performance-curves", priority: "0.7", changefreq: "weekly" },
+      { loc: "/recovery-stats", priority: "0.7", changefreq: "weekly" },
+      { loc: "/minutes-restriction-after-injury", priority: "0.7", changefreq: "weekly" },
+    ],
+    leagues: [],
+    teams: [],
+    injuries: [],
+    performance: [],
+    players: [],
+  };
+
+  // League pages
+  for (const [slug, label] of Object.entries(LEAGUE_LABELS)) {
+    sitemapUrls.core.push({ loc: `/${slug}/returning-today`, priority: "0.7", changefreq: "daily" });
+    sitemapUrls.core.push({ loc: `/${slug}/players-returning-from-injury-this-week`, priority: "0.7", changefreq: "daily" });
+    sitemapUrls.core.push({ loc: `/${slug}/minutes-restriction-after-injury`, priority: "0.7", changefreq: "weekly" });
+    sitemapUrls.leagues.push({ loc: `/${slug}-injuries`, priority: "0.9", changefreq: "hourly" });
+    sitemapUrls.leagues.push({ loc: `/${slug}-injury-performance`, priority: "0.7", changefreq: "weekly" });
+    sitemapUrls.leagues.push({ loc: `/${slug}-injury-analysis`, priority: "0.7", changefreq: "weekly" });
+    sitemapUrls.leagues.push({ loc: `/${slug}-injury-report`, priority: "0.9", changefreq: "hourly" });
+  }
+
+  // League + injury type performance pages
+  for (const c of curveSummaries) {
+    const typeSlug = slugify(c.injury_type);
+    if (typeSlug && typeSlug !== "other") {
+      sitemapUrls.performance.push({ loc: `/${c.league_slug}/${typeSlug}-injury-performance`, priority: "0.6", changefreq: "weekly" });
+    }
+  }
+
+  // Team pages
+  for (const league of leagues) {
+    const leagueTeams = allTeams.filter(t => t.league_id === league.league_id);
+    for (const t of leagueTeams) {
+      sitemapUrls.teams.push({ loc: `/${league.slug}/${slugify(t.team_name)}-injuries`, priority: "0.8", changefreq: "daily" });
+    }
+  }
+
+  // Injury type pages
+  for (const [typeSlug] of injuryTypeMap) {
+    sitemapUrls.injuries.push({ loc: `/injuries/${typeSlug}`, priority: "0.6", changefreq: "weekly" });
+  }
+
+  // Player pages
+  for (const [, player] of playerById) {
+    const injuries = injByPlayer.get(player.player_id) ?? allInjByPlayer.get(player.player_id) ?? [];
+    const realInj = injuries.filter(i => i.status !== "active");
+    const isNotable = player.is_star || player.is_starter || (player.league_rank && player.league_rank <= 200);
+    if (realInj.length === 0 && !isNotable) continue;
+    sitemapUrls.players.push({ loc: `/player/${player.slug}`, priority: "0.7", changefreq: "daily" });
+    if (realInj.length > 0 || isNotable) {
+      sitemapUrls.players.push({ loc: `/${player.slug}-return-date`, priority: "0.8", changefreq: "daily" });
+    }
+  }
+
+  // Write segment files
+  const segments = [];
+  for (const [name, urls] of Object.entries(sitemapUrls)) {
+    if (urls.length === 0) continue;
+    const filename = `sitemap-${name}.xml`;
+    fs.writeFileSync(path.join(DIST, filename), generateSitemapSegment(urls));
+    segments.push({ file: filename });
+  }
+
+  // Write sitemap index
+  fs.writeFileSync(path.join(DIST, "sitemap.xml"), generateSitemapIndex(segments));
+  const totalUrls = Object.values(sitemapUrls).reduce((s, u) => s + u.length, 0);
+  console.log(`Prerender: Sitemap index with ${segments.length} segments, ${totalUrls} total URLs`);
 }
 
 main().catch((err) => {

@@ -228,7 +228,7 @@ function InjuryCard({ inj, showLeague }: { inj: InjuryRow; showLeague?: boolean 
         />
         <div className="flex items-start gap-3">
           {/* Headshot or rank badge */}
-          <PlayerAvatar src={inj.headshot_url} name={inj.player_name} size={44} className="rounded-full" />
+          <PlayerAvatar src={inj.headshot_url} name={inj.player_name ?? ""} size={44} className="rounded-full" />
 
           <div className="min-w-0 flex-1 leading-relaxed">
             <div className="flex items-center justify-between gap-2">

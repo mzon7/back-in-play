@@ -1467,11 +1467,34 @@ def _ensure_injury_columns():
 
 # ─── Injury history enrichment ────────────────────────────────────────────────
 
-def enrich_injury_history():
+def enrich_injury_history(league=None):
     """Compute per-injury context: total prior injuries, same body part recurrence,
     days since last injury, injury number this season, and performance impact.
     Run this AFTER classify_all_injuries and audit_returns.
+    Optionally filter to a single league for faster testing.
     """
+    league_filter = ""
+    if league:
+        # Resolve league slug to league_id, then get player_ids for that league
+        leagues_data = sb_get("back_in_play_leagues", f"select=league_id&slug=eq.{league}")
+        if not leagues_data:
+            print(f"[ENRICH] League '{league}' not found", flush=True)
+            return
+        league_id = leagues_data[0]["league_id"]
+        # Get all player_ids for this league
+        league_player_ids = set()
+        lp_offset = 0
+        while True:
+            lp = sb_get("back_in_play_players",
+                         f"select=player_id&league_id=eq.{league_id}&limit=1000&offset={lp_offset}")
+            if not lp:
+                break
+            league_player_ids.update(p["player_id"] for p in lp)
+            if len(lp) < 1000:
+                break
+            lp_offset += 1000
+        print(f"[ENRICH] Filtering to {len(league_player_ids)} players in {league}", flush=True)
+
     print("[ENRICH] Loading all injuries ordered by player and date...", flush=True)
 
     # Load all injuries with player info
@@ -1490,6 +1513,11 @@ def enrich_injury_history():
             break
 
     print(f"  Loaded {len(all_injuries)} injuries", flush=True)
+
+    # Filter to league if specified
+    if league and league_player_ids:
+        all_injuries = [inj for inj in all_injuries if inj["player_id"] in league_player_ids]
+        print(f"  Filtered to {len(all_injuries)} injuries for {league}", flush=True)
 
     # Get league info for each player (needed for season calculation)
     player_ids = list(set(inj["player_id"] for inj in all_injuries))
@@ -1578,12 +1606,31 @@ def enrich_injury_history():
                                         f"&composite=not.is.null"
                                         f"&order=game_date.asc&limit=5")
 
-                    if pre_logs and len(pre_logs) >= 3 and post_logs and len(post_logs) >= 1:
+                    pre_count = len(pre_logs) if pre_logs else 0
+
+                    # If no current-season pre-games, try prior season
+                    if pre_count < 1:
+                        d_inj = inj["date_injured"]
+                        try:
+                            inj_year = int(d_inj[:4])
+                            prior_logs = sb_get("back_in_play_player_game_logs",
+                                f"select=composite&player_id=eq.{pid}"
+                                f"&game_date=lt.{inj_year}-01-01"
+                                f"&composite=not.is.null"
+                                f"&order=game_date.desc&limit=10")
+                            if prior_logs:
+                                pre_logs = prior_logs
+                                pre_count = len(pre_logs)
+                        except (ValueError, TypeError):
+                            pass
+
+                    if pre_count >= 1 and post_logs and len(post_logs) >= 1:
                         pre_avg = statistics.mean(g["composite"] for g in pre_logs if g.get("composite") is not None)
                         post_avg = statistics.mean(g["composite"] for g in post_logs if g.get("composite") is not None)
 
                         patch["pre_injury_composite_avg"] = round(pre_avg, 2)
                         patch["post_return_composite_avg"] = round(post_avg, 2)
+                        patch["pre_games_count"] = pre_count
                         if pre_avg > 0:
                             patch["performance_drop_pct"] = round((post_avg - pre_avg) / pre_avg * 100, 1)
                         total_perf += 1
@@ -1613,18 +1660,26 @@ def audit_returns(league=None):
     """
     print("[AUDIT] Loading all injuries...", flush=True)
 
-    # Get all injuries (not just returned ones)
-    params = "select=injury_id,player_id,injury_type,injury_type_slug,date_injured,return_date,status,games_missed,recovery_days"
-    params += "&date_injured=not.is.null"
-    if league:
-        pass  # Filter client-side after joining
-    params += "&order=date_injured.desc"
-    params += "&limit=50000"
+    # Paginate to get ALL injuries
+    all_injuries = []
+    offset = 0
+    page_size = 1000
+    while True:
+        params = "select=injury_id,player_id,injury_type,injury_type_slug,date_injured,return_date,status,games_missed,recovery_days"
+        params += "&date_injured=not.is.null"
+        params += f"&order=date_injured.desc&limit={page_size}&offset={offset}"
+        page = sb_get("back_in_play_injuries", params)
+        if not page:
+            break
+        all_injuries.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
 
-    all_injuries = sb_get("back_in_play_injuries", params)
     if not all_injuries:
         print("  No injuries found", flush=True)
         return
+    print(f"  Loaded {len(all_injuries)} total injuries", flush=True)
 
     # Get player info
     player_ids = list(set(i["player_id"] for i in all_injuries))
@@ -2087,8 +2142,7 @@ def phase_4_compute(cases, league=None):
     audited = 0
 
     for c in cases:
-        if not c.get("sport_ref_id"):
-            continue
+        # Use player_id directly — sport_ref_id not needed for game log lookup
         ls = c["league_slug"]
         if league and ls != league:
             continue
@@ -2104,8 +2158,20 @@ def phase_4_compute(cases, league=None):
         season_ret = _season_for_date(d_return, ls)
         seasons_str = f"{season_inj}" if season_inj == season_ret else f"{season_inj},{season_ret}"
 
+        # Stat columns relevant per league
+        LEAGUE_STATS = {
+            "nba": ["stat_pts", "stat_reb", "stat_ast", "stat_stl", "stat_blk"],
+            "nfl": ["stat_pass_yds", "stat_pass_td", "stat_rush_yds", "stat_rush_td",
+                     "stat_rec", "stat_rec_yds"],
+            "nhl": ["stat_goals", "stat_assists", "stat_sog"],
+            "mlb": ["stat_h", "stat_hr", "stat_rbi", "stat_r", "stat_sb"],
+            "premier-league": ["stat_goals", "stat_assists"],
+        }
+        stat_cols = LEAGUE_STATS.get(ls, ["stat_goals", "stat_assists"])
+        select_cols = ",".join(["game_date", "composite", "minutes"] + stat_cols)
+
         logs = sb_get("back_in_play_player_game_logs",
-                      f"select=game_date,composite,minutes&player_id=eq.{c['player_id']}&season=in.({seasons_str})&order=game_date.asc")
+                      f"select={select_cols}&player_id=eq.{c['player_id']}&season=in.({seasons_str})&order=game_date.asc")
         if not logs:
             continue
 
@@ -2116,7 +2182,11 @@ def phase_4_compute(cases, league=None):
                 gd = datetime.strptime(lg["game_date"], "%Y-%m-%d").date()
                 comp = lg.get("composite")
                 if comp is not None:
-                    parsed.append({"date": gd, "composite": float(comp), "minutes": lg.get("minutes")})
+                    entry = {"date": gd, "composite": float(comp), "minutes": lg.get("minutes")}
+                    for sc in stat_cols:
+                        v = lg.get(sc)
+                        entry[sc] = float(v) if v is not None else None
+                    parsed.append(entry)
             except (ValueError, TypeError):
                 continue
 
@@ -2141,11 +2211,36 @@ def phase_4_compute(cases, league=None):
                      {"recovery_days": actual_recovery})
             audited += 1
 
-        if len(pre_games) < 3:
-            continue  # Not enough baseline data
+        # Need at least 1 pre-game; track sample size
+        pre_games_count = len(pre_games)
 
-        # Recent baseline (last 5 games)
-        recent_5 = pre_games[-5:]
+        if pre_games_count < 1:
+            # Try prior season as fallback
+            prior_season = str(int(season_inj) - 1) if season_inj.isdigit() else None
+            if prior_season:
+                prior_logs = sb_get("back_in_play_player_game_logs",
+                    f"select={select_cols}&player_id=eq.{c['player_id']}&season=eq.{prior_season}&composite=not.is.null&order=game_date.desc&limit=20")
+                if prior_logs:
+                    for lg in prior_logs:
+                        try:
+                            gd = datetime.strptime(lg["game_date"], "%Y-%m-%d").date()
+                            comp = lg.get("composite")
+                            if comp is not None:
+                                entry = {"date": gd, "composite": float(comp), "minutes": lg.get("minutes")}
+                                for sc in stat_cols:
+                                    v = lg.get(sc)
+                                    entry[sc] = float(v) if v is not None else None
+                                pre_games.append(entry)
+                        except (ValueError, TypeError):
+                            continue
+                    pre_games.sort(key=lambda x: x["date"])
+                    pre_games_count = len(pre_games)
+
+            if pre_games_count < 1:
+                continue  # Still no baseline data at all
+
+        # Recent baseline (last 5 games, or whatever we have)
+        recent_5 = pre_games[-min(5, pre_games_count):]
         pre_baseline_5g = statistics.mean(g["composite"] for g in recent_5)
 
         # Season baseline
@@ -2157,6 +2252,13 @@ def phase_4_compute(cases, league=None):
         post_composites = []
         pre_avg_min = statistics.mean(g["minutes"] for g in pre_games if g["minutes"]) if any(g["minutes"] for g in pre_games) else None
 
+        # Compute per-stat baselines (last 5 pre-injury games)
+        pre_stat_baselines = {}
+        for sc in stat_cols:
+            vals = [g[sc] for g in recent_5 if g.get(sc) is not None]
+            if vals:
+                pre_stat_baselines[sc] = round(statistics.mean(vals), 2)
+
         for idx, g in enumerate(post_10):
             entry = {
                 "game_num": idx + 1,
@@ -2165,7 +2267,27 @@ def phase_4_compute(cases, league=None):
             }
             if pre_avg_min and g["minutes"]:
                 entry["minutes_pct"] = round(g["minutes"] / pre_avg_min, 3)
+            # Add per-stat values to each game entry
+            for sc in stat_cols:
+                if g.get(sc) is not None:
+                    entry[sc] = g[sc]
             post_composites.append(entry)
+
+        # Post-return per-stat averages (first 5 games back)
+        post_stat_averages = {}
+        post_5 = post_games[:5]
+        for sc in stat_cols:
+            vals = [g[sc] for g in post_5 if g.get(sc) is not None]
+            if vals:
+                post_stat_averages[sc] = round(statistics.mean(vals), 2)
+
+        # Per-stat drop percentages
+        stat_drops = {}
+        for sc in stat_cols:
+            pre_val = pre_stat_baselines.get(sc)
+            post_val = post_stat_averages.get(sc)
+            if pre_val and pre_val > 0 and post_val is not None:
+                stat_drops[sc] = round((post_val - pre_val) / pre_val * 100, 1)
 
         # Rest-of-season (all post-return games in same season)
         rest_games = [g for g in post_games if _season_for_date(g["date"], ls) == season_ret]
@@ -2184,10 +2306,16 @@ def phase_4_compute(cases, league=None):
             "games_missed": c.get("games_missed"),
             "games_missed_actual": len(games_during_injury) if games_during_injury else c.get("games_missed"),
             "recovery_days": actual_recovery,
+            "pre_games_count": pre_games_count,
             "pre_baseline_5g": round(pre_baseline_5g, 2),
             "pre_baseline_season": round(pre_baseline_season, 2),
             "post_games_count": len(post_composites),
-            "post_game_composites": json.dumps(post_composites),
+            "post_game_composites": json.dumps({
+                "games": post_composites,
+                "pre_stat_baselines": pre_stat_baselines,
+                "post_stat_averages": post_stat_averages,
+                "stat_drops": stat_drops,
+            }),
             "rest_of_season_avg": round(rest_avg, 2) if rest_avg else None,
             "rest_of_season_games": len(rest_games),
         }
@@ -2233,7 +2361,12 @@ def phase_5_aggregate(league=None):
             if not baseline_5g or baseline_5g == 0:
                 continue
 
-            composites = json.loads(c["post_game_composites"]) if isinstance(c["post_game_composites"], str) else (c["post_game_composites"] or [])
+            raw_composites = json.loads(c["post_game_composites"]) if isinstance(c["post_game_composites"], str) else (c["post_game_composites"] or [])
+            # Handle both old (flat list) and new (dict with "games" key) formats
+            if isinstance(raw_composites, dict):
+                composites = raw_composites.get("games", [])
+            else:
+                composites = raw_composites
 
             for entry in composites:
                 gn = entry.get("game_num", 0)
@@ -2443,9 +2576,9 @@ def main():
 
     if args.enrich:
         print(f"\n{'=' * 60}")
-        print(f"Injury History Enrichment")
+        print(f"Injury History Enrichment{' (' + args.league + ')' if args.league else ''}")
         print(f"{'=' * 60}\n")
-        enrich_injury_history()
+        enrich_injury_history(league=args.league)
         return
 
     if args.fpl_store:

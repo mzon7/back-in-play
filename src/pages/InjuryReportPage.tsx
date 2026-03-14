@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { SiteHeader } from "../components/SiteHeader";
@@ -29,26 +29,10 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-interface InjuryRow {
-  injury_id: string;
-  injury_type: string;
-  injury_type_slug?: string;
-  status: string;
-  date_injured: string;
-  return_date: string | null;
-  expected_return: string | null;
-  expected_return_date: string | null;
-  games_missed: number | null;
-  recovery_days: number | null;
-  side: string | null;
-  [key: string]: any; // player/team nested data
-}
-
 export default function InjuryReportPage() {
   const { slug } = useParams<{ slug: string }>();
   const parts = (slug ?? "").match(/^(.+?)-injury-report(?:-(.+))?$/);
   const leagueSlug = parts?.[1] ?? "";
-  const dateSlug = parts?.[2]; // e.g., "march-15-2026" or undefined for today
 
   const leagueLabel = LEAGUE_LABELS[leagueSlug] ?? leagueSlug.toUpperCase();
   const leagueFull = LEAGUE_FULL[leagueSlug] ?? leagueLabel;
@@ -83,7 +67,6 @@ export default function InjuryReportPage() {
         .order("date_injured", { ascending: false })
         .limit(500);
 
-      const weekEnd = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
       const { data: returning } = await supabase
         .from(dbTable("injuries"))
         .select(
@@ -144,7 +127,7 @@ export default function InjuryReportPage() {
     let totalDaysOut = 0;
     let daysCount = 0;
 
-    for (const inj of injuries) {
+    for (const inj of injuries as any[]) {
       const p = getPlayer(inj);
       const t = getTeam(p);
       typeCounts[inj.injury_type] = (typeCounts[inj.injury_type] || 0) + 1;
@@ -197,7 +180,7 @@ export default function InjuryReportPage() {
     });
 
     if (starPlayersOut.length > 0) {
-      const starPlayer = starPlayersOut[0];
+      const starPlayer = starPlayersOut[0] as any;
       const sp = getPlayer(starPlayer);
       items.push({
         question: `When will ${sp.player_name} return?`,
