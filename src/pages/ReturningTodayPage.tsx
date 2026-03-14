@@ -5,9 +5,7 @@ import { SiteHeader } from "../components/SiteHeader";
 import { SEO } from "../components/seo/SEO";
 import { breadcrumbJsonLd, jsonLdGraph } from "../components/seo/seoHelpers";
 import { supabase, dbTable } from "../lib/supabase";
-import { StatusBadge } from "../components/StatusBadge";
-import { PlayerAvatar } from "../components/PlayerAvatar";
-import { leagueColor } from "../lib/leagueColors";
+import { InjuryPlayerCard } from "../components/InjuryPlayerCard";
 import type { PerformanceCurve } from "../features/performance-curves/lib/types";
 import { STAT_LABELS, LEAGUE_STATS } from "../features/performance-curves/lib/types";
 
@@ -226,65 +224,41 @@ function PerformancePreview({ curve, leagueSlug }: { curve: PerformanceCurve; le
 function PlayerCard({ player, multiLeague }: { player: ReturningPlayer; multiLeague: boolean }) {
   const isReturned = player.status === "returned";
   const daysOut = player.recovery_days ?? 0;
-  const lColor = leagueColor(player.league_slug);
 
   return (
-    <div
-      className="rounded-xl border border-white/10 bg-white/5 p-4 hover:bg-white/[0.06] transition-colors"
-      style={multiLeague ? { borderTopWidth: 3, borderTopColor: lColor } : undefined}
+    <InjuryPlayerCard
+      player_name={player.player_name}
+      player_slug={player.player_slug}
+      position={player.position}
+      team_name={player.team_name}
+      league_slug={player.league_slug}
+      headshot_url={player.headshot_url}
+      status={player.status}
+      injury_type={player.injury_type}
+      date_injured={player.date_injured}
+      expected_return={player.expected_return}
+      is_star={player.is_star}
+      is_starter={player.is_starter}
+      games_missed={player.games_missed}
+      showLeague={multiLeague}
+      avatarSize={48}
     >
-      <div className="flex items-start gap-3">
-        <PlayerAvatar src={player.headshot_url} name={player.player_name} size={48} className="rounded-full" />
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Link
-              to={`/player/${player.player_slug}`}
-              className="text-sm font-semibold text-white hover:text-[#1C7CFF] transition-colors"
-            >
-              {player.player_name}
-            </Link>
-            <StatusBadge status={player.status} />
-            {player.is_star && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">Star</span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 mt-0.5 text-xs text-white/40">
-            <span>{player.position}</span>
-            <span>·</span>
-            <span>{player.team_name}</span>
-            <span className="inline-flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: lColor }} />
-              <span className="text-white/50">{LEAGUE_LABELS[player.league_slug]}</span>
-            </span>
-          </div>
-
-          {/* Injury details */}
-          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
-            <span className="text-white/50">
-              <span className="text-white/30">Injury:</span> {player.injury_type}
-            </span>
-            <span className="text-white/50">
-              <span className="text-white/30">Out:</span> {daysOut} days
-            </span>
-            {player.games_missed != null && player.games_missed > 0 && (
-              <span className="text-white/50">
-                <span className="text-white/30">Missed:</span> {player.games_missed} games
-              </span>
-            )}
-            {isReturned && (
-              <span className="text-green-400/70 font-medium">Returned</span>
-            )}
-          </div>
-
-          {/* Performance preview from curve data */}
-          {player.curve && (
-            <PerformancePreview curve={player.curve} leagueSlug={player.league_slug} />
+      {/* Extra returning-specific details */}
+      <div className="px-4 pb-3">
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <span className="text-white/50">
+            <span className="text-white/30">Out:</span> {daysOut} days
+          </span>
+          {isReturned && (
+            <span className="text-green-400/70 font-medium">Returned</span>
           )}
         </div>
+        {/* Performance preview from curve data */}
+        {player.curve && (
+          <PerformancePreview curve={player.curve} leagueSlug={player.league_slug} />
+        )}
       </div>
-    </div>
+    </InjuryPlayerCard>
   );
 }
 

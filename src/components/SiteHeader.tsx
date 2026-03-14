@@ -18,6 +18,7 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
   ];
 
   return (
+    <>
     <nav className="sticky top-0 z-50 border-b border-white/10 bg-[#0A0E1A]/90 backdrop-blur-md">
       <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
         <Link to="/" className="flex items-center gap-2 shrink-0">
@@ -26,6 +27,7 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
             <span className="text-white/50 mx-1">IN</span>
             <span className="text-[#3DFF8F]">PLAY</span>
           </span>
+          <span className="text-[9px] font-semibold tracking-wide rounded-full px-2 py-0.5 bg-[#1C7CFF]/10 text-[#1C7CFF]/60 border border-[#1C7CFF]/15">Early Access</span>
         </Link>
 
         <div className="flex items-center gap-1 sm:gap-3 text-sm font-medium">
@@ -67,5 +69,16 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
         </div>
       )}
     </nav>
+    <div className="border-b border-white/5 bg-[#0A0E1A]/80">
+      <div className="max-w-5xl mx-auto px-4 py-1.5 flex items-center justify-between gap-4">
+        <p className="text-[11px] text-white/40 leading-relaxed">
+          🚀 Early Access — Back In Play is the first public version of a sports injury recovery analytics platform. New data and models are added weekly.
+        </p>
+        <a href="mailto:feedback@backinplay.ai" className="text-[11px] text-white/30 hover:text-white/50 transition-colors whitespace-nowrap shrink-0">
+          Send feedback
+        </a>
+      </div>
+    </div>
+    </>
   );
 }

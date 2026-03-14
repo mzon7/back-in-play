@@ -1,6 +1,7 @@
 // @refresh reset
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
+import { isTrackedPlayer, addTrackedPlayer, removeTrackedPlayer } from "../../lib/trackedPlayers";
 import { SiteHeader } from "../../components/SiteHeader";
 import { usePlayerPage, type PlayerPageData, type PlayerInjury } from "../../hooks/usePlayerPage";
 import { useInjuryImpact } from "../../hooks/useInjuryImpact";
@@ -243,6 +244,34 @@ export default function PlayerInjuryPage() {
   const { data: returnCase } = usePlayerReturnCase(currentInjury?.injury_id ?? "");
   const { data: playerProps } = useSinglePlayerProps(player?.player_id);
 
+  // Track Player state
+  const [tracked, setTracked] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (playerSlug) setTracked(isTrackedPlayer(playerSlug));
+  }, [playerSlug]);
+
+  useEffect(() => {
+    if (toast) {
+      const t = setTimeout(() => setToast(null), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [toast]);
+
+  function handleToggleTrack() {
+    if (!playerSlug) return;
+    if (tracked) {
+      removeTrackedPlayer(playerSlug);
+      setTracked(false);
+      setToast(`Removed ${player?.player_name ?? "player"} from tracked players`);
+    } else {
+      addTrackedPlayer(playerSlug);
+      setTracked(true);
+      setToast(`Tracking ${player?.player_name ?? "player"}`);
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-[#0a0f1a] flex items-center justify-center">
@@ -333,6 +362,16 @@ export default function PlayerInjuryPage() {
               {player.is_star && <span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded-full font-bold">STAR</span>}
               {player.is_starter && !player.is_star && <span className="text-[10px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full font-bold">STARTER</span>}
               {player.league_rank && <span className="text-[10px] text-white/30">Rank #{player.league_rank}</span>}
+              <button
+                onClick={handleToggleTrack}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  tracked
+                    ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                    : "bg-white/5 text-white/50 border border-white/10 hover:bg-white/10"
+                }`}
+              >
+                {tracked ? "\u2B50 Tracking" : "\u2B50 Track Player"}
+              </button>
             </div>
           </div>
         </div>
@@ -732,6 +771,13 @@ export default function PlayerInjuryPage() {
           </div>
         )}
       </div>
+
+      {/* Toast notification */}
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-white/10 backdrop-blur-md border border-white/20 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg animate-[fadeIn_0.2s_ease-out]">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

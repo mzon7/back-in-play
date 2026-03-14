@@ -920,6 +920,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
               <span className="text-white/50 mx-1">IN</span>
               <span className="text-[#3DFF8F]">PLAY</span>
             </span>
+            <span className="text-[9px] font-semibold tracking-wide rounded-full px-2 py-0.5 bg-[#1C7CFF]/10 text-[#1C7CFF]/60 border border-[#1C7CFF]/15">Early Access</span>
           </Link>
 
           <div className="flex items-center gap-1 sm:gap-4 text-[13px] sm:text-[15px] font-medium overflow-x-auto">
@@ -962,6 +963,18 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
           </div>
         </div>
       </nav>
+
+      {/* Early Access Banner */}
+      <div className="border-b border-white/5 bg-[#0A0E1A]/80">
+        <div className="max-w-5xl mx-auto px-4 py-1.5 flex items-center justify-between gap-4">
+          <p className="text-[11px] text-white/40 leading-relaxed">
+            🚀 Early Access — Back In Play is the first public version of a sports injury recovery analytics platform. New data and models are added weekly.
+          </p>
+          <a href="mailto:feedback@backinplay.ai" className="text-[11px] text-white/30 hover:text-white/50 transition-colors whitespace-nowrap shrink-0">
+            Send feedback
+          </a>
+        </div>
+      </div>
 
       {/* Content */}
       <main className="max-w-5xl mx-auto px-4 py-8 pb-16">
