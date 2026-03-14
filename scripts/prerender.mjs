@@ -66,7 +66,7 @@ function loadBase() {
   baseHtml = fs.readFileSync(path.join(DIST, "index.html"), "utf-8");
 }
 
-function writePage(urlPath, { title, description, content }) {
+function writePage(urlPath, { title, description, content, preloadedQueries }) {
   let html = baseHtml;
   // Replace title
   html = html.replace(/<title>[^<]*<\/title>/, `<title>${esc(title)} | Back In Play</title>`);
@@ -78,6 +78,15 @@ function writePage(urlPath, { title, description, content }) {
   html = html.replace(/<meta property="og:url" content="[^"]*"/, `<meta property="og:url" content="${SITE}${urlPath}"`);
   // Add canonical link
   html = html.replace("</head>", `  <link rel="canonical" href="${SITE}${urlPath}" />\n  </head>`);
+  // Inject preloaded React Query data (instant render, background refetch)
+  if (preloadedQueries?.length) {
+    const json = JSON.stringify(preloadedQueries)
+      .replace(/<\/script/gi, '<\\/script')
+      .replace(/<!--/g, '<\\!--');
+    if (json.length < 300_000) { // 300KB cap
+      html = html.replace("</head>", `<script>window.__PRELOADED_QUERIES__=${json};</script>\n</head>`);
+    }
+  }
   // Inject content into root div
   html = html.replace('<div id="root"></div>', `<div id="root">${content}</div>`);
 
@@ -833,8 +842,17 @@ async function main() {
       ...inj,
       player_name: p?.player_name ?? "Unknown",
       player_slug: p?.slug ?? "",
+      position: p?.position ?? "",
       team_name: p?.team_name ?? "",
       league_slug: p?.league_slug ?? "",
+      league_name: p?.league_name ?? "",
+      league_rank: p?.league_rank ?? null,
+      preseason_rank: null,
+      rank_at_injury: null,
+      headshot_url: p?.headshot_url ?? null,
+      espn_id: null,
+      is_star: p?.is_star ?? false,
+      is_starter: p?.is_starter ?? false,
     };
   }).filter(inj => inj.player_name !== "Unknown");
 
@@ -848,6 +866,9 @@ async function main() {
     title: "Back In Play - Sports Injury Tracker & Return Dates",
     description: "Live sports injury updates for NBA, NFL, MLB, NHL, and EPL. Track player injuries, expected return dates, status changes, and recovery timelines.",
     content: homeContent(leagues, topInjuries),
+    preloadedQueries: [
+      [["bip-top-injuries"], topInjuries.slice(0, 80)],
+    ],
   });
   pageCount++;
 
@@ -862,6 +883,9 @@ async function main() {
       title: `${label} Injuries (${new Date().getFullYear()}) - Injury Report & Updates`,
       description: `${LEAGUE_FULL[slug] ?? label} injury report. Latest ${label} injury updates, return dates, and status changes.`,
       content: leagueContent(slug, leagueTeams, leagueInjuries),
+      preloadedQueries: [
+        [["bip-injuries", slug], leagueInjuries.slice(0, 200)],
+      ],
     });
     pageCount++;
 
@@ -870,10 +894,35 @@ async function main() {
       const teamSlug = slugify(team.team_name);
       const teamInjuries = leagueInjuries.filter(i => i.team_name === team.team_name);
 
+      const teamPageData = {
+        team_id: team.team_id,
+        team_name: team.team_name,
+        league_slug: slug,
+        league_name: LEAGUE_FULL[slug] ?? label,
+        injuries: teamInjuries.map(inj => ({
+          injury_id: inj.injury_id,
+          player_name: inj.player_name,
+          player_slug: inj.player_slug,
+          position: inj.position ?? "",
+          injury_type: inj.injury_type,
+          status: inj.status,
+          date_injured: inj.date_injured,
+          expected_return: inj.expected_return ?? null,
+          games_missed: inj.games_missed ?? null,
+          headshot_url: inj.headshot_url ?? null,
+          espn_id: null,
+          is_star: inj.is_star ?? false,
+          is_starter: inj.is_starter ?? false,
+        })),
+      };
+
       writePage(`/${slug}/${teamSlug}-injuries`, {
         title: `${team.team_name} Injuries - ${label} Injury Report`,
         description: `${team.team_name} injury report. Latest injury updates, return dates, and status changes (${label}).`,
         content: teamContent(slug, team.team_name, teamInjuries),
+        preloadedQueries: [
+          [["team-page", slug, teamSlug], teamPageData],
+        ],
       });
       pageCount++;
     }
@@ -949,11 +998,49 @@ async function main() {
       ? `${player.player_name} injury status: ${current.status.replace(/_/g, " ")}. ${current.injury_type}. ${player.team_name} (${label}).`
       : `${player.player_name} injury status and history. ${player.team_name} (${label}). Currently healthy.`;
 
+    // Build PlayerPageData for React Query hydration
+    const playerPageData = {
+      player_id: player.player_id,
+      player_name: player.player_name,
+      slug: player.slug,
+      position: player.position ?? "",
+      team_id: player.team_id ?? "",
+      team_name: player.team_name,
+      team_slug: slugify(player.team_name),
+      league_slug: player.league_slug,
+      league_name: player.league_name,
+      league_id: player.league_id ?? "",
+      headshot_url: player.headshot_url ?? null,
+      espn_id: null,
+      is_star: player.is_star ?? false,
+      is_starter: player.is_starter ?? false,
+      league_rank: player.league_rank ?? null,
+      preseason_rank: null,
+      injuries: displayInjuries.map(inj => ({
+        injury_id: inj.injury_id,
+        injury_type: inj.injury_type,
+        injury_description: null,
+        date_injured: inj.date_injured,
+        return_date: inj.return_date ?? null,
+        status: inj.status,
+        expected_return: inj.expected_return ?? null,
+        games_missed: inj.games_missed ?? null,
+        recovery_days: inj.recovery_days ?? null,
+        side: inj.side ?? null,
+        long_comment: null,
+        short_comment: null,
+      })),
+      statusChanges: [],
+      injuredTeammates: [],
+    };
+    const playerPreload = [[["player-page", player.slug], playerPageData]];
+
     // /player/{slug} page
     writePage(`/player/${player.slug}`, {
       title,
       description,
       content: playerContent(player, displayInjuries),
+      preloadedQueries: playerPreload,
     });
     pageCount++;
 
@@ -962,6 +1049,7 @@ async function main() {
       title,
       description,
       content: playerContent(player, displayInjuries),
+      preloadedQueries: playerPreload,
     });
     pageCount++;
 

@@ -24,6 +24,15 @@ const queryClient = new QueryClient({
   },
 });
 
+// Hydrate preloaded data from prerendered HTML (instant render, then background refetch)
+const preloaded = (window as any).__PRELOADED_QUERIES__;
+if (Array.isArray(preloaded)) {
+  for (const [queryKey, data] of preloaded) {
+    queryClient.setQueryData(queryKey, data);
+  }
+  delete (window as any).__PRELOADED_QUERIES__;
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <HelmetProvider>

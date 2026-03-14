@@ -375,8 +375,8 @@ export default function PerformanceCurvesPage() {
           </section>
         )}
 
-        {/* Key Findings */}
-        {!isLoading && keyFindings && (
+        {/* Key Findings (local only until audited) */}
+        {typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && !isLoading && keyFindings && (
           <section className="mb-6 rounded-xl border border-[#1C7CFF]/20 bg-gradient-to-br from-[#1C7CFF]/5 to-transparent p-5">
             <h2 className="text-sm font-bold uppercase tracking-wider text-[#1C7CFF] mb-3">Key Findings</h2>
             <ul className="space-y-2 text-sm text-white/60 leading-relaxed">
@@ -458,8 +458,8 @@ export default function PerformanceCurvesPage() {
           </div>
         )}
 
-        {/* Most Performance Impacting Injuries */}
-        {!isLoading && mostImpactful.length > 0 && (
+        {/* Most Performance Impacting Injuries (local only until audited) */}
+        {typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && !isLoading && mostImpactful.length > 0 && (
           <section className="mb-8 rounded-xl border border-red-500/20 bg-gradient-to-br from-red-500/5 to-transparent p-5">
             <h2 className="text-sm font-bold uppercase tracking-wider text-red-400 mb-3 flex items-center gap-2">
               <span className="text-base">&#x1F525;</span> Most Performance Impacting Injuries
