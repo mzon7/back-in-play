@@ -377,7 +377,7 @@ function StatusUpdatesBlock({ statusChanges, isLoadingChanges, showLeague, leagu
 
   // Filter by league and team, exclude "active" status transitions, then deduplicate
   const seen = new Set<string>();
-  const changes = statusChanges
+  const changes = (statusChanges ?? [])
     .filter((c) => !leagueSlug || c.league_slug === leagueSlug)
     .filter((c) => !teamFilter || c.team_name === teamFilter)
     .filter((c) => c.new_status !== "active")
@@ -645,7 +645,7 @@ function HeadlineStatusBadge({ status }: { status: string }) {
 }
 
 function HeadlineStories({ injuries, statusChanges, showLeague, leagueSlug, teamFilter }: { injuries: InjuryRow[]; statusChanges: StatusChangeRow[]; showLeague?: boolean; leagueSlug?: string; teamFilter?: string | null }) {
-  const filteredChanges = statusChanges
+  const filteredChanges = (statusChanges ?? [])
     .filter((c) => !leagueSlug || c.league_slug === leagueSlug)
     .filter((c) => !teamFilter || c.team_name === teamFilter);
   const cards = buildHeadlineCards(injuries, filteredChanges, teamFilter ? 5 : 8);
