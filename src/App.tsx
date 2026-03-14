@@ -33,6 +33,7 @@ const PropsPage = lazyWithReload(() => import("./pages/PropsPage"));
 const ReturningTodayPage = lazyWithReload(() => import("./pages/ReturningTodayPage"));
 const ReturningThisWeekPage = lazyWithReload(() => import("./pages/ReturningThisWeekPage"));
 const MinutesRestrictionPage = lazyWithReload(() => import("./pages/MinutesRestrictionPage"));
+const TrackedPlayersPage = lazyWithReload(() => import("./pages/TrackedPlayersPage"));
 const LeagueInjuryTypePerformancePage = lazyWithReload(() => import("./pages/league/LeagueInjuryTypePerformancePage"));
 
 function Loading() {
@@ -58,6 +59,7 @@ function routeKey(pathname: string): string {
   if (segments[0] === "injuries") return `injuries-${segments[1] ?? ""}`;
   if (segments[0] === "performance-curves") return "performance-curves";
   if (segments[0] === "props") return "props";
+  if (segments[0] === "tracked-players") return "tracked-players";
   if (segments[0] === "returning-today") return "returning-today";
   if (segments[0] === "players-returning-from-injury-this-week") return "returning-week";
   if (segments[0] === "minutes-restriction-after-injury") return "minutes-restriction";
@@ -94,6 +96,7 @@ function AppRoutes() {
           {IS_LOCAL && <Route path="/returning-today" element={<ReturningTodayPage />} />}
           {IS_LOCAL && <Route path="/players-returning-from-injury-this-week" element={<ReturningThisWeekPage />} />}
           <Route path="/minutes-restriction-after-injury" element={<MinutesRestrictionPage />} />
+          <Route path="/tracked-players" element={<TrackedPlayersPage />} />
 
           {/* League-specific view (pre-selects the league tab on home) */}
           <Route path="/league/:leagueSlug" element={<HomePage />} />

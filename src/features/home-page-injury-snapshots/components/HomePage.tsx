@@ -16,6 +16,7 @@ import { SEO } from "../../../components/seo/SEO";
 import { supabase } from "../../../lib/supabase";
 import { leagueColor } from "../../../lib/leagueColors";
 import { trackHeadlineClick } from "../../../lib/analytics";
+import { isTrackedPlayer, toggleTrackedPlayer } from "../../../lib/trackedPlayers";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -644,6 +645,37 @@ function HeadlineStatusBadge({ status }: { status: string }) {
   );
 }
 
+function HeadlineTrackStar({ slug, name }: { slug: string; name: string }) {
+  const [tracked, setTracked] = useState(() => isTrackedPlayer(slug));
+  const [toast, setToast] = useState<string | null>(null);
+  return (
+    <>
+      <button
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const nowTracked = toggleTrackedPlayer(slug);
+          setTracked(nowTracked);
+          setToast(nowTracked ? `Tracking ${name}` : `Removed ${name} from tracked players`);
+          setTimeout(() => setToast(null), 2000);
+        }}
+        title={tracked ? "Tracking player" : "Track player"}
+        className="absolute top-2 right-2 z-10 p-1 rounded-full transition-colors hover:bg-white/10"
+      >
+        {tracked
+          ? <span className="text-amber-400 text-xs">&#9733;</span>
+          : <span className="text-white/20 text-xs hover:text-white/50">&#9734;</span>
+        }
+      </button>
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-white/10 backdrop-blur-md border border-white/20 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg animate-[fadeIn_0.2s_ease-out]" onClick={e => e.preventDefault()}>
+          {toast}
+        </div>
+      )}
+    </>
+  );
+}
+
 function HeadlineStories({ injuries, statusChanges, showLeague, leagueSlug, teamFilter }: { injuries: InjuryRow[]; statusChanges: StatusChangeRow[]; showLeague?: boolean; leagueSlug?: string; teamFilter?: string | null }) {
   const filteredChanges = (statusChanges ?? [])
     .filter((c) => !leagueSlug || c.league_slug === leagueSlug)
@@ -674,7 +706,7 @@ function HeadlineStories({ injuries, statusChanges, showLeague, leagueSlug, team
               key={card.key}
               to={`/player/${card.player_slug || card.player_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`}
               onClick={() => trackHeadlineClick(card.player_slug || card.player_name, card.league_slug ?? "", card.status ?? "")}
-              className="shrink-0 w-[170px] sm:w-[190px] rounded-xl p-3.5 snap-start transition-all duration-[180ms] ease-out block headline-card"
+              className="shrink-0 w-[170px] sm:w-[190px] rounded-xl p-3.5 snap-start transition-all duration-[180ms] ease-out block headline-card relative"
               style={{
                 border: `1px solid ${typeLabel.cardBorder}`,
                 backgroundColor: typeLabel.cardTint,
@@ -682,6 +714,11 @@ function HeadlineStories({ injuries, statusChanges, showLeague, leagueSlug, team
                 ["--hover-border" as string]: typeLabel.cardBorderHover,
               }}
             >
+              {/* Track star */}
+              <HeadlineTrackStar
+                slug={card.player_slug || card.player_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}
+                name={card.player_name}
+              />
               {/* Type label */}
               <div className="mb-2">
                 <span className={`text-[10px] font-bold px-2.5 py-1 rounded ${typeLabel.color}`}>

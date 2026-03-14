@@ -1,9 +1,10 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { Link } from "react-router-dom";
 import { StatusBadge } from "./StatusBadge";
 import { PlayerAvatar } from "./PlayerAvatar";
 import { leagueColor } from "../lib/leagueColors";
 import { trackPlayerCardClick } from "../lib/analytics";
+import { isTrackedPlayer, toggleTrackedPlayer } from "../lib/trackedPlayers";
 
 const LEAGUE_LABELS: Record<string, string> = {
   nba: "NBA",
@@ -125,8 +126,31 @@ export function InjuryPlayerCard({
   const accentColor = borderColor.replace(/[\d.]+\)$/, "0.6)");
   const lColor = league_slug ? leagueColor(league_slug) : undefined;
 
+  const [tracked, setTracked] = useState(() => isTrackedPlayer(slug));
+  const [trackToast, setTrackToast] = useState<string | null>(null);
+
+  function handleTrackClick(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const nowTracked = toggleTrackedPlayer(slug);
+    setTracked(nowTracked);
+    setTrackToast(nowTracked ? `Tracking ${player_name}` : `Removed ${player_name} from tracked players`);
+    setTimeout(() => setTrackToast(null), 2000);
+  }
+
   const cardBody = (
     <div className="p-4 relative">
+      {/* Track star — top-right */}
+      <button
+        onClick={handleTrackClick}
+        title={tracked ? "Tracking player" : "Track player"}
+        className="absolute top-2 right-2 z-10 p-1.5 rounded-full transition-colors hover:bg-white/10"
+      >
+        {tracked
+          ? <span className="text-amber-400 text-sm">&#9733;</span>
+          : <span className="text-white/25 text-sm hover:text-white/50">&#9734;</span>
+        }
+      </button>
       {/* Left status accent */}
       <div
         className="absolute left-0 top-2 bottom-2 w-[2px] rounded-full"
@@ -302,6 +326,11 @@ export function InjuryPlayerCard({
         cardBody
       )}
       {children}
+      {trackToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-white/10 backdrop-blur-md border border-white/20 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg animate-[fadeIn_0.2s_ease-out]">
+          {trackToast}
+        </div>
+      )}
     </div>
   );
 }

@@ -370,9 +370,10 @@ export default function PlayerInjuryPage() {
                     : "bg-white/5 text-white/50 border border-white/10 hover:bg-white/10"
                 }`}
               >
-                {tracked ? "\u2B50 Tracking" : "\u2B50 Track Player"}
+                {tracked ? "\u2713 Tracking" : "\u2B50 Track Player"}
               </button>
             </div>
+            <p className="text-[11px] text-white/30 mt-1.5">Save this player for quick access to injury updates and return analysis.</p>
           </div>
         </div>
 

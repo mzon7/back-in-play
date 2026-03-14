@@ -24,3 +24,13 @@ export function removeTrackedPlayer(playerSlug: string): void {
 export function isTrackedPlayer(playerSlug: string): boolean {
   return getTrackedPlayers().includes(playerSlug);
 }
+
+/** Toggle tracked state; returns the new tracked state */
+export function toggleTrackedPlayer(playerSlug: string): boolean {
+  if (isTrackedPlayer(playerSlug)) {
+    removeTrackedPlayer(playerSlug);
+    return false;
+  }
+  addTrackedPlayer(playerSlug);
+  return true;
+}

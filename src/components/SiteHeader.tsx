@@ -37,6 +37,7 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
           )}
           <Link to="/props" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Props</Link>
           <Link to="/performance-curves" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Performance Curves</Link>
+          <Link to="/tracked-players" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0" title="Tracked Players">&#9733;</Link>
           {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (
             <Link to="/returning-today" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Returning Today</Link>
           )}
