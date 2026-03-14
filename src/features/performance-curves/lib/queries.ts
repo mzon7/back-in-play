@@ -54,8 +54,30 @@ export function usePerformanceCurves(leagueSlug?: string, injuryTypeSlug?: strin
         q = q.eq("injury_type_slug", injuryTypeSlug);
       }
       // Filter by position: "" = all positions combined, specific position = that position only
+      // League-aware position groups for combined filters
+      const GROUPS_BY_LEAGUE: Record<string, Record<string, string[]>> = {
+        nba: { G: ["G", "PG", "SG"], F: ["F", "PF", "SF"] },
+        nhl: { W: ["W", "LW", "RW"], D: ["D", "LD", "RD"] },
+        nfl: {
+          QB: ["QB", "Quarterback"], RB: ["RB", "Running Back", "FB", "Fullback"],
+          WR: ["WR", "Wide Receiver"], TE: ["TE", "Tight End"],
+          OL: ["OL", "OT", "G", "C", "Center", "Guard", "LT", "RT", "Offensive Tackle", "T", "LS", "Long Snapper"],
+          DL: ["DL", "DE", "DT", "Defensive End", "Defensive Tackle"],
+          LB: ["LB", "ILB", "OLB", "Linebacker"],
+          DB: ["CB", "S", "SS", "FS", "Cornerback", "Safety"],
+          K: ["K", "Kicker", "P", "Punter"],
+        },
+        mlb: { P: ["SP", "RP", "LHP", "RHP"], IF: ["1B", "2B", "3B", "SS"], OF: ["OF", "LF", "CF", "RF"] },
+        "premier-league": { DEF: ["CB", "DF", "DEF"], MID: ["CM", "MID"], FWD: ["FWD", "RW", "LW"] },
+      };
       if (position && position !== "all") {
-        q = q.eq("position", position);
+        const leagueGroups = leagueSlug && leagueSlug !== "all" ? (GROUPS_BY_LEAGUE[leagueSlug] ?? {}) : {};
+        const group = leagueGroups[position];
+        if (group) {
+          q = q.in("position", group);
+        } else {
+          q = q.eq("position", position);
+        }
       } else {
         q = q.eq("position", "");
       }
@@ -106,8 +128,45 @@ export function usePositionsWithCurves(leagueSlug?: string) {
 
       const { data, error } = await q;
       if (error) throw new Error(error.message);
-      const positions = Array.from(new Set((data ?? []).map((d: { position: string }) => d.position))).filter(Boolean);
-      return positions.sort();
+      // Collapse PG/SG → G and PF/SF → F so the UI shows grouped labels
+      // Add combined group labels when sub-positions exist
+      const GROUP_MEMBERS: Record<string, Record<string, string[]>> = {
+        nba: { G: ["PG", "SG"], F: ["PF", "SF"] },
+        nhl: { W: ["LW", "RW"], D: ["LD", "RD"] },
+        nfl: {
+          QB: ["Quarterback"], RB: ["Running Back", "Fullback", "FB"],
+          WR: ["Wide Receiver"], TE: ["Tight End"],
+          OL: ["OT", "Center", "Guard", "LT", "RT", "Offensive Tackle", "T", "LS", "Long Snapper"],
+          DL: ["DE", "DT", "Defensive End", "Defensive Tackle"],
+          LB: ["ILB", "OLB", "Linebacker"],
+          DB: ["CB", "S", "SS", "FS", "Cornerback", "Safety"],
+        },
+        mlb: { P: ["SP", "RP", "LHP", "RHP"], IF: ["1B", "2B", "3B", "SS"], OF: ["LF", "CF", "RF"] },
+        "premier-league": { DEF: ["CB", "DF"], MID: ["CM"], FWD: ["RW", "LW"] },
+      };
+      // Collapse full names to abbreviations for NFL (dedup), keep individual positions too
+      const NFL_DEDUP: Record<string, string> = {
+        Quarterback: "QB", "Running Back": "RB", Fullback: "FB",
+        "Wide Receiver": "WR", "Tight End": "TE",
+        "Offensive Tackle": "OT", Center: "C", Guard: "G", "Long Snapper": "LS",
+        "Defensive End": "DE", "Defensive Tackle": "DT",
+        Linebacker: "LB", Cornerback: "CB", Safety: "S",
+        Kicker: "K", Punter: "P",
+      };
+      const dedup = leagueSlug === "nfl" ? NFL_DEDUP : {};
+      const mapped = (data ?? []).map((d: { position: string }) => dedup[d.position] ?? d.position);
+      // Start with individual positions
+      const individual = Array.from(new Set(mapped)).filter(Boolean);
+      // Add combined groups where at least 2 sub-positions exist in the data
+      const groups = leagueSlug && leagueSlug !== "all" ? (GROUP_MEMBERS[leagueSlug] ?? {}) : {};
+      for (const [groupLabel, members] of Object.entries(groups)) {
+        const hasMembers = members.filter(m => individual.includes(dedup[m] ?? m));
+        if (hasMembers.length >= 1 && !individual.includes(groupLabel)) {
+          individual.push(groupLabel);
+        }
+      }
+      const filtered = individual.filter(p => p !== "Unknown");
+      return filtered.sort();
     },
     staleTime: 10 * 60 * 1000,
   });

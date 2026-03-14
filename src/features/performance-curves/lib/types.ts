@@ -100,12 +100,18 @@ export const STAT_LABELS: Record<string, string> = {
   stat_rbi: "RBI",
   stat_r: "Runs",
   stat_sb: "Stolen Bases",
+  // NHL goalie stats
+  stat_sv: "Saves",
+  stat_ga: "Goals Against",
+  stat_sv_pct: "Save %",
+  stat_w: "Wins",
 };
 
 export const LEAGUE_STATS: Record<string, string[]> = {
   nba: ["stat_pts", "stat_reb", "stat_ast", "stat_stl", "stat_blk"],
   nfl: ["stat_pass_yds", "stat_pass_td", "stat_rush_yds", "stat_rush_td", "stat_rec", "stat_rec_yds"],
   nhl: ["stat_goals", "stat_assists", "stat_sog"],
+  "nhl-goalie": ["stat_sv", "stat_ga", "stat_sv_pct", "stat_w"],
   mlb: ["stat_h", "stat_hr", "stat_rbi", "stat_r", "stat_sb"],
   "premier-league": ["stat_goals", "stat_assists"],
 };

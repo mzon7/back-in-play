@@ -11,9 +11,17 @@ import { trackCurveExpand, trackStatDrillDown, trackLeagueFilter } from "../../.
 
 const LEAGUE_ORDER: LeagueFilter[] = ["all", "nba", "nfl", "mlb", "nhl", "premier-league"];
 
+function getStatsForCurve(curve: PerformanceCurve): string[] {
+  // NHL goalies get goalie-specific stats, not skater stats
+  if (curve.league_slug === "nhl" && curve.position === "G") {
+    return LEAGUE_STATS["nhl-goalie"] ?? [];
+  }
+  return LEAGUE_STATS[curve.league_slug] ?? [];
+}
+
 function StatDrillDown({ curve }: { curve: PerformanceCurve }) {
   const [selectedStat, setSelectedStat] = useState<string | null>(null);
-  const stats = LEAGUE_STATS[curve.league_slug] ?? [];
+  const stats = getStatsForCurve(curve);
   const availableStats = stats.filter(
     (s) => curve.stat_avg_pct?.[s]?.some((v) => v != null)
   );
@@ -83,7 +91,7 @@ function CurveCard({ curve }: { curve: PerformanceCurve }) {
   const leagueLabel = LEAGUE_LABELS[curve.league_slug] ?? curve.league_slug.toUpperCase();
 
   // Compute overall stat change % (average of all per-stat game-10 values)
-  const stats = LEAGUE_STATS[curve.league_slug] ?? [];
+  const stats = getStatsForCurve(curve);
   const statG10Values = stats
     .map((s) => curve.stat_avg_pct?.[s]?.[9])
     .filter((v): v is number => v != null);

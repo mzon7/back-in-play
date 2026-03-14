@@ -207,6 +207,11 @@ def compute_composite(row, league):
                 0.1 * g("stat_rush_yds") + 6.0 * g("stat_rush_td") +
                 g("stat_rec") + 0.1 * g("stat_rec_yds"))
     elif league == "nhl":
+        # Goalie composite: based on saves, goals against, save %, wins
+        if g("stat_sv") > 0 or g("stat_ga") > 0 or g("stat_w") > 0:
+            return (0.1 * g("stat_sv") - 3.0 * g("stat_ga") +
+                    10.0 * g("stat_sv_pct") + 5.0 * g("stat_w"))
+        # Skater composite
         return 3.0 * g("stat_goals") + 2.0 * g("stat_assists") + 0.5 * g("stat_sog")
     elif league == "mlb":
         ip = g("stat_ip")
@@ -466,8 +471,11 @@ def scrape_nfl_game_log(sport_ref_id, season):
     return rows
 
 
-def scrape_nhl_game_log(sport_ref_id, season):
-    """Scrape NHL game log from Hockey-Reference."""
+def scrape_nhl_game_log(sport_ref_id, season, is_goalie=False):
+    """Scrape NHL game log from Hockey-Reference.
+    For goalies (is_goalie=True), scrapes saves, goals_against, save_pct, wins
+    from the gamelog_goalie table.
+    """
     letter = sport_ref_id[0]
     url = f"https://www.hockey-reference.com/players/{letter}/{sport_ref_id}/gamelog/{season}"
     html = fetch_html(url)
@@ -475,7 +483,21 @@ def scrape_nhl_game_log(sport_ref_id, season):
         return []
 
     soup = BeautifulSoup(html, "lxml")
-    table = soup.find("table", id="gamelog")
+
+    # Goalies use a different table on hockey-reference
+    if is_goalie:
+        table = soup.find("table", id="gamelog_goalie")
+        if not table:
+            # Fallback: try generic gamelog (some pages use it for goalies too)
+            table = soup.find("table", id="gamelog")
+    else:
+        table = soup.find("table", id="gamelog")
+        if not table:
+            # Auto-detect: if no skater table, check for goalie table
+            table = soup.find("table", id="gamelog_goalie")
+            if table:
+                is_goalie = True
+
     if not table:
         return []
 
@@ -512,15 +534,31 @@ def scrape_nhl_game_log(sport_ref_id, season):
 
         opp_td = tr.find("td", {"data-stat": "opp_id"})
 
-        row = {
-            "game_date": game_date,
-            "opponent": opp_td.get_text(strip=True) if opp_td else "",
-            "started": False,
-            "minutes": minutes,
-            "stat_goals": stat("goals"),
-            "stat_assists": stat("assists"),
-            "stat_sog": stat("shots"),
-        }
+        if is_goalie:
+            # Hockey-reference goalie data-stat names:
+            # saves, goals_against, save_pct, decision (W/L/O)
+            decision_td = tr.find("td", {"data-stat": "decision"})
+            decision = decision_td.get_text(strip=True) if decision_td else ""
+            row = {
+                "game_date": game_date,
+                "opponent": opp_td.get_text(strip=True) if opp_td else "",
+                "started": True,  # goalies who appear in game log are starters
+                "minutes": minutes,
+                "stat_sv": stat("saves"),
+                "stat_ga": stat("goals_against"),
+                "stat_sv_pct": stat("save_pct"),
+                "stat_w": 1.0 if decision == "W" else 0.0,
+            }
+        else:
+            row = {
+                "game_date": game_date,
+                "opponent": opp_td.get_text(strip=True) if opp_td else "",
+                "started": False,
+                "minutes": minutes,
+                "stat_goals": stat("goals"),
+                "stat_assists": stat("assists"),
+                "stat_sog": stat("shots"),
+            }
         rows.append(row)
 
     return rows
@@ -797,7 +835,7 @@ def espn_scrape_nfl(espn_id, season):
     return rows
 
 
-def espn_scrape_nhl(espn_id, season):
+def espn_scrape_nhl(espn_id, season, is_goalie=False):
     """Scrape NHL game log via ESPN API."""
     data = _espn_fetch_gamelog(espn_id, "nhl", season)
     if not data:
@@ -812,15 +850,31 @@ def espn_scrape_nhl(espn_id, season):
             continue
         opponent = meta.get("opponent", {}).get("abbreviation", "")
 
-        row = {
-            "game_date": game_date,
-            "opponent": opponent,
-            "started": False,
-            "minutes": _espn_stat_by_name(names, stats, "timeOnIcePerGame"),
-            "stat_goals": _espn_stat_by_name(names, stats, "goals"),
-            "stat_assists": _espn_stat_by_name(names, stats, "assists"),
-            "stat_sog": _espn_stat_by_name(names, stats, "shotsTotal"),
-        }
+        if is_goalie:
+            saves = _espn_stat_by_name(names, stats, "saves")
+            ga = _espn_stat_by_name(names, stats, "goalsAgainst")
+            sv_pct = _espn_stat_by_name(names, stats, "savePct")
+            wins = _espn_stat_by_name(names, stats, "wins")
+            row = {
+                "game_date": game_date,
+                "opponent": opponent,
+                "started": True,
+                "minutes": _espn_stat_by_name(names, stats, "timeOnIce"),
+                "stat_sv": saves,
+                "stat_ga": ga,
+                "stat_sv_pct": sv_pct,
+                "stat_w": wins if wins is not None else 0.0,
+            }
+        else:
+            row = {
+                "game_date": game_date,
+                "opponent": opponent,
+                "started": False,
+                "minutes": _espn_stat_by_name(names, stats, "timeOnIcePerGame"),
+                "stat_goals": _espn_stat_by_name(names, stats, "goals"),
+                "stat_assists": _espn_stat_by_name(names, stats, "assists"),
+                "stat_sog": _espn_stat_by_name(names, stats, "shotsTotal"),
+            }
         rows.append(row)
     return rows
 
@@ -2058,6 +2112,7 @@ def phase_3_scrape_logs(cases, league=None):
         game_rows = []
         source = ""
         is_pitcher = position and position.lower() in ("pitcher", "sp", "rp", "starting pitcher", "relief pitcher", "p")
+        is_goalie = position and position.lower() in ("g", "goalie", "goalkeeper")
 
         # Try *-Reference first (if we have the ID)
         if ref_id:
@@ -2065,6 +2120,8 @@ def phase_3_scrape_logs(cases, league=None):
             if scraper:
                 if ls == "mlb":
                     game_rows = scraper(ref_id, season, is_pitcher=is_pitcher)
+                elif ls == "nhl":
+                    game_rows = scraper(ref_id, season, is_goalie=is_goalie)
                 else:
                     game_rows = scraper(ref_id, season)
                 if game_rows:
@@ -2076,6 +2133,8 @@ def phase_3_scrape_logs(cases, league=None):
             if espn_scraper:
                 if ls == "mlb":
                     game_rows = espn_scraper(espn_id, season, is_pitcher=is_pitcher)
+                elif ls == "nhl":
+                    game_rows = espn_scraper(espn_id, season, is_goalie=is_goalie)
                 else:
                     game_rows = espn_scraper(espn_id, season)
                 if game_rows:
@@ -2158,12 +2217,14 @@ def phase_4_compute(cases, league=None):
         season_ret = _season_for_date(d_return, ls)
         seasons_str = f"{season_inj}" if season_inj == season_ret else f"{season_inj},{season_ret}"
 
-        # Stat columns relevant per league
+        # Stat columns relevant per league (position-aware for NHL goalies)
+        pos_lower = (c.get("position") or "").lower()
+        is_nhl_goalie = ls == "nhl" and pos_lower in ("g", "goalie", "goalkeeper")
         LEAGUE_STATS = {
             "nba": ["stat_pts", "stat_reb", "stat_ast", "stat_stl", "stat_blk"],
             "nfl": ["stat_pass_yds", "stat_pass_td", "stat_rush_yds", "stat_rush_td",
                      "stat_rec", "stat_rec_yds"],
-            "nhl": ["stat_goals", "stat_assists", "stat_sog"],
+            "nhl": ["stat_sv", "stat_ga", "stat_sv_pct", "stat_w"] if is_nhl_goalie else ["stat_goals", "stat_assists", "stat_sog"],
             "mlb": ["stat_h", "stat_hr", "stat_rbi", "stat_r", "stat_sb"],
             "premier-league": ["stat_goals", "stat_assists"],
         }
@@ -2339,21 +2400,32 @@ def phase_5_aggregate(league=None):
         print("  No return cases to aggregate", flush=True)
         return
 
-    # Group by (league_slug, injury_type_slug)
-    groups = {}
-    for c in cases:
-        key = (c["league_slug"], c["injury_type_slug"])
-        groups.setdefault(key, []).append(c)
+    # Stat columns per league (for per-stat aggregation)
+    LEAGUE_STATS_SKATER = {
+        "nba": ["stat_pts", "stat_reb", "stat_ast", "stat_stl", "stat_blk"],
+        "nfl": ["stat_pass_yds", "stat_pass_td", "stat_rush_yds", "stat_rush_td",
+                 "stat_rec", "stat_rec_yds"],
+        "nhl": ["stat_goals", "stat_assists", "stat_sog"],
+        "mlb": ["stat_h", "stat_hr", "stat_rbi", "stat_r", "stat_sb"],
+        "premier-league": ["stat_goals", "stat_assists"],
+    }
+    NHL_GOALIE_STATS = ["stat_sv", "stat_ga", "stat_sv_pct", "stat_w"]
 
-    curves = []
-    for (ls, its), group_cases in groups.items():
-        if len(group_cases) < 3:
-            continue  # Not enough samples
+    def _get_stat_cols(ls, position=""):
+        """Get stat columns for a league, position-aware for NHL goalies."""
+        if ls == "nhl" and position.lower() in ("g", "goalie", "goalkeeper"):
+            return NHL_GOALIE_STATS
+        return LEAGUE_STATS_SKATER.get(ls, ["stat_goals", "stat_assists"])
 
-        # Collect per-game-number data
+    def _build_curve(ls, its, group_cases, position=""):
+        """Build a single curve row from a group of return cases."""
         game_data = {i: [] for i in range(1, 11)}
         game_min_data = {i: [] for i in range(1, 11)}
         season_data = {i: [] for i in range(1, 11)}
+
+        # Per-stat game data: stat_name -> game_num -> [pct values]
+        stat_cols = _get_stat_cols(ls, position)
+        stat_game_data = {sc: {i: [] for i in range(1, 11)} for sc in stat_cols}
 
         for c in group_cases:
             baseline_5g = c.get("pre_baseline_5g")
@@ -2362,11 +2434,12 @@ def phase_5_aggregate(league=None):
                 continue
 
             raw_composites = json.loads(c["post_game_composites"]) if isinstance(c["post_game_composites"], str) else (c["post_game_composites"] or [])
-            # Handle both old (flat list) and new (dict with "games" key) formats
             if isinstance(raw_composites, dict):
                 composites = raw_composites.get("games", [])
+                pre_stat_baselines = raw_composites.get("pre_stat_baselines", {})
             else:
                 composites = raw_composites
+                pre_stat_baselines = {}
 
             for entry in composites:
                 gn = entry.get("game_num", 0)
@@ -2378,6 +2451,12 @@ def phase_5_aggregate(league=None):
                         game_min_data[gn].append(entry["minutes_pct"])
                     if baseline_season and baseline_season > 0:
                         season_data[gn].append(comp / baseline_season)
+                    # Per-stat: compute pct of pre-injury baseline for each stat
+                    for sc in stat_cols:
+                        stat_val = entry.get(sc)
+                        stat_base = pre_stat_baselines.get(sc)
+                        if stat_val is not None and stat_base and stat_base > 0:
+                            stat_game_data[sc][gn].append(stat_val / stat_base)
 
         # Build arrays
         avg_pct_recent = []
@@ -2415,6 +2494,41 @@ def phase_5_aggregate(league=None):
             m_vals = game_min_data[gn]
             avg_minutes_pct.append(round(statistics.mean(m_vals), 4) if m_vals else None)
 
+        # Per-stat aggregation
+        stat_avg_pct = {}
+        stat_median_pct = {}
+        stat_stddev_pct = {}
+        stat_stderr_pct = {}
+        stat_sample_sizes = {}  # per-stat case counts
+        for sc in stat_cols:
+            avg_arr = []
+            med_arr = []
+            sd_arr = []
+            se_arr = []
+            # Count unique cases that contributed at least one game for this stat
+            cases_with_stat = set()
+            for gn in range(1, 11):
+                vals = stat_game_data[sc][gn]
+                if vals:
+                    avg_arr.append(round(statistics.mean(vals), 4))
+                    med_arr.append(round(statistics.median(vals), 4))
+                    sd = statistics.stdev(vals) if len(vals) > 1 else 0
+                    sd_arr.append(round(sd, 4))
+                    se_arr.append(round(sd / math.sqrt(len(vals)), 4))
+                else:
+                    avg_arr.append(None)
+                    med_arr.append(None)
+                    sd_arr.append(None)
+                    se_arr.append(None)
+            # Count cases: max game count across all 10 games for this stat
+            max_n = max((len(stat_game_data[sc][gn]) for gn in range(1, 11)), default=0)
+            if max_n > 0:
+                stat_avg_pct[sc] = avg_arr
+                stat_median_pct[sc] = med_arr
+                stat_stddev_pct[sc] = sd_arr
+                stat_stderr_pct[sc] = se_arr
+                stat_sample_sizes[sc] = max_n
+
         # Rest-of-season aggregates
         ros_recent = [c["rest_of_season_avg"] / c["pre_baseline_5g"]
                       for c in group_cases
@@ -2423,13 +2537,12 @@ def phase_5_aggregate(league=None):
                       for c in group_cases
                       if c.get("rest_of_season_avg") and c.get("pre_baseline_season") and c["pre_baseline_season"] > 0]
 
-        # Estimate games-to-full: linear fit on median curve
+        # Estimate games-to-full
         games_to_full = None
         valid_medians = [(gn, v) for gn, v in enumerate(median_pct_recent, 1) if v is not None]
         if len(valid_medians) >= 3:
             last_v = valid_medians[-1][1]
             if last_v < 1.0:
-                # Simple linear extrapolation from last two points
                 g1, v1 = valid_medians[-2]
                 g2, v2 = valid_medians[-1]
                 if v2 > v1:
@@ -2439,10 +2552,11 @@ def phase_5_aggregate(league=None):
         games_missed_values = [c["games_missed"] for c in group_cases if c.get("games_missed")]
         recovery_values = [c["recovery_days"] for c in group_cases if c.get("recovery_days")]
 
-        curve = {
+        return {
             "league_slug": ls,
             "injury_type_slug": its,
             "injury_type": group_cases[0]["injury_type"],
+            "position": position,
             "sample_size": len(group_cases),
             "games_missed_avg": round(statistics.mean(games_missed_values), 1) if games_missed_values else None,
             "recovery_days_avg": round(statistics.mean(recovery_values), 1) if recovery_values else None,
@@ -2454,15 +2568,45 @@ def phase_5_aggregate(league=None):
             "avg_minutes_pct": json.dumps(avg_minutes_pct),
             "stddev_pct_recent": json.dumps(stddev_pct_recent),
             "stderr_pct_recent": json.dumps(stderr_pct_recent),
+            "stat_avg_pct": json.dumps(stat_avg_pct) if stat_avg_pct else None,
+            "stat_median_pct": json.dumps(stat_median_pct) if stat_median_pct else None,
+            "stat_stddev_pct": json.dumps(stat_stddev_pct) if stat_stddev_pct else None,
+            "stat_stderr_pct": json.dumps(stat_stderr_pct) if stat_stderr_pct else None,
+            "stat_sample_sizes": json.dumps(stat_sample_sizes) if stat_sample_sizes else None,
             "rest_of_season_pct_recent": round(statistics.mean(ros_recent), 4) if ros_recent else None,
             "rest_of_season_pct_season": round(statistics.mean(ros_season), 4) if ros_season else None,
             "rest_of_season_sample": len(ros_recent),
             "games_to_full": games_to_full,
         }
-        curves.append(curve)
 
-    n = sb_upsert("back_in_play_performance_curves", curves, conflict="league_slug,injury_type_slug")
-    print(f"  Aggregated {n} performance curves from {len(cases)} cases", flush=True)
+    # Group by (league_slug, injury_type_slug)
+    groups = {}
+    for c in cases:
+        key = (c["league_slug"], c["injury_type_slug"])
+        groups.setdefault(key, []).append(c)
+
+    curves = []
+    for (ls, its), group_cases in groups.items():
+        if len(group_cases) < 3:
+            continue
+
+        # All-positions combined curve (position="")
+        curves.append(_build_curve(ls, its, group_cases, position=""))
+
+        # Per-position curves
+        pos_groups = {}
+        for c in group_cases:
+            pos = (c.get("position") or "").strip()
+            if pos:
+                pos_groups.setdefault(pos, []).append(c)
+
+        for pos, pos_cases in pos_groups.items():
+            if len(pos_cases) >= 3:
+                curves.append(_build_curve(ls, its, pos_cases, position=pos))
+
+    # Upsert with position in conflict key
+    n = sb_upsert("back_in_play_performance_curves", curves, conflict="league_slug,injury_type_slug,position")
+    print(f"  Aggregated {n} performance curves ({len([c for c in curves if c['position']])} per-position) from {len(cases)} cases", flush=True)
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
