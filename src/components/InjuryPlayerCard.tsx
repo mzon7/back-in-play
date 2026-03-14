@@ -295,7 +295,7 @@ export function InjuryPlayerCard({
       style={{ border: `1px solid ${borderColor}` }}
     >
       {linkToPlayer ? (
-        <Link to={playerUrl} className="block" onClick={() => trackPlayerCardClick(slug, league_slug)}>
+        <Link to={playerUrl} className="block" onClick={(e) => trackPlayerCardClick(e, slug, league_slug)}>
           {cardBody}
         </Link>
       ) : (
