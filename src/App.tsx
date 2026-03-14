@@ -1,5 +1,5 @@
 // @refresh reset
-import { Fragment, lazy, Suspense } from "react";
+import React, { Fragment, lazy, Suspense } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthCallback } from "@mzon7/zon-incubator-sdk/auth";
 import { supabase } from "./lib/supabase";
@@ -10,16 +10,30 @@ import { RecoveryStatsPage } from "./features/historical-injury-data-system/comp
 import { HooksErrorBoundary } from "./components/HooksErrorBoundary";
 import { usePageTracking } from "./lib/analytics";
 
-const PlayerInjuryPage = lazy(() => import("./pages/player/PlayerInjuryPage"));
-const PlayerReturnPage = lazy(() => import("./pages/player/PlayerReturnAliasPage"));
-const TeamInjuryPage = lazy(() => import("./pages/team/TeamInjuryPage"));
-const SlugRouter = lazy(() => import("./pages/SlugRouter"));
-const PerformanceCurvesPage = lazy(() => import("./features/performance-curves/components/PerformanceCurvesPage"));
-const PropsPage = lazy(() => import("./pages/PropsPage"));
-const ReturningTodayPage = lazy(() => import("./pages/ReturningTodayPage"));
-const ReturningThisWeekPage = lazy(() => import("./pages/ReturningThisWeekPage"));
-const MinutesRestrictionPage = lazy(() => import("./pages/MinutesRestrictionPage"));
-const LeagueInjuryTypePerformancePage = lazy(() => import("./pages/league/LeagueInjuryTypePerformancePage"));
+// Wraps lazy() so that chunk-load failures (stale deploy hashes) trigger a
+// hard reload instead of leaving the user on a broken blank screen.
+function lazyWithReload<T extends React.ComponentType<unknown>>(
+  factory: () => Promise<{ default: T }>,
+) {
+  return lazy(() =>
+    factory().catch(() => {
+      window.location.reload();
+      // Never resolves — reload fires before React needs the module.
+      return new Promise<{ default: T }>(() => {});
+    }),
+  );
+}
+
+const PlayerInjuryPage = lazyWithReload(() => import("./pages/player/PlayerInjuryPage"));
+const PlayerReturnPage = lazyWithReload(() => import("./pages/player/PlayerReturnAliasPage"));
+const TeamInjuryPage = lazyWithReload(() => import("./pages/team/TeamInjuryPage"));
+const SlugRouter = lazyWithReload(() => import("./pages/SlugRouter"));
+const PerformanceCurvesPage = lazyWithReload(() => import("./features/performance-curves/components/PerformanceCurvesPage"));
+const PropsPage = lazyWithReload(() => import("./pages/PropsPage"));
+const ReturningTodayPage = lazyWithReload(() => import("./pages/ReturningTodayPage"));
+const ReturningThisWeekPage = lazyWithReload(() => import("./pages/ReturningThisWeekPage"));
+const MinutesRestrictionPage = lazyWithReload(() => import("./pages/MinutesRestrictionPage"));
+const LeagueInjuryTypePerformancePage = lazyWithReload(() => import("./pages/league/LeagueInjuryTypePerformancePage"));
 
 function Loading() {
   return (
