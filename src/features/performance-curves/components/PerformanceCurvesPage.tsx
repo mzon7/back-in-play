@@ -51,6 +51,7 @@ function StatDrillDown({ curve }: { curve: PerformanceCurve }) {
         <div className="bg-white/[0.03] rounded-lg p-3 border border-white/5">
           <p className="text-xs text-white/50 mb-2">
             {STAT_LABELS[selectedStat]} — % of pre-injury average over 10 games
+            <span className="text-white/25 ml-2">(n={curve.sample_size} total cases — actual count for this stat may be lower as not all positions track it)</span>
           </p>
           <div className="grid grid-cols-10 gap-1">
             {(curve.stat_avg_pct[selectedStat] ?? []).map((val, i) => {

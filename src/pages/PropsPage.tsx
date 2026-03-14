@@ -137,83 +137,68 @@ function usePropsWithPlayers() {
 
       const playerIds = Array.from(propsByPlayer.keys());
 
-      // 3. Get player info
-      const players: any[] = [];
-      for (let i = 0; i < playerIds.length; i += 50) {
-        const chunk = playerIds.slice(i, i + 50);
-        const { data } = await supabase
+      // 3. Parallel: players (with team+league joins), injuries, game logs
+      const [playersRes, leaguesRes, ...injuryChunks] = await Promise.all([
+        // Players with team+league join (1 call instead of 3 sequential)
+        supabase
           .from("back_in_play_players")
-          .select("player_id, player_name, slug, position, team_id, league_id, headshot_url, espn_id, is_star, is_starter")
-          .in("player_id", chunk);
-        if (data) players.push(...data);
-      }
+          .select("player_id, player_name, slug, position, team_id, league_id, headshot_url, espn_id, is_star, is_starter, team:back_in_play_teams(team_name, league_id), league:back_in_play_leagues!back_in_play_players_league_id_fkey(slug)")
+          .in("player_id", playerIds),
+        // Leagues (small, fast)
+        supabase.from("back_in_play_leagues").select("league_id, slug"),
+        // Injuries — parallel chunks
+        ...Array.from({ length: Math.ceil(playerIds.length / 200) }, (_, i) =>
+          supabase
+            .from("back_in_play_injuries")
+            .select("player_id, status, injury_type, expected_return, date_injured")
+            .in("player_id", playerIds.slice(i * 200, (i + 1) * 200))
+            .neq("status", "cleared")
+            .order("date_injured", { ascending: false })
+        ),
+      ]);
 
+      const players = playersRes.data ?? [];
       const playerMap = new Map<string, any>();
-      players.forEach((p) => playerMap.set(p.player_id, p));
+      players.forEach((p: any) => playerMap.set(p.player_id, p));
 
-      // 4. Get team names
-      const teamIds = Array.from(new Set(players.map((p) => p.team_id).filter(Boolean)));
-      const { data: teams } = await supabase
-        .from("back_in_play_teams")
-        .select("team_id, team_name, league_id")
-        .in("team_id", teamIds);
-      const teamMap = new Map<string, { name: string; leagueId: string }>();
-      (teams ?? []).forEach((t) => teamMap.set(t.team_id, { name: t.team_name, leagueId: t.league_id }));
-
-      // 5. Get league slugs
-      const { data: leagues } = await supabase
-        .from("back_in_play_leagues")
-        .select("league_id, slug");
       const leagueMap = new Map<string, string>();
-      (leagues ?? []).forEach((l) => leagueMap.set(l.league_id, l.slug));
-
-      // 6. Get active injuries for these players (with date_injured for game log lookback)
-      const injuries: any[] = [];
-      for (let i = 0; i < playerIds.length; i += 50) {
-        const chunk = playerIds.slice(i, i + 50);
-        const { data } = await supabase
-          .from("back_in_play_injuries")
-          .select("player_id, status, injury_type, expected_return, date_injured")
-          .in("player_id", chunk)
-          .neq("status", "cleared")
-          .order("date_injured", { ascending: false });
-        if (data) injuries.push(...data);
-      }
+      (leaguesRes.data ?? []).forEach((l: any) => leagueMap.set(l.league_id, l.slug));
 
       // Latest injury per player
       const injuryMap = new Map<string, any>();
-      for (const inj of injuries) {
-        if (!injuryMap.has(inj.player_id)) {
-          injuryMap.set(inj.player_id, inj);
+      for (const chunk of injuryChunks) {
+        for (const inj of chunk.data ?? []) {
+          if (!injuryMap.has(inj.player_id)) injuryMap.set(inj.player_id, inj);
         }
       }
 
-      // 7. Get game logs for pre-injury averages (20 games before injury date)
+      // 4. Game logs — parallel chunks (heaviest query, but now parallel)
+      const logChunks = await Promise.all(
+        Array.from({ length: Math.ceil(playerIds.length / 100) }, (_, i) =>
+          supabase
+            .from("back_in_play_player_game_logs")
+            .select("player_id, game_date, minutes, stat_pts, stat_reb, stat_ast, stat_stl, stat_blk, stat_sog, stat_rush_yds, stat_pass_yds, stat_rec, stat_rec_yds, stat_goals, stat_h, stat_rbi")
+            .in("player_id", playerIds.slice(i * 100, (i + 1) * 100))
+            .order("game_date", { ascending: false })
+            .limit(2000)
+        )
+      );
       const gameLogMap = new Map<string, any[]>();
-      for (let i = 0; i < playerIds.length; i += 50) {
-        const chunk = playerIds.slice(i, i + 50);
-        const { data } = await supabase
-          .from("back_in_play_player_game_logs")
-          .select("player_id, game_date, minutes, stat_pts, stat_reb, stat_ast, stat_stl, stat_blk, stat_sog, stat_rush_yds, stat_pass_yds, stat_rec, stat_rec_yds, stat_goals, stat_h, stat_rbi")
-          .in("player_id", chunk)
-          .order("game_date", { ascending: false })
-          .limit(1000);
-        if (data) {
-          for (const g of data) {
-            const existing = gameLogMap.get(g.player_id) ?? [];
-            existing.push(g);
-            gameLogMap.set(g.player_id, existing);
-          }
+      for (const chunk of logChunks) {
+        for (const g of chunk.data ?? []) {
+          const existing = gameLogMap.get(g.player_id) ?? [];
+          existing.push(g);
+          gameLogMap.set(g.player_id, existing);
         }
       }
 
-      // 8. Build result
+      // 5. Build result
       const result: PropsPlayer[] = [];
       for (const [pid, playerProps] of propsByPlayer) {
         const player = playerMap.get(pid);
         if (!player) continue;
-        const team = teamMap.get(player.team_id);
-        const leagueSlug = team ? (leagueMap.get(team.leagueId) ?? "") : "";
+        const team = (player as any).team;
+        const leagueSlug = (player as any).league?.slug ?? leagueMap.get(player.league_id) ?? "";
         const injury = injuryMap.get(pid);
 
         // Compute pre-injury averages from game logs
@@ -245,7 +230,7 @@ function usePropsWithPlayers() {
           player_name: player.player_name,
           player_slug: player.slug ?? "",
           position: player.position ?? "",
-          team_name: team?.name ?? "",
+          team_name: team?.team_name ?? "",
           league_slug: leagueSlug,
           headshot_url: player.headshot_url ?? (player.espn_id ? `https://a.espncdn.com/i/headshots/nba/players/full/${player.espn_id}.png` : null),
           status: injury?.status ?? "active",
