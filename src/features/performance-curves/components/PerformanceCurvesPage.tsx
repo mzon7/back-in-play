@@ -11,6 +11,14 @@ import { trackCurveExpand, trackStatDrillDown, trackLeagueFilter } from "../../.
 
 const LEAGUE_ORDER: LeagueFilter[] = ["all", "nba", "nfl", "mlb", "nhl", "premier-league"];
 
+const LEAGUE_POSITIONS: Record<string, string[]> = {
+  nba: ["G", "F", "C", "PG", "SG", "PF", "SF"],
+  nfl: ["QB", "RB", "WR", "TE", "OL", "DL", "LB", "DB", "K"],
+  mlb: ["P", "IF", "OF", "C", "1B", "2B", "3B", "SS", "SP", "RP"],
+  nhl: ["W", "D", "C", "G", "LW", "RW"],
+  "premier-league": ["FWD", "MID", "DEF", "GK"],
+};
+
 function getStatsForCurve(curve: PerformanceCurve): string[] {
   // NHL goalies get goalie-specific stats, not skater stats
   if (curve.league_slug === "nhl" && curve.position === "G") {
@@ -425,28 +433,56 @@ export default function PerformanceCurvesPage() {
           ))}
         </div>
 
-        {/* Position filter — only shown when a specific league is selected */}
-        {league !== "all" && positions.length > 0 && (
-          <div className="flex gap-1 overflow-x-auto pb-3 mb-4">
-            <button
-              onClick={() => setPosition("all")}
-              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                position === "all" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" : "bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
-              }`}
-            >
-              All Positions
-            </button>
-            {positions.map((pos) => (
+        {/* Position filter — grouped by league */}
+        {positions.length > 0 && (
+          <div className="pb-3 mb-4 space-y-1.5">
+            <div className="flex items-center gap-1 flex-wrap">
               <button
-                key={pos}
-                onClick={() => setPosition(pos)}
+                onClick={() => setPosition("all")}
                 className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                  position === pos ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" : "bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
+                  position === "all" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" : "bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
                 }`}
               >
-                {pos}
+                All Positions
               </button>
-            ))}
+            </div>
+            {league !== "all" ? (
+              <div className="flex items-center gap-1 flex-wrap">
+                <span className="text-[10px] text-white/30 font-medium w-10 shrink-0">{LEAGUE_LABELS[league]}</span>
+                {positions.map((pos) => (
+                  <button
+                    key={pos}
+                    onClick={() => setPosition(pos)}
+                    className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
+                      position === pos ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" : "bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
+                    }`}
+                  >
+                    {pos}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              LEAGUE_ORDER.filter((s) => s !== "all").map((ls) => {
+                const leaguePositions = (LEAGUE_POSITIONS[ls] ?? []).filter((p) => positions.includes(p));
+                if (leaguePositions.length === 0) return null;
+                return (
+                  <div key={ls} className="flex items-center gap-1 flex-wrap">
+                    <span className="text-[10px] text-white/30 font-medium w-10 shrink-0">{LEAGUE_LABELS[ls]}</span>
+                    {leaguePositions.map((pos) => (
+                      <button
+                        key={`${ls}-${pos}`}
+                        onClick={() => { setLeague(ls as LeagueFilter); setPosition(pos); }}
+                        className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
+                          league === ls && position === pos ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" : "bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
+                        }`}
+                      >
+                        {pos}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })
+            )}
           </div>
         )}
 
