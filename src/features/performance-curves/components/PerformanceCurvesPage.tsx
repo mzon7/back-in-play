@@ -1,13 +1,15 @@
-import { useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { SiteHeader } from "../../../components/SiteHeader";
 import { SEO } from "../../../components/seo/SEO";
 import { breadcrumbJsonLd, datasetJsonLd, faqJsonLd, jsonLdGraph } from "../../../components/seo/seoHelpers";
-import { usePerformanceCurves, usePositionsWithCurves } from "../lib/queries";
+import { usePerformanceCurves, usePerformanceCurve, usePositionsWithCurves } from "../lib/queries";
 import { PerformanceCurveChart } from "./PerformanceCurveChart";
 import type { PerformanceCurve, LeagueFilter } from "../lib/types";
 import { LEAGUE_LABELS, STAT_LABELS, LEAGUE_STATS } from "../lib/types";
 import { trackCurveExpand, trackStatDrillDown, trackLeagueFilter } from "../../../lib/analytics";
+import { leagueColor } from "../../../lib/leagueColors";
+import { isRealInjury } from "../../../lib/injuryFilters";
 
 const LEAGUE_ORDER: LeagueFilter[] = ["all", "nba", "nfl", "mlb", "nhl", "premier-league"];
 
@@ -19,12 +21,37 @@ const LEAGUE_POSITIONS: Record<string, string[]> = {
   "premier-league": ["FWD", "MID", "DEF", "GK"],
 };
 
+/** Short unit labels for raw stat display */
+const STAT_UNITS: Record<string, string> = {
+  stat_pts: "PPG", stat_reb: "RPG", stat_ast: "APG", stat_stl: "SPG", stat_blk: "BPG",
+  stat_pass_yds: "yds", stat_pass_td: "TDs", stat_rush_yds: "yds", stat_rush_td: "TDs",
+  stat_rec: "rec", stat_rec_yds: "yds",
+  stat_goals: "goals", stat_assists: "assists", stat_sog: "SOG",
+  stat_h: "hits", stat_hr: "HR", stat_rbi: "RBI", stat_r: "runs", stat_sb: "SB",
+  stat_sv: "saves", stat_ga: "GA", stat_sv_pct: "SV%", stat_w: "wins",
+  composite: "comp",
+};
+
 function getStatsForCurve(curve: PerformanceCurve): string[] {
   // NHL goalies get goalie-specific stats, not skater stats
   if (curve.league_slug === "nhl" && curve.position === "G") {
     return LEAGUE_STATS["nhl-goalie"] ?? [];
   }
   return LEAGUE_STATS[curve.league_slug] ?? [];
+}
+
+/** Compute raw stat change: baseline * (pct - 1.0) */
+function rawImpact(pct: number | null | undefined, baseline: number | undefined): number | null {
+  if (pct == null || baseline == null || baseline === 0) return null;
+  return baseline * (pct - 1.0);
+}
+
+/** Format raw impact: –2.3, +0.5, 0.0 */
+function fmtImpact(val: number | null, unit?: string): string {
+  if (val == null) return "—";
+  const sign = val >= 0 ? "+" : "";
+  const formatted = `${sign}${val.toFixed(1)}`;
+  return unit ? `${formatted} ${unit}` : formatted;
 }
 
 
@@ -37,10 +64,11 @@ function StatFilterBar({ curve, selectedStat, onSelect, useMedian }: { curve: Pe
 
   const statSource = useMedian ? curve.stat_median_pct : curve.stat_avg_pct;
   const hasComposite = statSource?.["composite"]?.some((v) => v != null);
+  const baselines = curve.stat_baselines;
 
   return (
     <div className="mb-3">
-      <p className="text-[10px] text-white/35 mb-1.5">Stat performance relative to pre-injury baseline</p>
+      <p className="text-[10px] text-white/35 mb-1.5">Stat impact relative to pre-injury baseline</p>
       <div className="flex flex-wrap gap-1">
         <button
           onClick={() => onSelect(null)}
@@ -71,9 +99,10 @@ function StatFilterBar({ curve, selectedStat, onSelect, useMedian }: { curve: Pe
         )}
         {availableStats.map((stat) => {
           const val10 = statSource?.[stat]?.[9];
-          const pctColor = val10 != null
-            ? val10 >= 1.0 ? "text-green-400" : val10 >= 0.8 ? "text-amber-400" : "text-red-400"
-            : "text-white/30";
+          const baseline = baselines?.[stat];
+          const impact = rawImpact(val10, baseline);
+          const impactColor = impact == null ? "text-white/30"
+            : impact >= 0 ? "text-green-400" : impact >= -1 ? "text-amber-400" : "text-red-400";
           return (
             <button
               key={stat}
@@ -85,9 +114,13 @@ function StatFilterBar({ curve, selectedStat, onSelect, useMedian }: { curve: Pe
               }`}
             >
               {STAT_LABELS[stat] ?? stat}
-              {val10 != null && (
-                <span className={`ml-1 ${pctColor}`}>{Math.round(val10 * 100)}%</span>
-              )}
+              {impact != null ? (
+                <span className={`ml-1 ${impactColor}`}>{fmtImpact(impact)}</span>
+              ) : val10 != null ? (
+                <span className={`ml-1 ${val10 >= 1.0 ? "text-green-400" : val10 >= 0.8 ? "text-amber-400" : "text-red-400"}`}>
+                  {Math.round(val10 * 100)}%
+                </span>
+              ) : null}
             </button>
           );
         })}
@@ -124,24 +157,36 @@ function MinutesBreakdown({ curve }: { curve: PerformanceCurve }) {
   );
 }
 
-function PositionDrillDown({ curve, currentPosition, onSelectPosition }: {
+function PositionDrillDown({ curve, localPosition, onSelectPosition }: {
   curve: PerformanceCurve;
-  currentPosition: string;
+  localPosition: string;
   onSelectPosition: (pos: string) => void;
 }) {
-  // Only show when viewing all positions (no specific position filter)
-  if (currentPosition !== "all") return null;
   const positions = LEAGUE_POSITIONS[curve.league_slug];
   if (!positions) return null;
   return (
     <div className="mb-3">
       <p className="text-[10px] text-white/35 mb-1.5">Filter by position</p>
       <div className="flex flex-wrap gap-1">
+        <button
+          onClick={() => onSelectPosition("all")}
+          className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border ${
+            localPosition === "all"
+              ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/30"
+              : "bg-white/5 text-white/50 hover:text-white/70 border-transparent hover:border-cyan-500/30"
+          }`}
+        >
+          All
+        </button>
         {positions.map((pos) => (
           <button
             key={pos}
             onClick={() => onSelectPosition(pos)}
-            className="px-2.5 py-1 rounded-lg text-xs font-medium bg-white/5 text-white/50 hover:text-white/70 border border-transparent hover:border-cyan-500/30 transition-colors"
+            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border ${
+              localPosition === pos
+                ? "bg-cyan-500/15 text-cyan-400 border-cyan-500/30"
+                : "bg-white/5 text-white/50 hover:text-white/70 border-transparent hover:border-cyan-500/30"
+            }`}
           >
             {pos}
           </button>
@@ -151,32 +196,81 @@ function PositionDrillDown({ curve, currentPosition, onSelectPosition }: {
   );
 }
 
-function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
+function CurveCard({ curve: baseCurve, forceExpand, allCurves = [] }: {
   curve: PerformanceCurve;
   forceExpand?: boolean;
-  currentPosition: string;
-  onSelectPosition: (pos: string) => void;
+  allCurves?: PerformanceCurve[];
 }) {
   const [expanded, setExpanded] = useState(forceExpand ?? false);
   const [selectedStat, setSelectedStat] = useState<string | null>(null);
   const [showMinutes, setShowMinutes] = useState(false);
   const [useMedian, setUseMedian] = useState(true);
   const [showInfo, setShowInfo] = useState(false);
+  const [localPosition, setLocalPosition] = useState("all");
+  const [compareSlug, setCompareSlug] = useState("");
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // Listen for external stat selection (from discovery section clicks)
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const handler = (e: Event) => {
+      const statKey = (e as CustomEvent).detail;
+      if (typeof statKey === "string") {
+        setSelectedStat(statKey);
+        setShowMinutes(false);
+      }
+    };
+    el.addEventListener("select-stat", handler);
+    return () => el.removeEventListener("select-stat", handler);
+  }, []);
+
+  // Fetch position-specific curve when a position is selected
+  const { data: posCurves } = usePerformanceCurves(
+    baseCurve.league_slug,
+    baseCurve.injury_type_slug,
+    localPosition !== "all" ? localPosition : undefined,
+  );
+  const curve = localPosition !== "all" && posCurves && posCurves.length > 0 ? posCurves[0] : baseCurve;
+
+  // Fetch comparison curve
+  const compareInjurySlug = compareSlug ? compareSlug.split("|")[0] : "";
+  const compareLeagueSlug = compareSlug ? compareSlug.split("|")[1] : "";
+  const { data: compareCurve } = usePerformanceCurve(compareLeagueSlug, compareInjurySlug);
 
   const mainData = useMedian ? curve.median_pct_recent : curve.avg_pct_recent;
-  const median10 = mainData[9];
-  const reachedFull = median10 != null && median10 >= 1.0;
   const leagueLabel = LEAGUE_LABELS[curve.league_slug] ?? curve.league_slug.toUpperCase();
-
-  const overallStatChange = median10 != null ? Math.round(median10 * 100) : null;
 
   const minuteG10 = curve.avg_minutes_pct[9];
   const minuteChange = minuteG10 != null ? Math.round(minuteG10 * 100) : null;
 
   const nextSeasonPct = curve.next_season_pct;
 
+  // Build a view curve that shows stat-specific data when a stat is selected
+  const viewCurve = useMemo(() => {
+    if (!selectedStat) return curve;
+    const medianArr = (curve.stat_median_pct?.[selectedStat] ?? []) as number[];
+    const avgArr = (curve.stat_avg_pct?.[selectedStat] ?? []) as number[];
+    const stderrArr = (curve.stat_stderr_pct?.[selectedStat] ?? []) as number[];
+    return {
+      ...curve,
+      median_pct_recent: medianArr,
+      avg_pct_recent: avgArr,
+      p25_pct_recent: new Array(10).fill(null) as number[],
+      p75_pct_recent: new Array(10).fill(null) as number[],
+      stderr_pct_recent: stderrArr,
+    };
+  }, [curve, selectedStat]);
+
+  // Data array for the selected view (used in summary cards)
+  const viewData = selectedStat
+    ? (useMedian ? (curve.stat_median_pct?.[selectedStat] ?? []) : (curve.stat_avg_pct?.[selectedStat] ?? []))
+    : mainData;
+  const statBaseline = selectedStat ? curve.stat_baselines?.[selectedStat] : undefined;
+  const statUnit = selectedStat ? (STAT_UNITS[selectedStat] ?? "") : "";
+
   return (
-    <div id={`curve-${curve.injury_type_slug}-${curve.league_slug}`} className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
+    <div ref={cardRef} id={`curve-${curve.injury_type_slug}-${curve.league_slug}`} className="rounded-xl border border-white/10 bg-white/5 overflow-hidden" style={{ borderLeftColor: `${leagueColor(baseCurve.league_slug)}35`, borderLeftWidth: 2 }}>
       <button
         onClick={() => { if (!expanded) trackCurveExpand(curve.injury_type_slug, curve.league_slug); setExpanded(!expanded); }}
         className="w-full text-left px-5 py-4 flex items-center gap-3 hover:bg-white/[0.03] transition-colors"
@@ -184,7 +278,7 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="font-semibold text-sm text-white truncate">{curve.injury_type}</h3>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/40 shrink-0">{leagueLabel}</span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0" style={{ color: leagueColor(curve.league_slug), backgroundColor: `${leagueColor(curve.league_slug)}12` }}>{leagueLabel}</span>
             {curve.position && (
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400/60 shrink-0">{curve.position}</span>
             )}
@@ -202,13 +296,18 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
             {curve.games_missed_avg != null && <span>{curve.games_missed_avg} games missed</span>}
             {curve.recovery_days_avg != null && <span>{Math.round(curve.recovery_days_avg)}d recovery</span>}
           </div>
-          {/* Overall stat + minute change summary */}
+          {/* Overall stat + minute change summary — reflects selected stat */}
           <div className="flex items-center gap-3 mt-1 text-[11px]">
-            {overallStatChange != null && (
-              <span className={overallStatChange >= 100 ? "text-green-400/70" : "text-amber-400/70"}>
-                {useMedian ? "Median" : "Average"}: {overallStatChange}% by G10
-              </span>
-            )}
+            {(() => {
+              const g10 = viewData[9];
+              const g10Pct = g10 != null ? Math.round(g10 * 100) : null;
+              const label = selectedStat ? (STAT_LABELS[selectedStat] ?? selectedStat) : (useMedian ? "Median" : "Average");
+              return g10Pct != null ? (
+                <span className={g10Pct >= 100 ? "text-green-400/70" : "text-amber-400/70"}>
+                  {label}: {g10Pct}% by G10
+                </span>
+              ) : null;
+            })()}
             {minuteChange != null && (
               <span className={minuteChange >= 95 ? "text-green-400/70" : "text-amber-400/70"}>
                 Minutes: {minuteChange}%
@@ -217,16 +316,22 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
           </div>
         </div>
 
-        {/* Quick stat */}
+        {/* Quick stat — reflects selected stat when expanded */}
         <div className="text-right shrink-0">
-          {median10 != null ? (
-            <div className={`text-lg font-bold ${reachedFull ? "text-green-400" : "text-amber-400"}`}>
-              {Math.round(median10 * 100)}%
-            </div>
-          ) : (
-            <div className="text-lg font-bold text-white/20">—</div>
-          )}
-          <div className="text-[10px] text-white/30">of baseline by G10</div>
+          {(() => {
+            const displayVal = viewData[9];
+            const full = displayVal != null && displayVal >= 1.0;
+            return displayVal != null ? (
+              <div className={`text-lg font-bold ${full ? "text-green-400" : "text-amber-400"}`}>
+                {Math.round(displayVal * 100)}%
+              </div>
+            ) : (
+              <div className="text-lg font-bold text-white/20">—</div>
+            );
+          })()}
+          <div className="text-[10px] text-white/30">
+            {selectedStat ? `${STAT_LABELS[selectedStat] ?? selectedStat} G10` : "of baseline by G10"}
+          </div>
         </div>
 
         <span className="text-white/30 text-sm ml-2 transition-transform" style={{ transform: expanded ? "rotate(0)" : "rotate(-90deg)" }}>
@@ -236,10 +341,22 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
 
       {expanded && (
         <div className="px-5 pb-5 border-t border-white/5">
-          {/* Position drill-down (when viewing all positions) */}
+          {/* Position drill-down */}
           <div className="mt-4">
-            <PositionDrillDown curve={curve} currentPosition={currentPosition} onSelectPosition={onSelectPosition} />
+            <PositionDrillDown curve={baseCurve} localPosition={localPosition} onSelectPosition={(pos) => { setLocalPosition(pos); setSelectedStat(null); }} />
           </div>
+          {localPosition !== "all" && (
+            <div className="mb-2">
+              <p className="text-[10px] text-cyan-400/60">
+                Showing {localPosition} data · {curve.sample_size} cases
+              </p>
+              {curve.sample_size < 30 && (
+                <p className="text-[10px] text-amber-400/70 mt-0.5">
+                  Small sample size — interpret with caution
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Median/Average toggle + Info button */}
           <div className="mt-2 flex items-center gap-2 mb-3">
@@ -304,8 +421,37 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
             )}
           </div>
 
-          {/* Selected stat detail */}
-          {selectedStat && (useMedian ? curve.stat_median_pct : curve.stat_avg_pct)?.[selectedStat] && (
+          {/* Raw stat impact summary when stat is selected */}
+          {selectedStat && statBaseline != null && statBaseline > 0 && (
+            <div className="bg-white/[0.03] rounded-lg p-3 border border-white/5 mb-3 mt-3">
+              <p className="text-xs text-white/60 mb-2 font-medium">
+                {STAT_LABELS[selectedStat] ?? selectedStat} impact after return
+                <span className="text-white/25 ml-2">(baseline: {statBaseline.toFixed(1)} {statUnit}/game, n={curve.sample_size})</span>
+              </p>
+              <div className="flex items-center gap-4 text-sm">
+                {[0, 4, 9].map((idx) => {
+                  const pct = (useMedian ? curve.stat_median_pct : curve.stat_avg_pct)?.[selectedStat]?.[idx];
+                  const impact = rawImpact(pct, statBaseline);
+                  const color = impact == null ? "text-white/30" : impact >= 0 ? "text-green-400" : "text-amber-400";
+                  return (
+                    <div key={idx}>
+                      <span className="text-white/40 text-xs">G{idx + 1}: </span>
+                      <span className={`font-bold ${color}`}>{fmtImpact(impact, statUnit)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-white/30 mt-1.5">
+                ({[0, 4, 9].map((idx) => {
+                  const pct = (useMedian ? curve.stat_median_pct : curve.stat_avg_pct)?.[selectedStat]?.[idx];
+                  return pct != null ? `${Math.round(pct * 100)}%` : "—";
+                }).join(" → ")} of baseline)
+              </p>
+            </div>
+          )}
+
+          {/* Stat detail grid (percentage view, shown when stat selected but no baselines available) */}
+          {selectedStat && (statBaseline == null || statBaseline === 0) && (useMedian ? curve.stat_median_pct : curve.stat_avg_pct)?.[selectedStat] && (
             <div className="bg-white/[0.03] rounded-lg p-3 border border-white/5 mb-3 mt-3">
               <p className="text-xs text-white/50 mb-2">
                 {STAT_LABELS[selectedStat] ?? (selectedStat === "composite" ? "Composite" : selectedStat)} — {useMedian ? "median" : "avg"} % of pre-injury baseline over 10 games
@@ -332,43 +478,108 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
           {/* Minutes G1-G10 breakdown */}
           {showMinutes && <div className="mt-3"><MinutesBreakdown curve={curve} /></div>}
 
-          {/* Chart */}
+          {/* Injury comparison dropdown */}
+          {allCurves.length > 1 && (
+            <div className="flex items-center gap-2 mt-3 mb-1">
+              <span className="text-[10px] text-white/35 shrink-0">Compare with:</span>
+              <select
+                value={compareSlug}
+                onChange={(e) => setCompareSlug(e.target.value)}
+                className="flex-1 border border-white/10 rounded-lg px-2 py-1 text-xs cursor-pointer hover:border-white/20 transition-colors max-w-xs"
+                style={{ backgroundColor: "#151B2E", color: "rgba(255,255,255,0.7)" }}
+              >
+                <option value="" style={{ backgroundColor: "#151B2E", color: "#ccc" }}>None</option>
+                {allCurves
+                  .filter((c) => c.curve_id !== baseCurve.curve_id)
+                  .map((c) => (
+                    <option key={c.curve_id} value={`${c.injury_type_slug}|${c.league_slug}`} style={{ backgroundColor: "#151B2E", color: "#ccc" }}>
+                      {c.injury_type} ({LEAGUE_LABELS[c.league_slug]})
+                    </option>
+                  ))}
+              </select>
+              {compareSlug && (
+                <button
+                  onClick={() => setCompareSlug("")}
+                  className="text-[10px] text-white/30 hover:text-white/50"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Comparison legend */}
+          {compareCurve && (
+            <div className="mb-1">
+              <div className="flex items-center gap-4 text-[10px] text-white/40">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 h-0.5 bg-[#1C7CFF] rounded" /> {baseCurve.injury_type} <span className="text-white/20">({curve.sample_size})</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 h-0.5 bg-[#FF8C00] rounded" style={{ borderBottom: "2px dashed #FF8C00" }} /> {compareCurve.injury_type} <span className="text-white/20">({compareCurve.sample_size})</span>
+                </span>
+              </div>
+              {compareCurve.sample_size < 30 && (
+                <p className="text-[10px] text-amber-400/70 mt-1">
+                  ⚠ {compareCurve.injury_type} has only {compareCurve.sample_size} cases — interpret with caution
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Chart — shows selected stat curve or overall */}
           <div className="mt-3">
-            <PerformanceCurveChart curve={curve} />
-            <p className="text-[10px] text-white/25 text-center mt-1">Typical recovery range based on historical outcomes</p>
+            <p className="text-[10px] text-white/40 text-center mb-1">
+              {selectedStat
+                ? `${STAT_LABELS[selectedStat] ?? selectedStat} — performance relative to pre-injury baseline`
+                : "Overall performance relative to pre-injury baseline"}
+            </p>
+            <PerformanceCurveChart
+              curve={viewCurve}
+              compareCurve={compareCurve ?? undefined}
+              compareLabel={compareCurve?.injury_type}
+            />
           </div>
 
-          {/* Key stats */}
+          {/* Key stats — show raw impact when stat selected, % otherwise */}
           <div className="grid grid-cols-3 gap-3 mt-4">
-            <div className="bg-white/5 rounded-lg p-3 text-center">
-              <p className="text-xs text-white/40 mb-1">Game 1 Return</p>
-              <p className="text-sm font-bold text-white">
-                {mainData[0] != null ? `${Math.round(mainData[0] * 100)}%` : "—"}
-              </p>
-              {curve.stderr_pct_recent[0] != null && (
-                <p className="text-[10px] text-white/25">±{Math.round(curve.stderr_pct_recent[0] * 100)}%</p>
-              )}
-            </div>
-            <div className="bg-white/5 rounded-lg p-3 text-center">
-              <p className="text-xs text-white/40 mb-1">Game 5 Return</p>
-              <p className="text-sm font-bold text-white">
-                {mainData[4] != null ? `${Math.round(mainData[4] * 100)}%` : "—"}
-              </p>
-              {curve.stderr_pct_recent[4] != null && (
-                <p className="text-[10px] text-white/25">±{Math.round(curve.stderr_pct_recent[4] * 100)}%</p>
-              )}
-            </div>
-            <div className="bg-white/5 rounded-lg p-3 text-center">
-              <p className="text-xs text-white/40 mb-1">By Game 10</p>
-              <p className="text-sm font-bold text-white">
-                {mainData[9] != null ? `${Math.round(mainData[9] * 100)}%` : "—"}
-              </p>
-              {curve.games_to_full != null ? (
-                <p className="text-[10px] text-white/25">~{Math.round(curve.games_to_full)} games to full</p>
-              ) : (
-                <p className="text-[10px] text-white/25">of baseline performance</p>
-              )}
-            </div>
+            {[{ idx: 0, label: "Game 1 Return" }, { idx: 4, label: "Game 5 Return" }, { idx: 9, label: "By Game 10" }].map(({ idx, label }) => {
+              const pctVal = viewData[idx];
+              const impact = rawImpact(pctVal, statBaseline);
+              const pctDisplay = pctVal != null ? `${Math.round(pctVal * 100)}%` : "—";
+              // Compare curve value at same index
+              const comparePctVal = compareCurve
+                ? (selectedStat
+                    ? (useMedian ? compareCurve.stat_median_pct?.[selectedStat]?.[idx] : compareCurve.stat_avg_pct?.[selectedStat]?.[idx])
+                    : (useMedian ? compareCurve.median_pct_recent[idx] : compareCurve.avg_pct_recent[idx]))
+                : null;
+              const comparePctDisplay = comparePctVal != null ? `${Math.round(comparePctVal * 100)}%` : null;
+              return (
+                <div key={idx} className="bg-white/5 rounded-lg p-3 text-center">
+                  <p className="text-xs text-white/40 mb-1">{label}</p>
+                  {selectedStat && impact != null ? (
+                    <>
+                      <p className={`text-sm font-bold ${impact >= 0 ? "text-green-400" : "text-amber-400"}`}>
+                        {fmtImpact(impact, statUnit)}
+                      </p>
+                      <p className="text-[10px] text-white/25">{pctDisplay} of baseline</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-bold text-white">{pctDisplay}</p>
+                      {idx === 9 && curve.games_to_full != null ? (
+                        <p className="text-[10px] text-white/25">~{Math.round(curve.games_to_full)} games to full</p>
+                      ) : (
+                        <p className="text-[10px] text-white/25">of baseline</p>
+                      )}
+                    </>
+                  )}
+                  {comparePctDisplay && (
+                    <p className="text-[10px] text-[#FF8C00] mt-1">{comparePctDisplay}</p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -383,7 +594,15 @@ const RETURN_TYPE_OPTIONS = [
 ] as const;
 
 export default function PerformanceCurvesPage() {
-  const [league, setLeague] = useState<LeagueFilter>("all");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const qLeague = searchParams.get("league");
+  const qInjury = searchParams.get("injury");
+  // Capture the initial injury param so it survives URL clearing
+  const [initialInjury] = useState(() => searchParams.get("injury"));
+
+  const [league, setLeague] = useState<LeagueFilter>(
+    qLeague && ["nba", "nfl", "mlb", "nhl", "premier-league"].includes(qLeague) ? qLeague as LeagueFilter : "all"
+  );
   const [position, setPosition] = useState<string>("all");
   const [returnType, setReturnType] = useState<string>("");
   const { data: curves = [], isLoading } = usePerformanceCurves(
@@ -395,10 +614,52 @@ export default function PerformanceCurvesPage() {
   const { data: positions = [] } = usePositionsWithCurves(league === "all" ? undefined : league);
 
   // Filter out "other" category and require n >= 30
-  const filteredCurves = useMemo(
-    () => curves.filter((c) => c.injury_type_slug !== "other" && c.injury_type_slug !== "unknown" && c.sample_size >= 30),
-    [curves]
-  );
+  const filteredCurves = useMemo(() => {
+    const base = curves.filter((c) => isRealInjury(c.injury_type_slug, c.injury_type) && c.sample_size >= 30 && (c.median_pct_recent[0] == null || c.median_pct_recent[0] > 0));
+    // Deduplicate by injury_type_slug + league_slug (keep highest sample_size)
+    const seen = new Map<string, typeof base[0]>();
+    for (const c of base) {
+      const key = `${c.injury_type_slug}|${c.league_slug}`;
+      const existing = seen.get(key);
+      if (!existing || c.sample_size > existing.sample_size) seen.set(key, c);
+    }
+    return Array.from(seen.values());
+  }, [curves]);
+
+  // Auto-scroll to injury from query param after data loads
+  useEffect(() => {
+    if (!qInjury || filteredCurves.length === 0) return;
+    // Find the matching curve
+    const target = filteredCurves.find((c) => c.injury_type_slug === qInjury);
+    if (!target) return;
+    const elId = `curve-${target.injury_type_slug}-${target.league_slug}`;
+    // Small delay to let DOM render
+    const timer = setTimeout(() => {
+      const el = document.getElementById(elId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        // Highlight briefly
+        el.style.transition = "box-shadow 0.3s ease, border-color 0.3s ease";
+        el.style.boxShadow = "0 0 0 2px rgba(28,124,255,0.5), 0 0 20px rgba(28,124,255,0.15)";
+        el.style.borderColor = "rgba(28,124,255,0.4)";
+        // Auto-expand the card
+        setTimeout(() => el.querySelector("button")?.click(), 400);
+        // Remove highlight after 2s
+        setTimeout(() => {
+          el.style.boxShadow = "";
+          el.style.borderColor = "";
+        }, 2500);
+      }
+    }, 200);
+    // Clear param after use so it doesn't re-trigger
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("injury");
+      next.delete("league");
+      return next;
+    }, { replace: true });
+    return () => clearTimeout(timer);
+  }, [qInjury, filteredCurves, setSearchParams]);
 
   const totalCases = filteredCurves.reduce((sum, c) => sum + c.sample_size, 0);
   const year = new Date().getFullYear();
@@ -464,6 +725,54 @@ export default function PerformanceCurvesPage() {
   }, [filteredCurves]);
 
   const [showMethodology, setShowMethodology] = useState(false);
+
+  // Featured curve: default to a well-known high-sample injury
+  const defaultFeaturedSlug = useMemo(() => {
+    // If navigated with an injury query param, feature that injury (use initialInjury so it persists after URL clearing)
+    if (initialInjury) {
+      const qMatch = filteredCurves.find((c) => c.injury_type_slug === initialInjury);
+      if (qMatch) return `${qMatch.injury_type_slug}|${qMatch.league_slug}`;
+    }
+    const preferred = ["knee", "acl", "hamstring", "ankle", "concussion"];
+    for (const pref of preferred) {
+      const match = filteredCurves.find((c) => c.injury_type_slug.includes(pref));
+      if (match) return `${match.injury_type_slug}|${match.league_slug}`;
+    }
+    return filteredCurves[0] ? `${filteredCurves[0].injury_type_slug}|${filteredCurves[0].league_slug}` : "";
+  }, [filteredCurves, initialInjury]);
+
+  const [featuredCurveSlug, setFeaturedCurveSlug] = useState("");
+  const activeFeaturedSlug = featuredCurveSlug || defaultFeaturedSlug;
+  const featuredCurve = useMemo(() => {
+    if (!activeFeaturedSlug) return null;
+    const [injSlug, leagSlug] = activeFeaturedSlug.split("|");
+    return filteredCurves.find((c) => c.injury_type_slug === injSlug && c.league_slug === leagSlug) ?? null;
+  }, [activeFeaturedSlug, filteredCurves]);
+
+  // Key findings: one highlight per league
+  const keyFindings = useMemo(() => {
+    const findings: { league: string; label: string; detail: string; color: string }[] = [];
+    const leagueGroups = new Map<string, PerformanceCurve[]>();
+    for (const c of reliableCurves) {
+      const arr = leagueGroups.get(c.league_slug) ?? [];
+      arr.push(c);
+      leagueGroups.set(c.league_slug, arr);
+    }
+    for (const [ls, lCurves] of leagueGroups) {
+      const withG1 = lCurves.filter((c) => c.median_pct_recent[0] != null);
+      if (withG1.length === 0) continue;
+      const worst = withG1.reduce((a, b) => (a.median_pct_recent[0]! < b.median_pct_recent[0]! ? a : b));
+      const g1 = Math.round(worst.median_pct_recent[0]! * 100);
+      const g10 = worst.median_pct_recent[9] != null ? Math.round(worst.median_pct_recent[9]! * 100) : null;
+      findings.push({
+        league: LEAGUE_LABELS[ls] ?? ls.toUpperCase(),
+        label: `${worst.injury_type}: ${g1}% at G1${g10 != null ? `, ${g10}% by G10` : ""}`,
+        detail: `${worst.sample_size} cases`,
+        color: leagueColor(ls),
+      });
+    }
+    return findings;
+  }, [reliableCurves]);
 
   return (
     <div className="min-h-screen bg-[#0A0F1E] text-white">
@@ -533,53 +842,6 @@ export default function PerformanceCurvesPage() {
 
       {/* Content */}
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
-
-        {/* Latest Data Update */}
-        {!isLoading && latestComputedAt && (
-          <section className="mb-6 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-white/40 mb-2">Latest Data Update</h2>
-            <div className="grid grid-cols-3 gap-4 text-center">
-              <div>
-                <p className="text-lg font-bold text-white">{new Date(latestComputedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
-                <p className="text-[10px] text-white/30">Updated with games through</p>
-              </div>
-              <div>
-                <p className="text-lg font-bold text-white">{totalCases.toLocaleString()}</p>
-                <p className="text-[10px] text-white/30">Total injury returns tracked</p>
-              </div>
-              <div>
-                <p className="text-lg font-bold text-white">{filteredCurves.length}</p>
-                <p className="text-[10px] text-white/30">Injury types analyzed</p>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* Key Findings — per league */}
-        {typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && !isLoading && reliableCurves.length > 0 && (
-          <section className="mb-6 rounded-xl border border-[#1C7CFF]/20 bg-gradient-to-br from-[#1C7CFF]/5 to-transparent p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1C7CFF] mb-3">Key Findings by League</h2>
-            <ul className="space-y-2 text-sm text-white/60 leading-relaxed">
-              {(["nba", "nfl", "mlb", "nhl", "premier-league"] as const).map((ls) => {
-                const leagueCurves = reliableCurves.filter((c) => c.league_slug === ls && c.median_pct_recent[0] != null);
-                if (leagueCurves.length === 0) return null;
-                const worst = leagueCurves.reduce((w, c) => (c.median_pct_recent[0]! < w.median_pct_recent[0]!) ? c : w);
-                const medianVals = leagueCurves.map((c) => c.median_pct_recent[0]!).sort((a, b) => a - b);
-                const medG1 = Math.round(medianVals[Math.floor(medianVals.length / 2)] * 100);
-                return (
-                  <li key={ls}>
-                    <span className="text-white/80 font-medium">{LEAGUE_LABELS[ls]}</span>: Median game-1 return at{" "}
-                    <span className="text-white font-bold">{medG1}%</span> of baseline across {leagueCurves.length} injury types.
-                    Hardest: <span className="text-red-400 font-medium">{worst.injury_type}</span> at{" "}
-                    <span className="text-red-400 font-bold">{Math.round(worst.median_pct_recent[0]! * 100)}%</span>{" "}
-                    <span className="text-white/30">(n={worst.sample_size})</span>
-                  </li>
-                );
-              })}
-            </ul>
-            <p className="text-[10px] text-white/25 mt-3">Based on injury types with 30+ historical return cases.</p>
-          </section>
-        )}
 
         {/* League filter */}
         <div className="flex gap-1.5 overflow-x-auto pb-4 mb-4">
@@ -671,46 +933,174 @@ export default function PerformanceCurvesPage() {
           ))}
         </div>
 
-        {/* Most Performance Impacting Injuries (local only until audited) */}
-        {typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && !isLoading && mostImpactful.length > 0 && (
-          <section className="mb-8 rounded-xl border border-red-500/20 bg-gradient-to-br from-red-500/5 to-transparent p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-red-400 mb-3 flex items-center gap-2">
-              <span className="text-base">&#x1F525;</span> Most Performance Impacting Injuries
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-              {mostImpactful.map((curve) => {
-                const g1 = curve.median_pct_recent[0] != null ? Math.round(curve.median_pct_recent[0] * 100) : null;
-                const g10 = curve.median_pct_recent[9] != null ? Math.round(curve.median_pct_recent[9] * 100) : null;
-                const leagueLabel = LEAGUE_LABELS[curve.league_slug] ?? "";
-                return (
-                  <button
-                    key={curve.curve_id}
-                    onClick={() => {
-                      const el = document.getElementById(`curve-${curve.injury_type_slug}-${curve.league_slug}`);
-                      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); }
-                      // Expand the card after scrolling
-                      setTimeout(() => el?.querySelector("button")?.click(), 400);
-                    }}
-                    className="bg-white/[0.04] rounded-lg p-3 text-center border border-white/5 cursor-pointer transition-all hover:scale-[1.03] hover:bg-white/[0.08] hover:border-white/15 hover:shadow-lg"
-                  >
-                    <p className="text-[10px] text-white/30 uppercase">{leagueLabel}</p>
-                    <p className="text-sm font-semibold text-white mt-1 truncate">{curve.injury_type}</p>
-                    <p className="text-2xl font-black text-red-400 mt-1">{g1 != null ? `${g1}%` : "—"}</p>
-                    <p className="text-[10px] text-white/30">Game 1 return</p>
-                    {g10 != null && (
-                      <p className="text-[10px] mt-1">
-                        <span className={g10 >= 95 ? "text-green-400/60" : "text-amber-400/60"}>
-                          {g10}% by G10
-                        </span>
-                      </p>
-                    )}
-                    <p className="text-[9px] text-white/20 mt-1">{curve.sample_size} cases</p>
-                  </button>
-                );
-              })}
+        {/* Featured Interactive Curve */}
+        {!isLoading && featuredCurve && (
+          <section className="mb-8">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold uppercase tracking-widest text-[#3DFF8F]/80">Interactive Recovery Curve</h2>
+              <select
+                value={activeFeaturedSlug}
+                onChange={(e) => setFeaturedCurveSlug(e.target.value)}
+                className="border border-white/10 rounded-lg px-3 py-1.5 text-xs cursor-pointer hover:border-white/20 transition-colors max-w-[220px]"
+                style={{ backgroundColor: "#151B2E", color: "rgba(255,255,255,0.7)" }}
+              >
+                {filteredCurves.map((c) => (
+                  <option key={c.curve_id} value={`${c.injury_type_slug}|${c.league_slug}`} style={{ backgroundColor: "#151B2E", color: "#ccc" }}>
+                    {c.injury_type} ({LEAGUE_LABELS[c.league_slug]})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <CurveCard curve={featuredCurve} forceExpand allCurves={filteredCurves} />
+          </section>
+        )}
+
+        {/* Key Findings by League */}
+        {!isLoading && keyFindings.length > 0 && (
+          <section className="mb-6 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <h2 className="text-xs font-bold uppercase tracking-widest text-white/50 mb-3">Key Findings by League</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {keyFindings.map((f) => (
+                <div key={f.league} className="flex items-start gap-2 rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5">
+                  <span className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ backgroundColor: f.color }} />
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold" style={{ color: f.color }}>{f.league}</p>
+                    <p className="text-xs text-white/60">{f.label}</p>
+                    <p className="text-[10px] text-white/25">{f.detail}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           </section>
         )}
+
+        {/* Discovery sections */}
+        {!isLoading && reliableCurves.length > 0 && (() => {
+          // Primary stat per league for stat impact display
+          const PRIMARY_STAT: Record<string, { key: string; label: string }> = {
+            nba: { key: "stat_pts", label: "PTS" },
+            nfl: { key: "stat_rush_yds", label: "Rush Yds" },
+            mlb: { key: "stat_h", label: "Hits" },
+            nhl: { key: "stat_goals", label: "Goals" },
+            "premier-league": { key: "stat_goals", label: "Goals" },
+          };
+          const getImpact = (c: PerformanceCurve, gIdx: number) => {
+            // Use primary stat for the league first — most representative
+            const baselines = c.stat_baselines ?? {};
+            const medians = c.stat_median_pct ?? {};
+
+            const ps = PRIMARY_STAT[c.league_slug];
+            if (ps) {
+              const base = baselines[ps.key];
+              const pct = (medians[ps.key] as number[] | undefined)?.[gIdx];
+              if (base && base > 0 && pct != null) {
+                return { label: ps.label, diff: base * (pct - 1.0), statKey: ps.key };
+              }
+            }
+
+            // Fallback: pick stat with largest % deviation (not raw absolute),
+            // so high-baseline stats like pass yards don't dominate
+            let best: { label: string; diff: number; statKey: string; pctDev: number } | null = null;
+            for (const [sk, base] of Object.entries(baselines)) {
+              if (sk === "composite" || !base || base === 0) continue;
+              const pct = (medians[sk] as number[] | undefined)?.[gIdx];
+              if (pct == null) continue;
+              const pctDev = Math.abs(pct - 1.0);
+              const diff = base * (pct - 1.0);
+              if (!best || pctDev > best.pctDev) {
+                best = { label: STAT_UNITS[sk] ?? STAT_LABELS[sk] ?? sk.replace("stat_", ""), diff, statKey: sk, pctDev };
+              }
+            }
+            return best ? { label: best.label, diff: best.diff, statKey: best.statKey } : null;
+          };
+
+          // Use G1 (index 0) for discovery rankings
+          const withImpact = reliableCurves
+            .map((c) => ({ curve: c, impact: getImpact(c, 0) }))
+            .filter((x): x is { curve: PerformanceCurve; impact: { label: string; diff: number; statKey: string } } => x.impact != null);
+
+          const biggestDrops = [...withImpact]
+            .sort((a, b) => a.impact.diff - b.impact.diff)
+            .slice(0, 6);
+
+          const fastestRecoveries = [...withImpact]
+            .sort((a, b) => b.impact.diff - a.impact.diff)
+            .filter((x) => x.impact.diff > -0.5) // near-zero or positive
+            .slice(0, 6);
+
+          const scrollToCurve = (c: PerformanceCurve, statKey?: string) => {
+            const el = document.getElementById(`curve-${c.injury_type_slug}-${c.league_slug}`);
+            if (el) {
+              el.scrollIntoView({ behavior: "smooth", block: "center" });
+              setTimeout(() => {
+                // Expand the card
+                el.querySelector("button")?.click();
+                // If a specific stat was requested, dispatch event to select it
+                if (statKey) {
+                  setTimeout(() => {
+                    el.dispatchEvent(new CustomEvent("select-stat", { detail: statKey }));
+                  }, 300);
+                }
+              }, 400);
+            }
+          };
+
+          return (
+            <>
+              {/* Biggest Performance Drops */}
+              {biggestDrops.length > 0 && (
+                <section className="mb-6 rounded-xl border border-red-500/15 bg-gradient-to-br from-red-500/5 to-transparent p-4">
+                  <h2 className="text-xs font-bold uppercase tracking-widest text-red-400/80 mb-3">Biggest Performance Drops (Game 1)</h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {biggestDrops.map(({ curve: c, impact }) => (
+                      <button
+                        key={c.curve_id}
+                        onClick={() => scrollToCurve(c, impact.statKey)}
+                        className="flex items-center justify-between gap-2 rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-left hover:bg-white/[0.07] hover:border-red-500/20 transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-white truncate">{c.injury_type}</p>
+                          <p className="text-[10px] text-white/30"><span className="inline-block w-1.5 h-1.5 rounded-full mr-1" style={{ backgroundColor: leagueColor(c.league_slug) }} />{LEAGUE_LABELS[c.league_slug]} · {c.sample_size} cases</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-sm font-bold text-red-400 tabular-nums">{impact.diff >= 0 ? "+" : ""}{impact.diff.toFixed(1)}</p>
+                          <p className="text-[9px] text-white/25">{impact.label}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* Fastest Recoveries */}
+              {fastestRecoveries.length > 0 && (
+                <section className="mb-6 rounded-xl border border-green-500/15 bg-gradient-to-br from-green-500/5 to-transparent p-4">
+                  <h2 className="text-xs font-bold uppercase tracking-widest text-green-400/80 mb-3">Fastest Recoveries (Game 1)</h2>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {fastestRecoveries.map(({ curve: c, impact }) => (
+                      <button
+                        key={c.curve_id}
+                        onClick={() => scrollToCurve(c, impact.statKey)}
+                        className="flex items-center justify-between gap-2 rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2.5 text-left hover:bg-white/[0.07] hover:border-green-500/20 transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-white truncate">{c.injury_type}</p>
+                          <p className="text-[10px] text-white/30"><span className="inline-block w-1.5 h-1.5 rounded-full mr-1" style={{ backgroundColor: leagueColor(c.league_slug) }} />{LEAGUE_LABELS[c.league_slug]} · {c.sample_size} cases</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className={`text-sm font-bold tabular-nums ${impact.diff >= 0 ? "text-green-400" : "text-amber-400"}`}>
+                            {impact.diff >= 0 ? "+" : ""}{impact.diff.toFixed(1)}
+                          </p>
+                          <p className="text-[9px] text-white/25">{impact.label}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
+          );
+        })()}
 
         {/* Legend + summary + info button */}
         <div className="flex flex-wrap items-center justify-between gap-4 text-xs text-white/40 mb-6 pb-4 border-b border-white/8">
@@ -762,6 +1152,11 @@ export default function PerformanceCurvesPage() {
           </div>
         )}
 
+        {/* Full Injury List Explorer */}
+        {!isLoading && filteredCurves.length > 0 && (
+          <h2 className="text-sm font-bold uppercase tracking-widest text-white/50 mb-1">Full Injury List Explorer</h2>
+        )}
+
         {/* Curves list */}
         {isLoading ? (
           <div className="space-y-3">
@@ -779,7 +1174,7 @@ export default function PerformanceCurvesPage() {
         ) : (
           <div className="space-y-3">
             {filteredCurves.map((curve) => (
-              <CurveCard key={curve.curve_id} curve={curve} currentPosition={position} onSelectPosition={(pos) => { setPosition(pos); if (league === "all") setLeague(curve.league_slug as LeagueFilter); }} />
+              <CurveCard key={curve.curve_id} curve={curve} allCurves={filteredCurves} />
             ))}
           </div>
         )}
@@ -813,7 +1208,7 @@ export default function PerformanceCurvesPage() {
                         return (
                           <span key={c.curve_id} className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white/5 text-xs text-white/50 border border-white/5">
                             {c.injury_type}
-                            <span className="text-[10px] text-white/25">({LEAGUE_LABELS[c.league_slug]})</span>
+                            <span className="text-[10px]" style={{ color: `${leagueColor(c.league_slug)}99` }}>({LEAGUE_LABELS[c.league_slug]})</span>
                             {g1 != null && <span className={`font-bold ${color}`}>{g1}%</span>}
                             {c.sample_size < 30 && <span className="text-[9px] text-amber-400/60">*</span>}
                           </span>
@@ -825,6 +1220,13 @@ export default function PerformanceCurvesPage() {
               })}
             </div>
           </section>
+        )}
+
+        {/* Latest data update */}
+        {latestComputedAt && (
+          <p className="text-[10px] text-white/20 mt-6 mb-2">
+            Data last updated: {new Date(latestComputedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+          </p>
         )}
 
         {/* Methodology note */}

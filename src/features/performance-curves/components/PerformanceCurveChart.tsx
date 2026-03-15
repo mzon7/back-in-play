@@ -52,12 +52,24 @@ export function PerformanceCurveChart({
   curve,
   playerCase,
   height = 280,
+  compareCurve,
+  compareLabel,
 }: {
   curve: PerformanceCurve;
   playerCase?: ReturnCase | null;
   height?: number;
+  compareCurve?: PerformanceCurve | null;
+  compareLabel?: string;
 }) {
   const data = buildChartData(curve, playerCase);
+
+  // Merge comparison curve data
+  if (compareCurve) {
+    const compareData = buildChartData(compareCurve);
+    for (let i = 0; i < data.length; i++) {
+      (data[i] as any).compareMedian = compareData[i]?.median ?? null;
+    }
+  }
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -65,26 +77,20 @@ export function PerformanceCurveChart({
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
         <XAxis
           dataKey="label"
-          tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
-          axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+          tick={{ fill: "rgba(255,255,255,0.6)", fontSize: 11, fontWeight: 500 }}
+          axisLine={{ stroke: "rgba(255,255,255,0.15)" }}
           tickLine={false}
         />
         <YAxis
           domain={[0, 150]}
-          tick={{ fill: "rgba(255,255,255,0.4)", fontSize: 11 }}
-          axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+          tick={{ fill: "rgba(255,255,255,0.6)", fontSize: 11, fontWeight: 500 }}
+          axisLine={{ stroke: "rgba(255,255,255,0.15)" }}
           tickLine={false}
           tickFormatter={(v) => `${v}%`}
         />
         <Tooltip
-          contentStyle={{
-            background: "#0F1320",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: 8,
-            fontSize: 12,
-          }}
-          labelStyle={{ color: "rgba(255,255,255,0.6)" }}
-          formatter={(value: unknown, name: unknown) => {
+          content={({ active, payload, label }) => {
+            if (!active || !payload?.length) return null;
             const labels: Record<string, string> = {
               median: "Median",
               avg: "Average",
@@ -92,22 +98,52 @@ export function PerformanceCurveChart({
               p75: "75th pctl",
               playerPct: "This player",
               stddevUpper: "Median + SE",
-              stddevLower: "Median - SE",
+              stddevLower: "Median − SE",
+              compareMedian: compareLabel ?? "Compare",
             };
-            return [`${value}%`, labels[String(name)] ?? String(name)];
+            const colors: Record<string, string> = {
+              median: "#1C7CFF",
+              avg: "rgba(255,255,255,0.4)",
+              p25: "rgba(28,124,255,0.35)",
+              p75: "rgba(28,124,255,0.35)",
+              playerPct: "#3DFF8F",
+              stddevUpper: "rgba(28,124,255,0.25)",
+              stddevLower: "rgba(28,124,255,0.25)",
+              compareMedian: "#FF8C00",
+            };
+            // Show only lines the user cares about
+            const show = ["median", "avg", "playerPct", "compareMedian"];
+            const items = payload.filter((p) => show.includes(String(p.dataKey)) && p.value != null);
+            return (
+              <div style={{ background: "#0F1320", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 8, padding: "8px 12px", boxShadow: "0 4px 12px rgba(0,0,0,0.5)" }}>
+                <p style={{ color: "rgba(255,255,255,0.8)", fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{label}</p>
+                {items.map((entry) => {
+                  const key = String(entry.dataKey);
+                  const c = colors[key] ?? "rgba(255,255,255,0.6)";
+                  return (
+                    <div key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginBottom: 2 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: c, flexShrink: 0 }} />
+                      <span style={{ color: c, fontWeight: 500 }}>{labels[key] ?? key}:</span>
+                      <span style={{ color: "rgba(255,255,255,0.9)", fontWeight: 600 }}>{entry.value}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
           }}
         />
 
         {/* 100% baseline */}
         <ReferenceLine
           y={100}
-          stroke="rgba(61,255,143,0.3)"
+          stroke="rgba(61,255,143,0.5)"
           strokeDasharray="6 4"
           label={{
             value: "Pre-injury baseline",
             position: "right",
-            fill: "rgba(61,255,143,0.4)",
-            fontSize: 10,
+            fill: "rgba(61,255,143,0.7)",
+            fontSize: 11,
+            fontWeight: 600,
           }}
         />
 
@@ -172,6 +208,20 @@ export function PerformanceCurveChart({
             stroke="#3DFF8F"
             strokeWidth={2}
             dot={{ fill: "#3DFF8F", r: 4, stroke: "#0A0E1A", strokeWidth: 2 }}
+            connectNulls
+          />
+        )}
+
+        {/* Comparison curve overlay */}
+        {compareCurve && (
+          <Line
+            type="monotone"
+            dataKey="compareMedian"
+            name={compareLabel ?? "Compare"}
+            stroke="#FF8C00"
+            strokeWidth={2}
+            strokeDasharray="6 3"
+            dot={{ fill: "#FF8C00", r: 3, stroke: "#0A0E1A", strokeWidth: 1 }}
             connectNulls
           />
         )}

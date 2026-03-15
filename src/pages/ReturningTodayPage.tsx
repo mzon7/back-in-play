@@ -29,12 +29,14 @@ interface ReturningPlayer {
   injury_type: string;
   injury_type_slug: string;
   date_injured: string;
+  return_date: string | null;
   games_missed: number | null;
   recovery_days: number | null;
   status: string;
   expected_return: string | null;
   is_star: boolean;
   is_starter: boolean;
+  games_back: number;
   // Matched curve data
   curve?: PerformanceCurve | null;
 }
@@ -43,20 +45,39 @@ function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-function isInSeason(slug: string): boolean {
-  const month = new Date().getMonth() + 1;
-  const seasons: Record<string, [number, number]> = {
-    nba: [10, 6], nfl: [9, 2], nhl: [10, 6], mlb: [3, 10], "premier-league": [8, 5],
+/** Only show leagues where the regular season is actually underway (no pre-season buffer). */
+function isCurrentlyInSeason(slug: string): boolean {
+  const now = new Date();
+  // Season boundaries: [startMonth, startDay, endMonth, endDay]
+  const seasons: Record<string, [number, number, number, number]> = {
+    nba:              [10, 15,  6, 20],
+    nfl:              [ 9,  5,  2, 10],
+    nhl:              [10, 10,  6, 25],
+    mlb:              [ 3, 27, 10, 31],
+    "premier-league": [ 8, 10,  5, 25],
   };
   const range = seasons[slug];
   if (!range) return true;
-  const [start, end] = range;
-  return start <= end ? month >= start && month <= end : month >= start || month <= end;
+
+  const [sm, sd, em, ed] = range;
+  const year = now.getFullYear();
+
+  const seasonStart = new Date(year, sm - 1, sd);
+  const seasonEnd = new Date(year, em - 1, ed);
+
+  // Non-wrapping season (e.g. MLB Mar-Oct)
+  if (seasonStart <= seasonEnd) {
+    return now >= seasonStart && now <= seasonEnd;
+  }
+
+  // Wrapping season (e.g. NFL Sep-Feb, NBA Oct-Jun)
+  // Either we're in the start→Dec part, or the Jan→end part
+  return now >= seasonStart || now <= seasonEnd;
 }
 
 function useReturningPlayers(leagueSlug?: string) {
   return useQuery<ReturningPlayer[]>({
-    queryKey: ["returning-today", leagueSlug ?? "all"],
+    queryKey: ["returning-today-page", leagueSlug ?? "all"],
     queryFn: async () => {
       // 1. Get leagues, teams, players
       const { data: leagues } = await supabase.from(dbTable("leagues")).select("league_id,league_name,slug");
@@ -67,45 +88,65 @@ function useReturningPlayers(leagueSlug?: string) {
       const teamMap = new Map<string, { name: string; leagueId: string }>();
       (teams ?? []).forEach((t) => teamMap.set(t.team_id, { name: t.team_name, leagueId: t.league_id }));
 
-      // 2. Find players nearing return OR recently returned
-      const cutoff7d = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      // 2. Pre-filter: get player IDs for in-season leagues only
+      // This prevents off-season leagues (NFL in spring etc.) from filling up query limits
+      const inSeasonLeagueIds: string[] = [];
+      for (const [lid, lg] of leagueMap) {
+        if (leagueSlug && leagueSlug !== "all" && lg.slug !== leagueSlug) continue;
+        if (isCurrentlyInSeason(lg.slug)) inSeasonLeagueIds.push(lid);
+      }
+      const inSeasonTeamIds: string[] = [];
+      for (const [tid, tm] of teamMap) {
+        if (inSeasonLeagueIds.includes(tm.leagueId)) inSeasonTeamIds.push(tid);
+      }
+      // Fetch player IDs for in-season teams
+      const inSeasonPlayerIds = new Set<string>();
+      for (let i = 0; i < inSeasonTeamIds.length; i += 100) {
+        const chunk = inSeasonTeamIds.slice(i, i + 100);
+        const { data } = await supabase
+          .from(dbTable("players"))
+          .select("player_id")
+          .in("team_id", chunk);
+        (data ?? []).forEach((p) => inSeasonPlayerIds.add(p.player_id));
+      }
+
+      if (inSeasonPlayerIds.size === 0) return [];
+      const seasonPids = Array.from(inSeasonPlayerIds);
+
+      // 3. Find players nearing return OR recently returned (only in-season players)
+      const cutoff21d = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
       const cutoff90d = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
 
-      // Nearing return: questionable/day-to-day/probable/doubtful
-      const { data: returningInjuries } = await supabase
-        .from(dbTable("injuries"))
-        .select("*")
-        .gte("date_injured", cutoff90d)
-        .in("status", ["questionable", "day-to-day", "probable", "doubtful"])
-        .order("date_injured", { ascending: false })
-        .limit(200);
+      // Query in chunks since we filter by player_id
+      const allInjs: any[] = [];
+      for (let i = 0; i < seasonPids.length; i += 200) {
+        const chunk = seasonPids.slice(i, i + 200);
+        const [r1, r2] = await Promise.all([
+          supabase
+            .from(dbTable("injuries"))
+            .select("*")
+            .in("player_id", chunk)
+            .gte("date_injured", cutoff90d)
+            .in("status", ["questionable", "day-to-day", "probable", "doubtful"])
+            .order("date_injured", { ascending: false }),
+          supabase
+            .from(dbTable("injuries"))
+            .select("*")
+            .in("player_id", chunk)
+            .gte("return_date", cutoff21d)
+            .in("status", ["returned", "active", "active_today", "back_in_play", "reduced_load"])
+            .order("return_date", { ascending: false }),
+        ]);
+        allInjs.push(...(r1.data ?? []), ...(r2.data ?? []));
+      }
 
-      // Recently returned: any status indicating the player is back, with return_date in last 7 days
-      const { data: recentlyReturned } = await supabase
-        .from(dbTable("injuries"))
-        .select("*")
-        .gte("return_date", cutoff7d)
-        .in("status", ["returned", "active", "active_today", "back_in_play"])
-        .order("return_date", { ascending: false })
-        .limit(100);
-
-      // Also catch recently returned via reduced_load (playing but limited)
-      const { data: reducedLoad } = await supabase
-        .from(dbTable("injuries"))
-        .select("*")
-        .gte("return_date", cutoff7d)
-        .eq("status", "reduced_load")
-        .order("return_date", { ascending: false })
-        .limit(50);
-
-      const allInjs = [...(returningInjuries ?? []), ...(recentlyReturned ?? []), ...(reducedLoad ?? [])];
       // Dedupe by player_id (keep most recent)
       const byPlayer = new Map<string, (typeof allInjs)[0]>();
       for (const inj of allInjs) {
         if (!byPlayer.has(inj.player_id)) byPlayer.set(inj.player_id, inj);
       }
 
-      // 3. Fetch player details
+      // 4. Fetch player details
       const playerIds = Array.from(byPlayer.keys());
       if (playerIds.length === 0) return [];
 
@@ -135,7 +176,41 @@ function useReturningPlayers(leagueSlug?: string) {
         });
       }
 
-      // 5. Build result
+      // 5. Count actual games played since return_date for returned players
+      const returnedPids: { pid: string; returnDate: string }[] = [];
+      for (const [pid, inj] of byPlayer) {
+        if (inj.return_date && ["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(inj.status)) {
+          returnedPids.push({ pid, returnDate: inj.return_date });
+        }
+      }
+      const gamesBackMap = new Map<string, number>();
+      if (returnedPids.length > 0) {
+        // Batch query game logs for returned players
+        const rpIds = returnedPids.map((r) => r.pid);
+        const earliestReturn = returnedPids.reduce((min, r) => r.returnDate < min ? r.returnDate : min, returnedPids[0].returnDate);
+        for (let i = 0; i < rpIds.length; i += 100) {
+          const chunk = rpIds.slice(i, i + 100);
+          const { data: logs } = await supabase
+            .from("back_in_play_player_game_logs")
+            .select("player_id, game_date")
+            .in("player_id", chunk)
+            .gte("game_date", earliestReturn)
+            .order("game_date", { ascending: false });
+          if (logs) {
+            // Build per-player return date lookup
+            const returnDateLookup = new Map<string, string>();
+            for (const r of returnedPids) returnDateLookup.set(r.pid, r.returnDate);
+            for (const log of logs) {
+              const rd = returnDateLookup.get(log.player_id);
+              if (rd && log.game_date >= rd) {
+                gamesBackMap.set(log.player_id, (gamesBackMap.get(log.player_id) ?? 0) + 1);
+              }
+            }
+          }
+        }
+      }
+
+      // 6. Build result
       const result: ReturningPlayer[] = [];
       for (const [pid, inj] of byPlayer) {
         const p = players.get(pid);
@@ -145,10 +220,23 @@ function useReturningPlayers(leagueSlug?: string) {
         const league = leagueMap.get(team.leagueId);
         if (!league) continue;
         if (leagueSlug && leagueSlug !== "all" && league.slug !== leagueSlug) continue;
-        if (!isInSeason(league.slug)) continue;
+        if (!isCurrentlyInSeason(league.slug)) continue;
+
+        // Skip same-day injured/returned entries (likely day-to-day noise)
+        if (inj.return_date && inj.date_injured === inj.return_date && (inj.games_missed == null || inj.games_missed === 0)) continue;
 
         const injSlug = slugify(inj.injury_type);
         const curveKey = `${league.slug}:${injSlug}`;
+
+        // Compute actual recovery days
+        let recoveryDays = inj.recovery_days;
+        if (recoveryDays == null) {
+          const endDate = inj.return_date ? new Date(inj.return_date) : new Date();
+          recoveryDays = Math.max(0, Math.floor((endDate.getTime() - new Date(inj.date_injured).getTime()) / 86400000));
+        }
+
+        // Use real game count from game logs, not estimation
+        const gamesBack = gamesBackMap.get(pid) ?? 0;
 
         result.push({
           player_id: pid,
@@ -161,12 +249,14 @@ function useReturningPlayers(leagueSlug?: string) {
           injury_type: inj.injury_type,
           injury_type_slug: injSlug,
           date_injured: inj.date_injured,
+          return_date: inj.return_date ?? null,
           games_missed: inj.games_missed,
-          recovery_days: inj.recovery_days ?? Math.floor((Date.now() - new Date(inj.date_injured).getTime()) / 86400000),
+          recovery_days: recoveryDays,
           status: inj.status,
           expected_return: inj.expected_return,
           is_star: p.is_star ?? false,
           is_starter: p.is_starter ?? false,
+          games_back: gamesBack,
           curve: curves.get(curveKey) ?? null,
         });
       }
@@ -244,8 +334,7 @@ function PerformancePreview({ curve, leagueSlug }: { curve: PerformanceCurve; le
 }
 
 function PlayerCard({ player, multiLeague }: { player: ReturningPlayer; multiLeague: boolean }) {
-  const isReturned = player.status === "returned";
-  const daysOut = player.recovery_days ?? 0;
+  const isBack = ["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(player.status);
 
   return (
     <InjuryPlayerCard
@@ -268,11 +357,18 @@ function PlayerCard({ player, multiLeague }: { player: ReturningPlayer; multiLea
       {/* Extra returning-specific details */}
       <div className="px-4 pb-3">
         <div className="flex flex-wrap items-center gap-3 text-xs">
-          <span className="text-white/50">
-            <span className="text-white/30">Out:</span> {daysOut} days
-          </span>
-          {isReturned && (
-            <span className="text-green-400/70 font-medium">Returned</span>
+          {player.games_missed != null && player.games_missed > 0 && (
+            <span className="text-white/50">
+              <span className="text-white/30">Missed:</span> {player.games_missed} game{player.games_missed !== 1 ? "s" : ""}
+            </span>
+          )}
+          {isBack && player.games_back > 0 && (
+            <span className="text-cyan-400/70 font-medium">
+              ~{player.games_back} game{player.games_back !== 1 ? "s" : ""} back
+            </span>
+          )}
+          {isBack && player.games_back === 0 && (
+            <span className="text-green-400/70 font-medium">Just returned</span>
           )}
         </div>
         {/* Performance preview from curve data */}
@@ -294,8 +390,21 @@ export default function ReturningTodayPage() {
 
   const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 
-  const returning = useMemo(() => players.filter((p) => p.status !== "returned"), [players]);
-  const recentlyBack = useMemo(() => players.filter((p) => p.status === "returned"), [players]);
+  const returning = useMemo(() => players.filter(
+    (p) => !["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(p.status)
+  ), [players]);
+
+  // Just Returned: players with return_date, 0-10 games back, sorted by fewest games
+  const justReturned = useMemo(() => players.filter(
+    (p) => ["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(p.status)
+      && p.return_date && (p.games_back ?? 0) >= 0 && (p.games_back ?? 0) <= 10
+  ).sort((a, b) => (a.games_back ?? 0) - (b.games_back ?? 0)), [players]);
+
+  // Other recently returned: more than 10 games back
+  const recentlyBack = useMemo(() => players.filter(
+    (p) => ["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(p.status)
+      && (!p.return_date || (p.games_back ?? 0) > 10)
+  ), [players]);
 
   const leagueLabel = league === "all" ? "" : ` ${LEAGUE_LABELS[league]}`;
   const title = `${leagueLabel ? LEAGUE_LABELS[league] : ""} Players Returning From Injury Today (${today})`;
@@ -395,7 +504,23 @@ export default function ReturningTodayPage() {
               </section>
             )}
 
-            {/* Recently returned */}
+            {/* Just Returned: 0-10 games back */}
+            {justReturned.length > 0 && (
+              <section className="mb-8">
+                <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                  Just Returned ({justReturned.length})
+                </h2>
+                <p className="text-xs text-white/30 mb-3">
+                  Players within their first 10 games back from injury — the window where performance is most affected.
+                </p>
+                <div className="space-y-3">
+                  {justReturned.map((p) => <PlayerCard key={p.player_id} player={p} multiLeague={league === "all"} />)}
+                </div>
+              </section>
+            )}
+
+            {/* Recently returned: 11+ games back */}
             {recentlyBack.length > 0 && (
               <section className="mb-8">
                 <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
@@ -403,7 +528,7 @@ export default function ReturningTodayPage() {
                   Recently Returned ({recentlyBack.length})
                 </h2>
                 <p className="text-xs text-white/30 mb-3">
-                  Players who returned from injury in the last 7 days. Performance data shows how similar injuries typically affect play.
+                  Players who recently returned from injury and are past the initial recovery window.
                 </p>
                 <div className="space-y-3">
                   {recentlyBack.map((p) => <PlayerCard key={p.player_id} player={p} multiLeague={league === "all"} />)}
@@ -411,7 +536,7 @@ export default function ReturningTodayPage() {
               </section>
             )}
 
-            {returning.length === 0 && recentlyBack.length === 0 && (
+            {returning.length === 0 && justReturned.length === 0 && recentlyBack.length === 0 && (
               <div className="rounded-2xl border border-white/10 bg-white/5 p-8 text-center">
                 <p className="text-white/50">No players currently nearing return{league !== "all" ? ` in the ${LEAGUE_LABELS[league]}` : ""}.</p>
                 <p className="text-xs text-white/30 mt-2">Check back during the season for daily return updates.</p>

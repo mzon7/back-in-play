@@ -1,5 +1,5 @@
 // @refresh reset
-import { useState, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import { Link, useSearchParams, useParams } from "react-router-dom";
 import { SiteHeader } from "../../../components/SiteHeader";
 import { SEO } from "../../../components/seo/SEO";
@@ -12,6 +12,7 @@ import {
 import { useRecoveryStats, useReturnCaseAggregates } from "../lib/queries";
 import { usePerformanceCurves } from "../../performance-curves/lib/queries";
 import type { PerformanceCurve } from "../../performance-curves/lib/types";
+import { STAT_LABELS as PC_STAT_LABELS } from "../../performance-curves/lib/types";
 import { LeagueFilterBar } from "./LeagueFilterBar";
 import type { LeagueFilter, RecoveryStat } from "../lib/types";
 import {
@@ -19,6 +20,8 @@ import {
   INJURY_SEVERITY,
   getSeverityColor,
 } from "../lib/types";
+import { leagueColor } from "../../../lib/leagueColors";
+import { isRealInjury } from "../../../lib/injuryFilters";
 
 const SEVERITY_ORDER = ["critical", "major", "moderate", "minor"] as const;
 const SEVERITY_LABEL: Record<string, string> = {
@@ -88,7 +91,7 @@ function computeReinjuryStats(rows: { total_prior_injuries: number | null; same_
   };
 }
 
-function SeverityTierSection({ tier, stats, showLeague, curveMap }: { tier: string; stats: RecoveryStat[]; showLeague: boolean; curveMap: Map<string, PerformanceCurve> }) {
+function SeverityTierSection({ tier, stats, showLeague, curveMap, leagueFilter, gameBack = 2, preserveOrder }: { tier: string; stats: RecoveryStat[]; showLeague: boolean; curveMap: Map<string, PerformanceCurve>; leagueFilter: string; gameBack?: number; preserveOrder?: boolean }) {
   const label = SEVERITY_LABEL[tier] ?? tier;
   const color = {
     critical: "#FF4D4D",
@@ -97,7 +100,7 @@ function SeverityTierSection({ tier, stats, showLeague, curveMap }: { tier: stri
     minor: "#3DFF8F",
   }[tier] ?? "#1C7CFF";
 
-  const sorted = [...stats].sort((a, b) => (b.median_recovery_days ?? 0) - (a.median_recovery_days ?? 0));
+  const sorted = preserveOrder ? stats : [...stats].sort((a, b) => (b.median_recovery_days ?? 0) - (a.median_recovery_days ?? 0));
   const maxDays = Math.max(...sorted.map((s) => s.median_recovery_days ?? 0), 1);
 
   return (
@@ -108,53 +111,89 @@ function SeverityTierSection({ tier, stats, showLeague, curveMap }: { tier: stri
         <div className="flex-1 h-px bg-white/10" />
         <span className="text-xs text-white/30">{stats.length} types</span>
       </div>
-      <div className="flex items-center gap-2 px-3 mb-1">
-        <span className="text-[10px] text-white/25 uppercase tracking-wider w-36 sm:w-48 shrink-0">Injury</span>
-        <span className="flex-1 text-[10px] text-white/25 uppercase tracking-wider">Distribution</span>
-        <span className="text-[10px] text-white/25 uppercase tracking-wider w-10 text-right hidden sm:block">Games</span>
-        <span className="text-[10px] text-white/25 uppercase tracking-wider w-10 text-right">Days</span>
-        <span className="text-[10px] text-white/25 uppercase tracking-wider w-10 text-right hidden sm:block">G10</span>
-      </div>
-      <div className="space-y-1.5">
-        {sorted.map((stat) => {
-          const pct = maxDays > 0 ? ((stat.median_recovery_days ?? 0) / maxDays) * 100 : 0;
-          const curve = curveMap.get(`${stat.injury_type_slug}|${stat.league_slug}`);
-          const gamesMissed = curve?.games_missed_avg;
-          const g10 = curve?.median_pct_recent[9] != null ? Math.round(curve.median_pct_recent[9] * 100) : null;
-          return (
-            <Link
-              key={stat.stat_id}
-              to={`/injuries/${stat.injury_type_slug}`}
-              className="flex items-center gap-2 py-2 px-3 rounded-lg hover:bg-white/[0.04] transition-colors group"
-            >
-              <span className="text-sm text-white/80 w-36 sm:w-48 shrink-0 truncate group-hover:text-white">
-                {stat.injury_type}
-                {showLeague && (
-                  <span className="text-[10px] text-white/30 ml-1">({LEAGUE_LABELS[stat.league_slug] ?? stat.league_slug})</span>
-                )}
-              </span>
-              <div className="flex-1 h-5 bg-white/5 rounded-full overflow-hidden relative">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: `${color}88` }}
-                />
-                <span className="absolute inset-y-0 right-2 flex items-center text-[10px] text-white/40">
-                  {stat.sample_size} cases
+      {(() => {
+        const statCols = leagueFilter !== "all" ? (RECOVERY_STAT_COLS[leagueFilter] ?? []) : [];
+        return (
+          <>
+            <div className="flex items-center gap-2 px-3 mb-1">
+              <span className="text-[10px] text-white/25 uppercase tracking-wider w-36 sm:w-48 shrink-0">Injury</span>
+              <span className="flex-1 text-[10px] text-white/25 uppercase tracking-wider">Distribution</span>
+              <span className="text-[10px] text-white/25 uppercase tracking-wider w-10 text-right hidden sm:block">Games</span>
+              <span className="text-[10px] text-white/25 uppercase tracking-wider w-10 text-right">Days</span>
+              <span className="text-[10px] text-white/25 uppercase tracking-wider w-10 text-right hidden sm:block">G{gameBack + 1}</span>
+              {leagueFilter === "all" && (
+                <span className="text-[10px] text-white/25 uppercase tracking-wider w-24 text-right hidden sm:block">Stat Impact</span>
+              )}
+              {statCols.map((sc) => (
+                <span key={sc} className="text-[10px] text-white/25 uppercase tracking-wider w-12 text-right hidden sm:block">
+                  {STAT_SHORT[sc] ?? sc}
                 </span>
-              </div>
-              <span className="text-xs tabular-nums w-10 text-right text-white/40 hidden sm:block">
-                {gamesMissed != null ? Math.round(gamesMissed) : "—"}
-              </span>
-              <span className="text-sm font-semibold tabular-nums w-10 text-right" style={{ color }}>
-                {stat.median_recovery_days != null ? `${Math.round(stat.median_recovery_days)}d` : "—"}
-              </span>
-              <span className={`text-xs tabular-nums w-10 text-right hidden sm:block ${g10 != null ? (g10 >= 95 ? "text-green-400/70" : g10 >= 80 ? "text-amber-400/70" : "text-red-400/70") : "text-white/30"}`}>
-                {g10 != null ? `${g10}%` : "—"}
-              </span>
-            </Link>
-          );
-        })}
-      </div>
+              ))}
+            </div>
+            <div className="space-y-1.5">
+              {sorted.map((stat) => {
+                const pct = maxDays > 0 ? ((stat.median_recovery_days ?? 0) / maxDays) * 100 : 0;
+                const curve = curveMap.get(`${stat.injury_type_slug}|${stat.league_slug}`);
+                const gamesMissed = curve?.games_missed_avg;
+                const g10 = curve?.median_pct_recent[gameBack] != null ? Math.round(curve.median_pct_recent[gameBack] * 100) : null;
+                return (
+                  <Link
+                    key={stat.stat_id}
+                    to={`/performance-curves?injury=${stat.injury_type_slug}&league=${stat.league_slug}`}
+                    className="flex items-center gap-2 py-2 px-3 rounded-lg hover:bg-white/[0.04] transition-colors group"
+                  >
+                    <span className="text-sm text-white/80 w-36 sm:w-48 shrink-0 truncate group-hover:text-white">
+                      {stat.injury_type}
+                      {showLeague && (
+                        <span className="text-[10px] ml-1" style={{ color: `${leagueColor(stat.league_slug)}77` }}>({LEAGUE_LABELS[stat.league_slug] ?? stat.league_slug})</span>
+                      )}
+                    </span>
+                    <div className="flex-1 h-5 bg-white/5 rounded-full overflow-hidden relative">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: `${color}88` }}
+                      />
+                      <span className="absolute inset-y-0 right-2 flex items-center text-[10px] text-white/40">
+                        {stat.sample_size} cases
+                      </span>
+                    </div>
+                    <span className="text-xs tabular-nums w-10 text-right text-white/40 hidden sm:block">
+                      {gamesMissed != null ? Math.round(gamesMissed) : "—"}
+                    </span>
+                    <span className="text-sm font-semibold tabular-nums w-10 text-right" style={{ color }}>
+                      {stat.median_recovery_days != null ? `${Math.round(stat.median_recovery_days)}d` : "—"}
+                    </span>
+                    <span className={`text-xs tabular-nums w-10 text-right hidden sm:block ${g10 != null ? (g10 >= 95 ? "text-green-400/70" : g10 >= 80 ? "text-amber-400/70" : "text-red-400/70") : "text-white/30"}`}>
+                      {g10 != null ? `${g10}%` : "—"}
+                    </span>
+                    {leagueFilter === "all" && (() => {
+                      const stats3 = ALL_LEAGUES_STATS[stat.league_slug];
+                      if (!stats3) return <span className="w-24 hidden sm:block" />;
+                      const items = curve ? stats3.map((s) => ({ label: s.label, val: computeStatImpact(curve, s.stat, gameBack), clr: statImpactColor(curve, s.stat, gameBack) })).filter((x) => x.val !== "—") : [];
+                      return (
+                        <span className="w-24 hidden sm:block">
+                          <StatImpactStack items={items} />
+                        </span>
+                      );
+                    })()}
+                    {statCols.map((sc) => {
+                      const val = computeStatImpact(curve, sc, gameBack);
+                      return (
+                        <span key={sc} className={`text-[11px] tabular-nums w-12 text-right hidden sm:block ${val === "—" ? "text-white/30" : statImpactColor(curve, sc, gameBack)}`}>
+                          {val}
+                        </span>
+                      );
+                    })}
+                    <span className="text-[10px] text-white/20 group-hover:text-white/40 transition-colors w-16 text-right hidden sm:flex items-center justify-end gap-0.5 whitespace-nowrap">
+                      View curve <span className="transition-transform group-hover:translate-x-0.5">&rarr;</span>
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </>
+        );
+      })()}
     </section>
   );
 }
@@ -182,13 +221,107 @@ function AgeBucketChart({ buckets }: { buckets: ReturnType<typeof computeAgeBuck
   );
 }
 
+/** Stat columns to show per league in recovery stats table */
+const RECOVERY_STAT_COLS: Record<string, string[]> = {
+  nba: ["stat_pts", "stat_reb", "stat_ast"],
+  nfl: ["stat_pass_yds", "stat_rush_yds", "stat_rec_yds"],
+  mlb: ["stat_h", "stat_hr", "stat_rbi"],
+  nhl: ["stat_goals", "stat_assists", "stat_sog"],
+  "premier-league": ["stat_goals", "stat_assists"],
+};
+
+/** Short column headers for stat impact */
+const STAT_SHORT: Record<string, string> = {
+  stat_pts: "PTS", stat_reb: "REB", stat_ast: "AST",
+  stat_pass_yds: "PYDS", stat_rush_yds: "RYDS", stat_rec_yds: "RCYDS",
+  stat_h: "H", stat_hr: "HR", stat_rbi: "RBI",
+  stat_goals: "G", stat_assists: "A", stat_sog: "SOG",
+};
+
+/** Key stats per league for All Leagues "Key Stat Impact" column (max 3) */
+const ALL_LEAGUES_STATS: Record<string, { stat: string; label: string }[]> = {
+  nba: [
+    { stat: "stat_pts", label: "PTS" },
+    { stat: "stat_reb", label: "REB" },
+    { stat: "stat_ast", label: "AST" },
+  ],
+  nfl: [
+    { stat: "stat_rush_yds", label: "Rush Yds" },
+    { stat: "stat_rec_yds", label: "Rec Yds" },
+    { stat: "stat_pass_yds", label: "Pass Yds" },
+  ],
+  mlb: [
+    { stat: "stat_h", label: "Hits" },
+    { stat: "stat_hr", label: "HR" },
+    { stat: "stat_rbi", label: "RBI" },
+  ],
+  nhl: [
+    { stat: "stat_goals", label: "Goals" },
+    { stat: "stat_assists", label: "Assists" },
+    { stat: "stat_sog", label: "Points" },
+  ],
+  "premier-league": [
+    { stat: "stat_goals", label: "Goals" },
+    { stat: "stat_assists", label: "Assists" },
+  ],
+};
+
+/** Render stacked stat impact lines with visual hierarchy */
+function StatImpactStack({ items, className }: { items: { label: string; val: string; clr: string }[]; className?: string }) {
+  if (items.length === 0) return (
+    <span
+      className="text-white/20 text-[10px] italic cursor-help"
+      title="Few players have logged enough post-return games to estimate performance impact."
+    >
+      Insufficient data
+    </span>
+  );
+  // Find most impacted (largest absolute change)
+  let maxIdx = 0;
+  let maxAbs = 0;
+  items.forEach((x, i) => {
+    const n = Math.abs(parseFloat(x.val) || 0);
+    if (n > maxAbs) { maxAbs = n; maxIdx = i; }
+  });
+  return (
+    <div className={`grid grid-cols-[auto_1fr] gap-x-3 gap-y-[3px] ${className ?? ""}`}>
+      {items.slice(0, 3).map((x, i) => (
+        <React.Fragment key={x.label}>
+          <span className="text-[10px] text-white/30 text-right whitespace-nowrap leading-normal">{x.label}</span>
+          <span className={`text-xs tabular-nums text-right whitespace-nowrap leading-normal ${x.clr} ${i === maxIdx ? "font-bold" : "font-medium"}`}>{x.val}</span>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+function computeStatImpact(curve: PerformanceCurve | undefined, stat: string, gameBack = 9): string {
+  if (!curve) return "—";
+  const baseline = curve.stat_baselines?.[stat];
+  const pct = curve.stat_median_pct?.[stat]?.[gameBack];
+  if (baseline == null || baseline === 0 || pct == null) return "—";
+  const diff = baseline * (pct - 1.0);
+  const sign = diff >= 0 ? "+" : "";
+  return `${sign}${diff.toFixed(1)}`;
+}
+
+function statImpactColor(curve: PerformanceCurve | undefined, stat: string, gameBack = 9): string {
+  if (!curve) return "text-white/30";
+  const pct = curve.stat_median_pct?.[stat]?.[gameBack];
+  if (pct == null) return "text-white/30";
+  if (pct >= 1.0) return "text-green-400/70";
+  if (pct >= 0.9) return "text-amber-400/70";
+  return "text-red-400/70";
+}
+
 type SortKey = "median" | "avg" | "samples" | "name" | "games_missed" | "same_season_pct" | "g10";
 
-function RecoveryOverviewTable({ stats, leagueFilter, curveMap }: { stats: RecoveryStat[]; leagueFilter: string; curveMap: Map<string, PerformanceCurve> }) {
+function RecoveryOverviewTable({ stats, leagueFilter, curveMap, gameBack = 2 }: { stats: RecoveryStat[]; leagueFilter: string; curveMap: Map<string, PerformanceCurve>; gameBack?: number }) {
   const [sortKey, setSortKey] = useState<SortKey>("median");
   const [sortAsc, setSortAsc] = useState(false);
 
   const getCurve = (s: RecoveryStat) => curveMap.get(`${s.injury_type_slug}|${s.league_slug}`);
+  const statCols = leagueFilter !== "all" ? (RECOVERY_STAT_COLS[leagueFilter] ?? []) : [];
 
   const sorted = useMemo(() => {
     const s = [...stats];
@@ -204,8 +337,8 @@ function RecoveryOverviewTable({ stats, leagueFilter, curveMap }: { stats: Recov
         case "games_missed": cmp = (ca?.games_missed_avg ?? 0) - (cb?.games_missed_avg ?? 0); break;
         case "same_season_pct": cmp = (100 - (ca?.next_season_pct ?? 0)) - (100 - (cb?.next_season_pct ?? 0)); break;
         case "g10": {
-          const g10a = ca?.median_pct_recent[9] ?? 0;
-          const g10b = cb?.median_pct_recent[9] ?? 0;
+          const g10a = ca?.median_pct_recent[gameBack] ?? 0;
+          const g10b = cb?.median_pct_recent[gameBack] ?? 0;
           cmp = g10a - g10b;
           break;
         }
@@ -237,17 +370,35 @@ function RecoveryOverviewTable({ stats, leagueFilter, curveMap }: { stats: Recov
             <th className="pb-2 px-2 text-center cursor-pointer select-none" onClick={() => toggleSort("median")}>
               Days{arrow("median")}
             </th>
-            <th className="pb-2 px-2 text-center cursor-pointer select-none" onClick={() => toggleSort("same_season_pct")}>
-              Same Szn{arrow("same_season_pct")}
-            </th>
             <th className="pb-2 px-2 text-center cursor-pointer select-none" onClick={() => toggleSort("g10")}>
-              G10{arrow("g10")}
+              G{gameBack + 1}{arrow("g10")}
             </th>
             <th className="pb-2 px-2 text-center cursor-pointer select-none" onClick={() => toggleSort("samples")}>
               Cases{arrow("samples")}
             </th>
+            {/* Stat impact columns — compact badge for All Leagues, full columns for specific league */}
+            {leagueFilter === "all" ? (
+              <th className="pb-2 px-2 text-center text-[10px]">Key Stat Impact</th>
+            ) : (
+              statCols.map((sc) => (
+                <th key={sc} className="pb-2 px-2 text-center text-[10px]">
+                  {STAT_SHORT[sc] ?? PC_STAT_LABELS[sc] ?? sc}
+                </th>
+              ))
+            )}
             <th className="pb-2 pl-2 text-center">Severity</th>
+            <th className="pb-2 pl-2 text-center text-[10px]">Curve</th>
           </tr>
+          {(statCols.length > 0 || leagueFilter === "all") && (
+            <tr>
+              <th colSpan={leagueFilter === "all" ? 6 : 5} />
+              <th colSpan={leagueFilter === "all" ? 1 : statCols.length} className="pb-1 text-center text-[9px] text-white/25 font-normal">
+                Stat impact at G{gameBack + 1} vs pre-injury
+              </th>
+              <th />
+              <th />
+            </tr>
+          )}
         </thead>
         <tbody>
           {sorted.map((stat) => {
@@ -255,10 +406,9 @@ function RecoveryOverviewTable({ stats, leagueFilter, curveMap }: { stats: Recov
             const color = getSeverityColor(stat.injury_type);
             const curve = getCurve(stat);
             const gamesMissed = curve?.games_missed_avg;
-            const sameSeasonPct = curve?.next_season_pct != null ? Math.round(100 - curve.next_season_pct) : null;
-            const g10 = curve?.median_pct_recent[9] != null ? Math.round(curve.median_pct_recent[9] * 100) : null;
+            const gVal = curve?.median_pct_recent[gameBack] != null ? Math.round(curve.median_pct_recent[gameBack] * 100) : null;
             return (
-              <tr key={stat.stat_id} className="border-b border-white/5 hover:bg-white/[0.02]">
+              <tr key={stat.stat_id} className="group border-b border-white/5 hover:bg-white/[0.04] transition-colors cursor-default" style={leagueFilter === "all" ? { borderLeft: `2px solid ${leagueColor(stat.league_slug)}30` } : undefined}>
                 <td className="py-2.5 pr-4">
                   <Link
                     to={`/injuries/${stat.injury_type_slug}`}
@@ -268,8 +418,11 @@ function RecoveryOverviewTable({ stats, leagueFilter, curveMap }: { stats: Recov
                   </Link>
                 </td>
                 {leagueFilter === "all" && (
-                  <td className="py-2.5 px-2 text-center text-xs text-white/40">
-                    {LEAGUE_LABELS[stat.league_slug] ?? stat.league_slug}
+                  <td className="py-2.5 px-2 text-center text-xs">
+                    <span className="inline-flex items-center gap-1" style={{ color: `${leagueColor(stat.league_slug)}bb` }}>
+                      <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ backgroundColor: leagueColor(stat.league_slug) }} />
+                      {LEAGUE_LABELS[stat.league_slug] ?? stat.league_slug}
+                    </span>
                   </td>
                 )}
                 <td className="py-2.5 px-2 text-center text-sm text-white/50 tabular-nums">
@@ -279,22 +432,35 @@ function RecoveryOverviewTable({ stats, leagueFilter, curveMap }: { stats: Recov
                   {stat.median_recovery_days != null ? Math.round(stat.median_recovery_days) : "—"}
                 </td>
                 <td className="py-2.5 px-2 text-center text-sm tabular-nums">
-                  {sameSeasonPct != null ? (
-                    <span className={sameSeasonPct >= 80 ? "text-green-400/70" : sameSeasonPct >= 50 ? "text-amber-400/70" : "text-red-400/70"}>
-                      {sameSeasonPct}%
-                    </span>
-                  ) : "—"}
-                </td>
-                <td className="py-2.5 px-2 text-center text-sm tabular-nums">
-                  {g10 != null ? (
-                    <span className={g10 >= 95 ? "text-green-400/70" : g10 >= 80 ? "text-amber-400/70" : "text-red-400/70"}>
-                      {g10}%
+                  {gVal != null ? (
+                    <span className={gVal >= 95 ? "text-green-400/70" : gVal >= 80 ? "text-amber-400/70" : "text-red-400/70"}>
+                      {gVal}%
                     </span>
                   ) : "—"}
                 </td>
                 <td className="py-2.5 px-2 text-center text-sm text-white/50 tabular-nums">
                   {stat.sample_size.toLocaleString()}
                 </td>
+                {/* Stat impact cells */}
+                {leagueFilter === "all" ? (
+                  <td className="py-1.5 px-2 text-right">
+                    {(() => {
+                      const stats3 = ALL_LEAGUES_STATS[stat.league_slug];
+                      if (!stats3) return <StatImpactStack items={[]} />;
+                      const items = curve ? stats3.map((s) => ({ label: s.label, val: computeStatImpact(curve, s.stat, gameBack), clr: statImpactColor(curve, s.stat, gameBack) })).filter((x) => x.val !== "—") : [];
+                      return <StatImpactStack items={items} />;
+                    })()}
+                  </td>
+                ) : (
+                  statCols.map((sc) => {
+                    const val = computeStatImpact(curve, sc, gameBack);
+                    return (
+                      <td key={sc} className="py-2.5 px-2 text-center text-[11px] tabular-nums">
+                        {val === "—" ? <span className="text-white/30">—</span> : <span className={statImpactColor(curve, sc, gameBack)}>{val}</span>}
+                      </td>
+                    );
+                  })
+                )}
                 <td className="py-2.5 pl-2 text-center">
                   <span
                     className="inline-block text-[10px] font-medium px-2 py-0.5 rounded-full"
@@ -302,6 +468,16 @@ function RecoveryOverviewTable({ stats, leagueFilter, curveMap }: { stats: Recov
                   >
                     {severity}
                   </span>
+                </td>
+                <td className="py-2.5 pl-2 text-center">
+                  <Link
+                    to={`/performance-curves?injury=${stat.injury_type_slug}&league=${stat.league_slug}`}
+                    className="inline-flex items-center gap-1 text-[10px] text-white/25 hover:text-[#1C7CFF] group-hover:text-white/40 transition-colors whitespace-nowrap"
+                  >
+                    <span className="hidden sm:inline">View curve</span>
+                    <span className="sm:hidden">&rarr;</span>
+                    <span className="hidden sm:inline transition-transform group-hover:translate-x-0.5">&rarr;</span>
+                  </Link>
                 </td>
               </tr>
             );
@@ -327,6 +503,8 @@ export function RecoveryStatsPage() {
   );
   const [viewMode, setViewMode] = useState<"severity" | "table">("severity");
   const [returnWindow, setReturnWindow] = useState<"" | "same_season" | "next_season">("");
+  const [gameBack, setGameBack] = useState(2); // 0-indexed, default G3
+  const [severitySort, setSeveritySort] = useState<"severity" | "impact" | "recovery" | "volume">("severity");
 
   const { data: stats = [], isLoading, error } = useRecoveryStats(
     leagueFilter === "all" ? undefined : leagueFilter
@@ -359,7 +537,7 @@ export function RecoveryStatsPage() {
   // If we're on /injuries/:injurySlug, filter to that injury
   const filteredStats = useMemo(() => {
     const base = injurySlug ? stats.filter((s) => s.injury_type_slug === injurySlug) : stats;
-    return base.filter((s) => s.sample_size >= 30 && s.injury_type_slug !== "other" && s.injury_type_slug !== "unknown");
+    return base.filter((s) => s.sample_size >= 30 && isRealInjury(s.injury_type_slug, s.injury_type));
   }, [stats, injurySlug]);
 
   // Get injury name from slug
@@ -377,6 +555,42 @@ export function RecoveryStatsPage() {
     }
     return groups;
   }, [filteredStats]);
+
+  // Helper: get primary stat impact magnitude for sorting
+  const getPrimaryImpact = (stat: RecoveryStat): number => {
+    const curve = curveMap.get(`${stat.injury_type_slug}|${stat.league_slug}`);
+    if (!curve) return 0;
+    const stats3 = ALL_LEAGUES_STATS[stat.league_slug] ?? RECOVERY_STAT_COLS[stat.league_slug]?.map((s) => ({ stat: s, label: s }));
+    if (!stats3) return 0;
+    let maxAbs = 0;
+    for (const s of stats3) {
+      const key = typeof s === "string" ? s : s.stat;
+      const baseline = curve.stat_baselines?.[key];
+      const pct = curve.stat_median_pct?.[key]?.[gameBack];
+      if (baseline != null && baseline > 0 && pct != null) {
+        maxAbs = Math.max(maxAbs, Math.abs(baseline * (pct - 1.0)));
+      }
+    }
+    return maxAbs;
+  };
+
+  // Flat sorted list for non-severity sort modes
+  const sortedFlat = useMemo(() => {
+    if (severitySort === "severity") return [];
+    const arr = [...filteredStats];
+    switch (severitySort) {
+      case "impact":
+        arr.sort((a, b) => getPrimaryImpact(b) - getPrimaryImpact(a));
+        break;
+      case "recovery":
+        arr.sort((a, b) => (b.median_recovery_days ?? 0) - (a.median_recovery_days ?? 0));
+        break;
+      case "volume":
+        arr.sort((a, b) => b.sample_size - a.sample_size);
+        break;
+    }
+    return arr;
+  }, [filteredStats, severitySort, curveMap, gameBack]);
 
   // Compute age impact
   const ageBuckets = useMemo(() => computeAgeBuckets(returnCases), [returnCases]);
@@ -608,7 +822,7 @@ export function RecoveryStatsPage() {
         </div>
 
         {/* Return window filter */}
-        <div className="flex items-center gap-2 mb-6">
+        <div className="flex items-center gap-2 mb-4">
           <span className="text-[10px] text-white/30 font-medium shrink-0">Return window</span>
           {([
             { value: "" as const, label: "All Returns" },
@@ -629,6 +843,29 @@ export function RecoveryStatsPage() {
           ))}
         </div>
 
+        {/* Game back selector */}
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[10px] text-white/30 font-medium shrink-0">Performance at game</span>
+          <div className="flex gap-0.5 bg-white/5 rounded-lg p-0.5">
+            {Array.from({ length: 10 }, (_, i) => (
+              <button
+                key={i}
+                onClick={() => setGameBack(i)}
+                className={`w-7 h-7 rounded text-xs font-semibold transition-colors ${
+                  gameBack === i
+                    ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border border-[#1C7CFF]/30"
+                    : "text-white/40 hover:text-white/60"
+                }`}
+              >
+                {i + 1}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="text-[10px] text-white/25 mb-6">
+          G{gameBack + 1} = Game {gameBack + 1} back from injury. The stat columns show performance at this game vs pre-injury baseline.
+        </p>
+
         {/* Error state */}
         {error && (
           <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
@@ -646,21 +883,65 @@ export function RecoveryStatsPage() {
           </div>
         ) : (
           <>
+            {/* Stat impact clarification */}
+            <p className="text-[10px] text-white/25 mb-3">
+              Stat impact = Game {gameBack + 1} performance vs pre-injury baseline
+            </p>
+
+            {/* Sort control for severity view */}
+            {!injurySlug && viewMode === "severity" && (
+              <div className="flex items-center gap-2 mb-4">
+                <span className="text-[10px] text-white/30 font-medium shrink-0">Sort by</span>
+                {([
+                  { value: "severity" as const, label: "Severity" },
+                  { value: "impact" as const, label: "Performance Impact" },
+                  { value: "recovery" as const, label: "Recovery Time" },
+                  { value: "volume" as const, label: "Case Volume" },
+                ]).map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setSeveritySort(opt.value)}
+                    className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                      severitySort === opt.value
+                        ? "bg-[#1C7CFF]/15 text-[#1C7CFF] border border-[#1C7CFF]/30"
+                        : "bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Main content: severity view or table */}
             {injurySlug || viewMode === "table" ? (
               <section className="mb-8">
-                <h2 className="text-lg font-bold mb-4">
+                <h2 className="text-lg font-bold mb-1">
                   {injurySlug ? `${injuryName} Recovery Data by League` : "All Injury Types"}
                 </h2>
-                <RecoveryOverviewTable stats={filteredStats} leagueFilter={leagueFilter} curveMap={curveMap} />
+                <p className="text-[11px] text-white/30 mb-4">Click any injury to explore its full post-injury performance curve.</p>
+                <RecoveryOverviewTable stats={filteredStats} leagueFilter={leagueFilter} curveMap={curveMap} gameBack={gameBack} />
+              </section>
+            ) : severitySort === "severity" ? (
+              <section className="mb-8">
+                <p className="text-[11px] text-white/30 mb-4">Click any injury to explore its full post-injury performance curve.</p>
+                {SEVERITY_ORDER.map((tier) =>
+                  severityGroups[tier]?.length ? (
+                    <SeverityTierSection key={tier} tier={tier} stats={severityGroups[tier]} showLeague={leagueFilter === "all"} curveMap={curveMap} leagueFilter={leagueFilter} gameBack={gameBack} />
+                  ) : null
+                )}
               </section>
             ) : (
               <section className="mb-8">
-                {SEVERITY_ORDER.map((tier) =>
-                  severityGroups[tier]?.length ? (
-                    <SeverityTierSection key={tier} tier={tier} stats={severityGroups[tier]} showLeague={leagueFilter === "all"} curveMap={curveMap} />
-                  ) : null
-                )}
+                <SeverityTierSection
+                  tier={severitySort === "impact" ? "Performance Impact" : severitySort === "recovery" ? "Recovery Time" : "Case Volume"}
+                  stats={sortedFlat}
+                  showLeague={leagueFilter === "all"}
+                  curveMap={curveMap}
+                  leagueFilter={leagueFilter}
+                  gameBack={gameBack}
+                  preserveOrder
+                />
               </section>
             )}
 

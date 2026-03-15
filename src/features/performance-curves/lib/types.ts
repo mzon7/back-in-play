@@ -27,6 +27,7 @@ export interface PerformanceCurve {
   stat_median_pct: Record<string, (number | null)[]> | null;
   stat_stddev_pct: Record<string, (number | null)[]> | null;
   stat_stderr_pct: Record<string, (number | null)[]> | null;
+  stat_baselines: Record<string, number> | null;
 }
 
 export interface ReturnCase {

@@ -37,6 +37,7 @@ const MinutesRestrictionPage = lazyWithReload(() => import("./pages/MinutesRestr
 const TrackedPlayersPage = lazyWithReload(() => import("./pages/TrackedPlayersPage"));
 const LeagueInjuryTypePerformancePage = lazyWithReload(() => import("./pages/league/LeagueInjuryTypePerformancePage"));
 const CrossLeagueComparePage = lazyWithReload(() => import("./pages/injury/CrossLeagueComparePage"));
+const ModelAnalysisPage = lazyWithReload(() => import("./pages/ModelAnalysisPage"));
 
 function Loading() {
   return (
@@ -80,7 +81,7 @@ function routeKey(pathname: string): string {
   return `slug-${segments[0]}`;
 }
 
-const IS_LOCAL = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+
 
 function AppRoutes() {
   const location = useLocation();
@@ -102,6 +103,9 @@ function AppRoutes() {
           <Route path="/players-returning-from-injury-this-week" element={<ReturningThisWeekPage />} />
           <Route path="/minutes-restriction-after-injury" element={<MinutesRestrictionPage />} />
           <Route path="/tracked-players" element={<TrackedPlayersPage />} />
+          {window.location.hostname === "localhost" && (
+            <Route path="/model-analysis" element={<ModelAnalysisPage />} />
+          )}
 
           {/* League-specific view (pre-selects the league tab on home) */}
           <Route path="/league/:leagueSlug" element={<HomePage />} />

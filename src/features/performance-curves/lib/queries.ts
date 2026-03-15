@@ -34,6 +34,7 @@ function mapCurve(raw: Record<string, unknown>): PerformanceCurve {
     stat_median_pct: parseJsonObj(raw.stat_median_pct),
     stat_stddev_pct: parseJsonObj(raw.stat_stddev_pct),
     stat_stderr_pct: parseJsonObj(raw.stat_stderr_pct),
+    stat_baselines: parseJsonObj(raw.stat_baselines) as Record<string, number> | null,
   } as PerformanceCurve;
 }
 
@@ -102,11 +103,12 @@ export function usePerformanceCurve(leagueSlug: string, injuryTypeSlug: string) 
         .eq("league_slug", leagueSlug)
         .eq("injury_type_slug", injuryTypeSlug)
         .eq("position", "")
-        .maybeSingle();
+        .order("sample_size", { ascending: false })
+        .limit(1);
 
       if (error) throw new Error(error.message);
-      if (!data) return null;
-      return mapCurve(data as Record<string, unknown>);
+      if (!data || data.length === 0) return null;
+      return mapCurve(data[0] as Record<string, unknown>);
     },
     staleTime: 10 * 60 * 1000,
   });

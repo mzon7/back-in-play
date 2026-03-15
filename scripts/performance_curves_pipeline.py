@@ -2407,25 +2407,53 @@ def phase_4_compute(cases, league=None):
                     if pre_games_count < 1:
                         continue
 
-                # Recent baseline (last 10 games — or fewer if not available)
-                recent_n = pre_games[-min(10, pre_games_count):]
-                pre_baseline_5g = statistics.mean(g["composite"] for g in recent_n)
+                # Filter out injury-exit games (< 25% of player's typical minutes)
+                all_mins = [g["minutes"] for g in pre_games if g.get("minutes") and g["minutes"] > 0]
+                typical_min = statistics.median(all_mins) if all_mins else 0
+                min_threshold = typical_min * 0.25
+                real_pre = [g for g in pre_games if g.get("minutes") and g["minutes"] >= min_threshold]
+                if not real_pre:
+                    real_pre = pre_games  # fallback if no game has minutes
+
+                # Recent baseline (last 10 real games)
+                recent_n = real_pre[-min(10, len(real_pre)):]
+
+                def _median_rate_baseline(games, key):
+                    """median(stat/min) × median(min) — robust to outliers."""
+                    rates, mins = [], []
+                    for g in games:
+                        v = g.get(key) if isinstance(key, str) else g.get("composite")
+                        mn = g.get("minutes")
+                        if v is not None and mn and mn >= min_threshold:
+                            rates.append(v / mn)
+                            mins.append(mn)
+                    if not rates:
+                        return None
+                    return statistics.median(rates) * statistics.median(mins)
+
+                _mb = _median_rate_baseline(recent_n, "composite")
+                pre_baseline_5g = _mb if _mb else statistics.mean(g["composite"] for g in recent_n)
 
                 # Season baseline
-                season_games = [g for g in pre_games if _season_for_date(g["date"], ls) == season_inj]
-                pre_baseline_season = statistics.mean(g["composite"] for g in season_games) if season_games else pre_baseline_5g
+                season_games = [g for g in real_pre if _season_for_date(g["date"], ls) == season_inj]
+                _ms = _median_rate_baseline(season_games, "composite") if season_games else None
+                pre_baseline_season = _ms if _ms else pre_baseline_5g
 
                 # Post-return: first 10 games
                 post_10 = post_games[:10]
                 post_composites = []
-                pre_avg_min = statistics.mean(g["minutes"] for g in pre_games if g["minutes"]) if any(g["minutes"] for g in pre_games) else None
+                pre_avg_min = statistics.mean(g["minutes"] for g in real_pre if g["minutes"]) if any(g["minutes"] for g in real_pre) else None
 
-                # Per-stat baselines
+                # Per-stat baselines (median rate × median minutes)
                 pre_stat_baselines = {}
                 for sc in stat_cols:
-                    vals = [g[sc] for g in recent_n if g.get(sc) is not None]
-                    if vals:
-                        pre_stat_baselines[sc] = round(statistics.mean(vals), 2)
+                    mb = _median_rate_baseline(recent_n, sc)
+                    if mb is not None:
+                        pre_stat_baselines[sc] = round(mb, 2)
+                    else:
+                        vals = [g[sc] for g in recent_n if g.get(sc) is not None]
+                        if vals:
+                            pre_stat_baselines[sc] = round(statistics.mean(vals), 2)
 
                 for idx, g in enumerate(post_10):
                     entry = {
@@ -2564,28 +2592,51 @@ def phase_5_aggregate(league=None):
                 composites = raw_composites
                 pre_stat_baselines = {}
 
-            for entry in composites:
+            # Sort composites by game_num for running average computation
+            sorted_entries = sorted(
+                [e for e in composites if 1 <= e.get("game_num", 0) <= 10],
+                key=lambda e: e["game_num"]
+            )
+
+            # Track cumulative stat totals and composite for running averages
+            stat_cumulative = {sc: 0.0 for sc in stat_cols}
+            comp_cumulative = 0.0
+
+            for entry in sorted_entries:
                 gn = entry.get("game_num", 0)
                 comp = entry.get("composite", 0)
-                if 1 <= gn <= 10 and baseline_5g > 0:
-                    # Compute per-stat ratios for this game
+                if baseline_5g > 0:
+                    # Update cumulative totals
+                    comp_cumulative += comp
+                    for sc in stat_cols:
+                        sv = entry.get(sc)
+                        if sv is not None:
+                            stat_cumulative[sc] += sv
+
+                    # Compute per-stat running average ratios
                     stat_ratios = []
                     for sc in stat_cols:
-                        stat_val = entry.get(sc)
                         stat_base = pre_stat_baselines.get(sc)
-                        if stat_val is not None and stat_base and stat_base > 0:
-                            ratio = min(stat_val / stat_base, 1.5)
+                        if stat_base and stat_base > 0:
+                            # Running average up to this game / baseline
+                            running_avg = stat_cumulative[sc] / gn
+                            ratio = min(running_avg / stat_base, 1.5)
                             stat_game_data[sc][gn].append(ratio)
                             stat_ratios.append(ratio)
 
-                    # Main curve: average of per-stat ratios (or composite fallback)
+                    # Main curve: average of per-stat running-avg ratios (or composite fallback)
                     if stat_ratios:
                         game_data[gn].append(min(statistics.mean(stat_ratios), 1.5))
                     else:
                         game_data[gn].append(min(comp / baseline_5g, 1.5))
 
-                    # Composite as a selectable stat
-                    stat_game_data["composite"][gn].append(min(comp / baseline_5g, 1.5))
+                    # Composite as a selectable stat (also running average)
+                    comp_running_avg = comp_cumulative / gn
+                    comp_baseline_5g = pre_stat_baselines.get("composite", baseline_5g)
+                    if comp_baseline_5g and comp_baseline_5g > 0:
+                        stat_game_data["composite"][gn].append(min(comp_running_avg / comp_baseline_5g, 1.5))
+                    else:
+                        stat_game_data["composite"][gn].append(min(comp_running_avg / baseline_5g, 1.5))
 
                     if entry.get("minutes_pct"):
                         game_min_data[gn].append(min(entry["minutes_pct"], 1.5))
@@ -2670,7 +2721,10 @@ def phase_5_aggregate(league=None):
                     se_arr.append(None)
             # Count cases: max game count across all 10 games for this stat
             max_n = max((len(stat_game_data[sc][gn]) for gn in range(1, 11)), default=0)
-            if max_n > 0:
+            # Require at least 5 players contributing to a stat for it to be meaningful
+            # This prevents noisy data from e.g. 2 QBs in a 1000-player shoulder sample
+            min_stat_threshold = 5
+            if max_n >= min_stat_threshold:
                 stat_avg_pct[sc] = avg_arr
                 stat_median_pct[sc] = med_arr
                 stat_stddev_pct[sc] = sd_arr
@@ -2718,6 +2772,24 @@ def phase_5_aggregate(league=None):
                 except (ValueError, TypeError):
                     pass
 
+        # Compute average pre-injury stat baselines across all players
+        stat_baselines = {}
+        for sc in list(stat_cols) + ["composite"]:
+            baseline_key = sc if sc != "composite" else "__composite__"
+            vals = []
+            for c in group_cases:
+                raw = json.loads(c["post_game_composites"]) if isinstance(c["post_game_composites"], str) else (c["post_game_composites"] or {})
+                if isinstance(raw, dict):
+                    psb = raw.get("pre_stat_baselines", {})
+                    if sc == "composite":
+                        b = c.get("pre_baseline_5g")
+                        if b and b > 0:
+                            vals.append(b)
+                    elif sc in psb and psb[sc] and psb[sc] > 0:
+                        vals.append(psb[sc])
+            if vals:
+                stat_baselines[sc] = round(statistics.mean(vals), 2)
+
         # Prefer games_missed_actual (computed from game logs) over scraped games_missed
         games_missed_values = [c["games_missed_actual"] for c in group_cases if c.get("games_missed_actual")]
         if not games_missed_values:
@@ -2745,6 +2817,7 @@ def phase_5_aggregate(league=None):
             "stat_median_pct": json.dumps(stat_median_pct) if stat_median_pct else None,
             "stat_stddev_pct": json.dumps(stat_stddev_pct) if stat_stddev_pct else None,
             "stat_stderr_pct": json.dumps(stat_stderr_pct) if stat_stderr_pct else None,
+            "stat_baselines": json.dumps(stat_baselines) if stat_baselines else None,
             "rest_of_season_pct_recent": round(statistics.mean(ros_recent), 4) if ros_recent else None,
             "rest_of_season_pct_season": round(statistics.mean(ros_season), 4) if ros_season else None,
             "rest_of_season_sample": len(ros_recent),

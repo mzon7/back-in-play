@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useState, useMemo, useEffect } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { SiteHeader } from "../components/SiteHeader";
@@ -8,6 +8,10 @@ import { StatusBadge } from "../components/StatusBadge";
 import { PlayerAvatar } from "../components/PlayerAvatar";
 import { InjuryPlayerCard } from "../components/InjuryPlayerCard";
 import { trackLeagueFilter } from "../lib/analytics";
+import { leagueColor } from "../lib/leagueColors";
+import { usePerformanceCurves } from "../features/performance-curves/lib/queries";
+import type { PerformanceCurve } from "../features/performance-curves/lib/types";
+import { computeEV, formatEV, parseOdds, type EVResult } from "../lib/evModel";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -33,6 +37,60 @@ const MARKET_TO_STAT: Record<string, string> = {
   player_shots: "stat_sog", player_shots_on_target: "stat_sog",
   batter_hits: "stat_h", batter_total_bases: "stat_h", batter_rbis: "stat_rbi",
 };
+
+/** Normalize an injury_type string to a slug for curve matching */
+function injuryToSlug(injuryType: string): string {
+  return injuryType.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+/** Primary stat per league for curve impact display */
+const PRIMARY_STAT: Record<string, { key: string; label: string }> = {
+  nba: { key: "stat_pts", label: "PTS" },
+  nfl: { key: "stat_rush_yds", label: "Rush Yds" },
+  mlb: { key: "stat_h", label: "Hits" },
+  nhl: { key: "stat_goals", label: "Goals" },
+  "premier-league": { key: "stat_goals", label: "Goals" },
+};
+
+/** Compute stat impact from a curve at game index */
+function getCurveImpact(curve: PerformanceCurve, gIdx: number, leagueSlug: string): { label: string; diff: number } | null {
+  const baselines = curve.stat_baselines ?? {};
+  const medians = curve.stat_median_pct ?? {};
+  const ps = PRIMARY_STAT[leagueSlug];
+  if (ps) {
+    const base = baselines[ps.key];
+    const pct = (medians[ps.key] as number[] | undefined)?.[gIdx];
+    if (base && base > 0 && pct != null) return { label: ps.label, diff: base * (pct - 1.0) };
+  }
+  // Fallback: largest % deviation
+  let best: { label: string; diff: number; pctDev: number } | null = null;
+  for (const [sk, base] of Object.entries(baselines)) {
+    if (sk === "composite" || !base || base === 0) continue;
+    const pct = (medians[sk] as number[] | undefined)?.[gIdx];
+    if (pct == null) continue;
+    const pctDev = Math.abs(pct - 1.0);
+    if (!best || pctDev > best.pctDev) {
+      best = { label: MARKET_LABELS_SHORT[sk] ?? sk.replace("stat_", ""), diff: base * (pct - 1.0), pctDev };
+    }
+  }
+  return best ? { label: best.label, diff: best.diff } : null;
+}
+
+const MARKET_LABELS_SHORT: Record<string, string> = {
+  stat_pts: "PTS", stat_reb: "REB", stat_ast: "AST",
+  stat_rush_yds: "Rush Yds", stat_pass_yds: "Pass Yds", stat_rec_yds: "Rec Yds",
+  stat_goals: "Goals", stat_sog: "SOG", stat_assists: "Assists",
+  stat_h: "Hits", stat_hr: "HR", stat_rbi: "RBI",
+};
+
+const SORT_OPTIONS = [
+  { value: "best", label: "Best Opportunities" },
+  { value: "gap", label: "Largest Gap vs Expectation" },
+  { value: "early", label: "Earliest Return" },
+  { value: "drop", label: "Biggest Historical Drop" },
+] as const;
+
+type SortMode = typeof SORT_OPTIONS[number]["value"];
 
 const SOURCE_LABELS: Record<string, string> = {
   draftkings: "DraftKings",
@@ -76,16 +134,57 @@ interface PropsPlayer {
   avgSinceReturn: PreInjuryAvg | null;
 }
 
+/** Median of a numeric array */
+function arrMedian(arr: number[]): number {
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+/**
+ * Minutes-adjusted stat averages using median of per-minute rates.
+ * 1. Filter out games below 25% of the player's median minutes (injury exits)
+ * 2. Compute per-minute rate for each game
+ * 3. Take median of rates (robust to outliers)
+ * 4. Multiply by median minutes → per-game expected value
+ */
 function computeAvg(games: any[], n: number): PreInjuryAvg | null {
-  const slice = games.slice(0, n);
+  // First pass: get all games with any minutes to compute typical minutes
+  const withMinutes = games.filter((g: any) => g.minutes != null && g.minutes > 0);
+  if (withMinutes.length === 0) return null;
+
+  // Compute median minutes from ALL available games to determine threshold
+  const allMinutes = withMinutes.map((g: any) => g.minutes as number);
+  const typicalMinutes = arrMedian(allMinutes);
+  const minThreshold = typicalMinutes * 0.25; // 25% of typical = injury exit cutoff
+
+  // Filter to real games (above threshold), then take top n
+  const realGames = withMinutes.filter((g: any) => g.minutes >= minThreshold);
+  const slice = realGames.slice(0, n);
   if (slice.length === 0) return null;
-  const stats = ["minutes", "stat_pts", "stat_reb", "stat_ast", "stat_stl", "stat_blk",
+
+  const statKeys = ["stat_pts", "stat_reb", "stat_ast", "stat_stl", "stat_blk",
     "stat_sog", "stat_rush_yds", "stat_pass_yds", "stat_rec", "stat_rec_yds",
     "stat_goals", "stat_h", "stat_rbi"];
   const result: PreInjuryAvg = { minutes: null };
-  for (const key of stats) {
-    const vals = slice.map((g: any) => g[key]).filter((v: any) => v != null);
-    result[key] = vals.length > 0 ? Math.round((vals.reduce((a: number, b: number) => a + b, 0) / vals.length) * 10) / 10 : null;
+
+  // Median minutes of real games
+  const minuteVals = slice.map((g: any) => g.minutes as number);
+  const medMinutes = arrMedian(minuteVals);
+  result.minutes = Math.round(medMinutes * 10) / 10;
+
+  for (const key of statKeys) {
+    const rates: number[] = [];
+    for (const g of slice) {
+      const val = g[key];
+      if (val != null) {
+        rates.push(val / g.minutes);
+      }
+    }
+    // Median per-minute rate × median minutes = expected per-game stat
+    result[key] = rates.length > 0
+      ? Math.round(arrMedian(rates) * medMinutes * 10) / 10
+      : null;
   }
   return result;
 }
@@ -103,9 +202,10 @@ function usePropsWithPlayers() {
       if (propsErr) throw propsErr;
       if (!props || props.length === 0) return [];
 
-      // 2. Group props by player_id
+      // 2. Group props by player_id (skip nulls — unresolved players)
       const propsByPlayer = new Map<string, typeof props>();
       for (const p of props) {
+        if (!p.player_id) continue;
         const existing = propsByPlayer.get(p.player_id) ?? [];
         existing.push(p);
         propsByPlayer.set(p.player_id, existing);
@@ -148,15 +248,16 @@ function usePropsWithPlayers() {
         }
       }
 
-      // 4. Game logs — parallel chunks (heaviest query, but now parallel)
+      // 4. Game logs — parallel chunks, 20 players per chunk to ensure enough rows per player
+      const LOG_CHUNK_SIZE = 20;
       const logChunks = await Promise.all(
-        Array.from({ length: Math.ceil(playerIds.length / 100) }, (_, i) =>
+        Array.from({ length: Math.ceil(playerIds.length / LOG_CHUNK_SIZE) }, (_, i) =>
           supabase
             .from("back_in_play_player_game_logs")
             .select("player_id, game_date, minutes, stat_pts, stat_reb, stat_ast, stat_stl, stat_blk, stat_sog, stat_rush_yds, stat_pass_yds, stat_rec, stat_rec_yds, stat_goals, stat_h, stat_rbi")
-            .in("player_id", playerIds.slice(i * 100, (i + 1) * 100))
+            .in("player_id", playerIds.slice(i * LOG_CHUNK_SIZE, (i + 1) * LOG_CHUNK_SIZE))
             .order("game_date", { ascending: false })
-            .limit(2000)
+            .limit(1000)
         )
       );
       const gameLogMap = new Map<string, any[]>();
@@ -243,7 +344,7 @@ function usePropsWithPlayers() {
   });
 }
 
-function PlayerPropCard({ player, sourceFilter }: { player: PropsPlayer; sourceFilter: string }) {
+function PlayerPropCard({ player, sourceFilter, curve, highlighted }: { player: PropsPlayer; sourceFilter: string; curve?: PerformanceCurve | null; highlighted?: boolean }) {
   const priority = ["player_points", "player_goals", "batter_hits", "player_pass_yds", "player_rush_yds",
     "player_rebounds", "player_assists", "player_threes", "player_shots_on_goal", "batter_total_bases"];
 
@@ -275,7 +376,20 @@ function PlayerPropCard({ player, sourceFilter }: { player: PropsPlayer; sourceF
 
   if (sorted.length === 0) return null;
 
+  const isEarlyReturn = player.gamesBack > 0 && player.gamesBack <= 10;
+  const injurySlug = player.injury_type ? injuryToSlug(player.injury_type) : "";
+
+  // Curve impacts at G1, G3, G5
+  const impG1 = curve ? getCurveImpact(curve, 0, player.league_slug) : null;
+  const impG3 = curve ? getCurveImpact(curve, 2, player.league_slug) : null;
+  const impG5 = curve ? getCurveImpact(curve, 4, player.league_slug) : null;
+  const fmtDiff = (d: number) => `${d >= 0 ? "+" : ""}${d.toFixed(1)}`;
+
   return (
+    <div
+      id={`prop-player-${player.player_id}`}
+      className={`scroll-mt-24 rounded-xl transition-shadow duration-[2500ms] ${highlighted ? "ring-2 ring-[#1C7CFF]/50 shadow-[0_0_20px_rgba(28,124,255,0.15)]" : ""}`}
+    >
     <InjuryPlayerCard
       player_name={player.player_name}
       player_slug={player.player_slug}
@@ -293,7 +407,7 @@ function PlayerPropCard({ player, sourceFilter }: { player: PropsPlayer; sourceF
       avatarSize={48}
       linkToPlayer={false}
     >
-      {/* Pre-injury minutes + games back */}
+      {/* Return context bar */}
       <div className="px-4 pb-1">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-[11px] text-white/30">
           {player.avg10?.minutes != null && (
@@ -302,17 +416,36 @@ function PlayerPropCard({ player, sourceFilter }: { player: PropsPlayer; sourceF
           {player.gamesBack > 0 && (
             <span>{player.gamesBack} game{player.gamesBack !== 1 ? "s" : ""} back{player.avgSinceReturn?.minutes != null ? ` · ${player.avgSinceReturn.minutes} min/g since return` : ""}</span>
           )}
+          {isEarlyReturn && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400/80 font-medium">Early return window</span>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 px-4 pb-4">
+      {/* Prop market boxes */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 px-4 pb-2">
         {sorted.map((p) => {
           const statKey = MARKET_TO_STAT[p.market];
-          const avg5Val = statKey && player.avg5 ? player.avg5[statKey] : null;
           const avg10Val = statKey && player.avg10 ? player.avg10[statKey] : null;
-          const hasAvg = avg5Val != null || avg10Val != null;
+          const sinceReturnVal = statKey && player.avgSinceReturn ? player.avgSinceReturn[statKey] : null;
 
-          const sinceReturnKey = statKey && player.avgSinceReturn ? player.avgSinceReturn[statKey] : null;
+          // EV computation
+          let ev: EVResult | null = null;
+          if (curve && statKey && avg10Val != null && p.line != null && player.gamesBack > 0) {
+            ev = computeEV({
+              baseline: avg10Val,
+              propLine: p.line,
+              overOdds: parseOdds(p.over_price),
+              underOdds: parseOdds(p.under_price),
+              gamesSinceReturn: player.gamesBack,
+              recentAvg: sinceReturnVal,
+              curve,
+              leagueSlug: player.league_slug,
+              statKey,
+              preInjuryMinutes: player.avg10?.minutes,
+              currentMinutes: player.avgSinceReturn?.minutes,
+            });
+          }
 
           return (
             <div key={p.id} className="bg-white/5 rounded-lg px-2.5 py-2 text-center">
@@ -327,12 +460,27 @@ function PlayerPropCard({ player, sourceFilter }: { player: PropsPlayer; sourceF
               {sourceFilter === "all" && (
                 <p className="text-[9px] text-white/20 mt-0.5">{SOURCE_LABELS[p.source] ?? p.source}</p>
               )}
-              {(hasAvg || sinceReturnKey != null) && (
-                <div className="mt-1.5 pt-1.5 border-t border-white/5 text-[10px] text-white/35">
-                  {avg5Val != null && <p>5G: <span className={p.line != null && avg5Val > p.line ? "text-green-400/70" : p.line != null && avg5Val < p.line ? "text-red-400/70" : "text-white/50"}>{avg5Val}</span></p>}
-                  {avg10Val != null && <p>10G: <span className={p.line != null && avg10Val > p.line ? "text-green-400/70" : p.line != null && avg10Val < p.line ? "text-red-400/70" : "text-white/50"}>{avg10Val}</span></p>}
-                  {sinceReturnKey != null && player.gamesBack > 0 && (
-                    <p className="text-cyan-400/50">Back: <span className={p.line != null && sinceReturnKey > p.line ? "text-green-400/70" : p.line != null && sinceReturnKey < p.line ? "text-red-400/70" : "text-white/50"}>{sinceReturnKey}</span></p>
+              {(avg10Val != null || sinceReturnVal != null) && (
+                <div className="mt-1.5 pt-1.5 border-t border-white/5 text-[10px] text-white/35 space-y-0.5">
+                  {avg10Val != null && (
+                    <p>Pre-injury avg: <span className={p.line != null && avg10Val > p.line ? "text-green-400/70" : p.line != null && avg10Val < p.line ? "text-red-400/70" : "text-white/50"}>{avg10Val}</span></p>
+                  )}
+                  {sinceReturnVal != null && player.gamesBack > 0 && (
+                    <p>Return avg: <span className={p.line != null && sinceReturnVal > p.line ? "text-green-400/70" : p.line != null && sinceReturnVal < p.line ? "text-red-400/70" : "text-white/50"}>{sinceReturnVal}</span></p>
+                  )}
+                </div>
+              )}
+              {/* EV model output */}
+              {ev && (
+                <div className="mt-1.5 pt-1.5 border-t border-white/5 text-[10px] space-y-0.5">
+                  <p className="text-white/30">Model: <span className="text-white/60 font-medium tabular-nums">{ev.expectedCombined.toFixed(1)}</span></p>
+                  {ev.recommendation && ev.bestEv != null && (
+                    <p className={`font-semibold tabular-nums ${ev.recommendation === "OVER" ? "text-green-400/90" : "text-red-400/90"}`}>
+                      EV {formatEV(ev.bestEv)} · {ev.recommendation}
+                    </p>
+                  )}
+                  {!ev.recommendation && (
+                    <p className="text-white/20">No positive EV edge</p>
                   )}
                 </div>
               )}
@@ -340,18 +488,262 @@ function PlayerPropCard({ player, sourceFilter }: { player: PropsPlayer; sourceF
           );
         })}
       </div>
+
+      {/* Historical injury trend + analytics links */}
+      {(curve || injurySlug) && (
+        <div className="px-4 pb-4">
+          {/* Historical trend from curve data */}
+          {curve && (impG1 || impG3 || impG5) && (
+            <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3 mb-2">
+              <p className="text-[10px] text-white/35 mb-1.5">
+                Historical {player.injury_type?.toLowerCase()} return trend
+                <span className="text-white/20 ml-1">({LEAGUE_LABELS[player.league_slug]} · {curve.sample_size} cases)</span>
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {([["G1", impG1], ["G3", impG3], ["G5", impG5]] as [string, { label: string; diff: number } | null][]).map(([label, imp]) => (
+                  <div key={label} className="text-center">
+                    <p className="text-[9px] text-white/20">{label}</p>
+                    <p className={`text-xs font-bold tabular-nums ${imp == null ? "text-white/20" : imp.diff >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {imp != null ? `${fmtDiff(imp.diff)} ${imp.label}` : "—"}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              {impG3 && impG3.diff < 0 && (
+                <p className="text-[10px] text-white/25 mt-2 leading-snug">
+                  Historical {impG3.label.toLowerCase()} has typically lagged pre-injury baseline in the first few games back.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Analytics links */}
+          {injurySlug && (
+            <div className="flex items-center gap-3 text-[10px]">
+              <Link
+                to={`/performance-curves?league=${player.league_slug}&injury=${injurySlug}`}
+                className="text-white/25 hover:text-[#1C7CFF]/70 transition-colors"
+              >
+                View recovery curve &rarr;
+              </Link>
+              <Link
+                to={`/injuries/${injurySlug}?league=${player.league_slug}`}
+                className="text-white/25 hover:text-[#1C7CFF]/70 transition-colors"
+              >
+                View recovery stats &rarr;
+              </Link>
+            </div>
+          )}
+        </div>
+      )}
     </InjuryPlayerCard>
+    </div>
+  );
+}
+
+function EVInfoModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div
+        className="relative bg-[#111827] border border-white/10 rounded-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button onClick={onClose} className="absolute top-4 right-4 text-white/30 hover:text-white/60 transition-colors text-lg">✕</button>
+
+        <h2 className="text-lg font-bold text-white mb-1">How EV Works</h2>
+        <p className="text-xs text-white/40 mb-5">Injury-adjusted expected value</p>
+
+        <div className="space-y-5 text-[13px] text-white/70 leading-relaxed">
+          <div>
+            <p>
+              Expected value compares the model's estimated probability
+              of a player going over or under the prop line to the
+              sportsbook's implied probability based on the odds.
+            </p>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-white/90 mb-2">Our model uses</h3>
+            <ul className="space-y-2 text-white/60">
+              <li className="flex items-start gap-2.5">
+                <span className="shrink-0 mt-1.5 w-1.5 h-1.5 rounded-full bg-[#1C7CFF]/60" />
+                <span><span className="text-white/80">Historical injury recovery trends</span> — how players have performed after the same injury type, at each game since return</span>
+              </li>
+              <li className="flex items-start gap-2.5">
+                <span className="shrink-0 mt-1.5 w-1.5 h-1.5 rounded-full bg-[#3DFF8F]/60" />
+                <span><span className="text-white/80">Player performance since returning</span> — actual stats in games played after the injury</span>
+              </li>
+              <li className="flex items-start gap-2.5">
+                <span className="shrink-0 mt-1.5 w-1.5 h-1.5 rounded-full bg-orange-400/60" />
+                <span><span className="text-white/80">Minutes and usage changes</span> — load management and minutes restrictions</span>
+              </li>
+            </ul>
+          </div>
+
+          <div className="rounded-lg bg-[#1C7CFF]/5 border border-[#1C7CFF]/15 p-3.5">
+            <p className="text-[13px] text-white/70 leading-relaxed">
+              <span className="text-white/90 font-medium">Positive EV</span> indicates the model probability exceeds the
+              sportsbook's breakeven probability — a potential long-term edge.
+            </p>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-semibold text-white/90 mb-2">Confidence levels</h3>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-lg bg-green-500/10 border border-green-500/15 p-2.5 text-center">
+                <p className="text-xs font-bold text-green-400 mb-0.5">High</p>
+                <p className="text-[10px] text-white/40">500+ historical cases</p>
+              </div>
+              <div className="rounded-lg bg-amber-500/10 border border-amber-500/15 p-2.5 text-center">
+                <p className="text-xs font-bold text-amber-400 mb-0.5">Medium</p>
+                <p className="text-[10px] text-white/40">100–500 cases</p>
+              </div>
+              <div className="rounded-lg bg-red-500/10 border border-red-500/15 p-2.5 text-center">
+                <p className="text-xs font-bold text-red-400 mb-0.5">Low</p>
+                <p className="text-[10px] text-white/40">Under 100 cases</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-white/5 border border-white/8 p-3 text-[11px] text-white/40 leading-relaxed">
+            <p className="font-semibold text-white/60 mb-1">Important</p>
+            <p>
+              This model provides statistical estimates, not guarantees. Positive EV does not mean a bet will win —
+              it means the odds may be in your favor over a large number of similar situations. Always bet responsibly.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
 export default function PropsPage() {
-  const { data: players = [], isLoading } = usePropsWithPlayers();
-  const [leagueFilter, setLeagueFilter] = useState<string>("all");
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const qLeague = searchParams.get("league")?.toLowerCase();
+  const qInjury = searchParams.get("injury")?.toLowerCase();
+  const qPlayer = searchParams.get("player");
+  const qSort = searchParams.get("sort");
 
-  const filtered = leagueFilter === "all"
-    ? players
-    : players.filter((p) => p.league_slug === leagueFilter);
+  const { data: players = [], isLoading } = usePropsWithPlayers();
+  const { data: curves = [], isLoading: curvesIsLoading } = usePerformanceCurves();
+
+  const [leagueFilter, setLeagueFilter] = useState<string>(
+    qLeague && LEAGUE_ORDER.includes(qLeague) ? qLeague : "all"
+  );
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [sortMode, setSortMode] = useState<SortMode>(
+    qSort && ["best", "gap", "early", "drop"].includes(qSort) ? qSort as SortMode : "best"
+  );
+  const [showEVInfo, setShowEVInfo] = useState(false);
+  const [highlightedPlayerId, setHighlightedPlayerId] = useState<string | null>(null);
+
+  // Build curve lookup: injury_type_slug|league_slug → PerformanceCurve
+  const curveMap = useMemo(() => {
+    const m = new Map<string, PerformanceCurve>();
+    for (const c of curves) {
+      if (c.position) continue; // only all-position curves
+      const key = `${c.injury_type_slug}|${c.league_slug}`;
+      const existing = m.get(key);
+      if (!existing || c.sample_size > existing.sample_size) m.set(key, c);
+    }
+    return m;
+  }, [curves]);
+
+  /** Find matching curve for a player */
+  const findCurve = (p: PropsPlayer): PerformanceCurve | null => {
+    if (!p.injury_type) return null;
+    const slug = injuryToSlug(p.injury_type);
+    // Exact match first
+    const exact = curveMap.get(`${slug}|${p.league_slug}`);
+    if (exact) return exact;
+    // Partial match: find curve whose slug contains the injury slug or vice versa
+    for (const [key, curve] of curveMap) {
+      const [cSlug, cLeague] = key.split("|");
+      if (cLeague === p.league_slug && (cSlug.includes(slug) || slug.includes(cSlug))) return curve;
+    }
+    return null;
+  };
+
+  // Scroll to matched player and highlight — re-scroll if layout shifts
+  useEffect(() => {
+    if (!qPlayer || players.length === 0 || isLoading || curvesIsLoading) return;
+    const q = qPlayer.toLowerCase();
+    const match = players.find((p) => p.player_name.toLowerCase().includes(q));
+    if (!match) return;
+
+    setHighlightedPlayerId(match.player_id);
+
+    // Scroll with retry: if the element moves due to late-rendering sections, scroll again
+    let attempts = 0;
+    let lastTop = -1;
+    let rafId: number;
+
+    function scrollToTarget() {
+      const el = document.getElementById(`prop-player-${match.player_id}`);
+      if (!el) {
+        if (attempts < 10) { attempts++; rafId = requestAnimationFrame(scrollToTarget); }
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const currentTop = rect.top + window.scrollY;
+
+      // Scroll if first attempt or if the element moved significantly
+      if (lastTop < 0 || Math.abs(currentTop - lastTop) > 20) {
+        lastTop = currentTop;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+
+      // Keep checking for layout shifts for 2 seconds
+      attempts++;
+      if (attempts < 20) {
+        setTimeout(() => { rafId = requestAnimationFrame(scrollToTarget); }, 150);
+      }
+    }
+
+    // Start after a brief delay for initial render
+    const timer = setTimeout(() => { rafId = requestAnimationFrame(scrollToTarget); }, 100);
+
+    const fadeTimer = setTimeout(() => setHighlightedPlayerId(null), 4000);
+
+    return () => { clearTimeout(timer); clearTimeout(fadeTimer); cancelAnimationFrame(rafId); };
+  }, [qPlayer, players, isLoading, curvesIsLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear query params after initial use
+  useEffect(() => {
+    if (qLeague || qInjury || qPlayer) {
+      const timer = setTimeout(() => {
+        setSearchParams({}, { replace: true });
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filtered = useMemo(() => {
+    let list = leagueFilter === "all"
+      ? players
+      : players.filter((p) => p.league_slug === leagueFilter);
+    // If injury query param, prioritize matching players
+    if (qInjury) {
+      list = [...list].sort((a, b) => {
+        const aMatch = a.injury_type && injuryToSlug(a.injury_type).includes(qInjury) ? 1 : 0;
+        const bMatch = b.injury_type && injuryToSlug(b.injury_type).includes(qInjury) ? 1 : 0;
+        return bMatch - aMatch;
+      });
+    }
+    // If player query param, prioritize matching players
+    if (qPlayer) {
+      const q = qPlayer.toLowerCase();
+      list = [...list].sort((a, b) => {
+        const aMatch = a.player_name.toLowerCase().includes(q) ? 1 : 0;
+        const bMatch = b.player_name.toLowerCase().includes(q) ? 1 : 0;
+        return bMatch - aMatch;
+      });
+    }
+    return list;
+  }, [players, leagueFilter, qInjury, qPlayer]);
 
   // Get unique leagues that have props today
   const activeLeagues = Array.from(new Set(players.map((p) => p.league_slug))).filter(Boolean);
@@ -362,66 +754,273 @@ export default function PropsPage() {
 
   const injuredCount = filtered.filter((p) => p.status !== "active" && p.status !== "returned").length;
 
+  // Split: recently returned (10 games or fewer since injury) vs rest
+  const recentlyReturned = useMemo(() => {
+    const list = filtered.filter(
+      (p) => p.injury_date && p.gamesBack > 0 && p.gamesBack <= 10
+    );
+    // Sort by sortMode
+    if (sortMode === "early") {
+      list.sort((a, b) => a.gamesBack - b.gamesBack);
+    } else if (sortMode === "gap") {
+      list.sort((a, b) => {
+        // Largest gap between return avg and line
+        const gapA = getMaxGap(a);
+        const gapB = getMaxGap(b);
+        return gapB - gapA;
+      });
+    } else if (sortMode === "drop") {
+      list.sort((a, b) => {
+        const cA = findCurve(a);
+        const cB = findCurve(b);
+        const dropA = cA ? getCurveImpact(cA, 0, a.league_slug)?.diff ?? 0 : 0;
+        const dropB = cB ? getCurveImpact(cB, 0, b.league_slug)?.diff ?? 0 : 0;
+        return dropA - dropB; // most negative first
+      });
+    }
+    return list;
+  }, [filtered, sortMode, curveMap]);
+
+  const otherPlayers = filtered.filter(
+    (p) => !p.injury_date || p.gamesBack === 0 || p.gamesBack > 10
+  );
+
+  // Compute max gap between any prop line and return avg
+  function getMaxGap(p: PropsPlayer): number {
+    let maxGap = 0;
+    for (const prop of p.props) {
+      if (prop.line == null) continue;
+      const statKey = MARKET_TO_STAT[prop.market];
+      const returnVal = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
+      if (returnVal != null) maxGap = Math.max(maxGap, Math.abs(returnVal - prop.line));
+    }
+    return maxGap;
+  }
+
+  // Top 2 edges by EV for highlight cards, plus full list for edges section
+  const returningEdges = useMemo(() => {
+    return recentlyReturned
+      .filter((p) => findCurve(p) != null)
+      .slice(0, 6);
+  }, [recentlyReturned, curveMap]);
+
+  const topEdges = useMemo(() => {
+    return returningEdges
+      .map((p) => {
+        const curve = findCurve(p)!;
+        const topProp = p.props[0];
+        const statKey = topProp ? MARKET_TO_STAT[topProp.market] : null;
+        const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
+        const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
+        let ev: EVResult | null = null;
+        if (curve && statKey && baseline != null && baseline > 0 && topProp?.line != null && p.gamesBack > 0) {
+          ev = computeEV({
+            baseline, propLine: topProp.line,
+            overOdds: parseOdds(topProp.over_price), underOdds: parseOdds(topProp.under_price),
+            gamesSinceReturn: p.gamesBack, recentAvg: recent, curve,
+            leagueSlug: p.league_slug, statKey,
+            preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
+          });
+        }
+        return { player: p, ev, prop: topProp, evVal: ev?.bestEv != null && ev.bestEv > 0 ? ev.bestEv : 0 };
+      })
+      .filter((e) => e.ev?.recommendation && e.evVal > 0)
+      .sort((a, b) => b.evVal - a.evVal)
+      .slice(0, 4);
+  }, [returningEdges, curveMap]);
+
   return (
     <div className="min-h-screen bg-[#0a0f1a] text-white">
       <SEO
-        title="Player Props Today - Injury Return Opportunities | Back In Play"
-        description="Today's player prop lines for athletes returning from injury. Find betting value on players coming back from the injury report."
+        title="Player Props Today - Injury Return Analysis | Back In Play"
+        description="Today's player prop lines analyzed through injury return data. Historical performance trends, return context, and market comparison for returning players."
         path="/props"
       />
       <SiteHeader />
 
+      <EVInfoModal open={showEVInfo} onClose={() => setShowEVInfo(false)} />
+
       <div className="max-w-3xl mx-auto px-4 py-6">
-        <h1 className="text-2xl font-bold mb-2">Player Props</h1>
+        <div className="flex items-center gap-3 mb-2">
+          <h1 className="text-2xl font-bold">Player Props</h1>
+          <button
+            onClick={() => setShowEVInfo(true)}
+            className="shrink-0 w-6 h-6 rounded-full border border-white/15 text-white/35 hover:text-white/70 hover:border-white/30 transition-colors text-xs font-semibold flex items-center justify-center"
+            title="How the EV model works"
+          >
+            ?
+          </button>
+        </div>
         <p className="text-sm text-white/50 mb-5 leading-relaxed">
-          Today's prop lines for players with injury history. Returning players often have adjusted
-          lines that may not reflect their true ability — creating opportunities when a player
-          is healthy but the market is still pricing in injury risk.
+          Today's prop lines for players with injury history. Compare current lines against
+          historical return trends and pre-injury baselines to identify where the market
+          may still reflect injury uncertainty.
         </p>
 
-        {/* Best Opportunities */}
-        {(() => {
-          const opportunities = players.filter(
-            (p) => (p.is_star || p.is_starter) && p.status !== "active" && p.status !== "cleared"
-          );
-          if (opportunities.length === 0) return null;
-          return (
-            <div className="mb-6">
-              <h2 className="text-xs font-bold text-emerald-400/80 uppercase tracking-widest mb-3">Best Opportunities</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-                {opportunities.slice(0, 6).map((p) => {
-                  const topProp = p.props[0];
-                  return (
-                    <Link
-                      key={p.player_id}
-                      to={`/player/${p.player_slug}`}
-                      className="bg-gradient-to-br from-emerald-500/10 to-cyan-500/5 border border-emerald-500/20 rounded-xl p-4 hover:border-emerald-500/40 transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <PlayerAvatar src={p.headshot_url} name={p.player_name} size={44} />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold truncate">{p.player_name}</p>
-                          <div className="flex items-center gap-1.5 text-xs text-white/40 mt-0.5">
-                            <span>{p.team_name}</span>
-                            <span>·</span>
-                            <StatusBadge status={p.status} />
-                          </div>
-                          {p.injury_type && <p className="text-[11px] text-white/30 mt-0.5">{p.injury_type}</p>}
+        {/* Top 2 Edges — compact cards with large EV numbers */}
+        {topEdges.length > 0 && (
+          <section className="mb-6">
+            <h2 className="text-xs font-bold text-[#1C7CFF]/80 uppercase tracking-widest mb-3">Top Edges Today</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {topEdges.map(({ player: p, ev: topEv, prop: topProp }) => {
+                const lc = leagueColor(p.league_slug);
+                const side = topEv!.recommendation!;
+                const isOver = side === "OVER";
+                return (
+                  <Link
+                    key={p.player_id}
+                    to={`/props?player=${p.player_id}&sort=best`}
+                    className={`relative rounded-xl border p-3.5 transition-all overflow-hidden ${
+                      isOver
+                        ? "bg-green-500/[0.06] border-green-500/20 hover:border-green-500/40"
+                        : "bg-red-500/[0.06] border-red-500/20 hover:border-red-500/40"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <PlayerAvatar src={p.headshot_url} name={p.player_name} size={40} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold truncate">{p.player_name}</p>
+                        <div className="flex items-center gap-1.5 text-[10px] text-white/35">
+                          <span style={{ color: `${lc}aa` }}>{LEAGUE_LABELS[p.league_slug]}</span>
+                          <span>·</span>
+                          <span>{p.injury_type}</span>
+                          <span>·</span>
+                          <span>{p.gamesBack}G back</span>
                         </div>
-                        {topProp && (
-                          <div className="text-right shrink-0">
-                            <p className="text-[10px] text-emerald-400/70 font-medium">{MARKET_LABELS[topProp.market] ?? topProp.market}</p>
-                            <p className="text-lg font-bold">{topProp.line}</p>
-                          </div>
-                        )}
                       </div>
-                    </Link>
-                  );
-                })}
-              </div>
+                      <div className="text-right shrink-0">
+                        <p className={`text-lg font-black tabular-nums ${isOver ? "text-green-400" : "text-red-400"}`}>
+                          EV {formatEV(topEv!.bestEv!)}
+                        </p>
+                        <p className={`text-[11px] font-bold ${isOver ? "text-green-400/70" : "text-red-400/70"}`}>
+                          {side}
+                        </p>
+                        <p className="text-[10px] text-white/40">
+                          {MARKET_LABELS[topProp.market] ?? topProp.market} {topProp.line}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 mt-2 text-[10px] text-white/35">
+                      <span>Model: <span className="text-white/60 font-medium tabular-nums">{topEv!.expectedCombined.toFixed(1)}</span></span>
+                      <span>·</span>
+                      <span>P({side.toLowerCase()}): <span className="text-white/60 font-medium tabular-nums">{Math.round((isOver ? topEv!.probOver : topEv!.probUnder) * 100)}%</span></span>
+                      <span>·</span>
+                      <span>{topEv!.confidence} confidence</span>
+                    </div>
+                  </Link>
+                );
+              })}
             </div>
-          );
-        })()}
+          </section>
+        )}
+
+        {/* Returning Player Edges */}
+        {returningEdges.length > 0 && (
+          <section className="mb-8">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xs font-bold text-white/40 uppercase tracking-widest">Returning Player Edges</h2>
+              <span className="text-[10px] text-white/25">Based on historical injury return data</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-2">
+              {returningEdges.map((p) => {
+                const curve = findCurve(p);
+                const impG3 = curve ? getCurveImpact(curve, 2, p.league_slug) : null;
+                const topProp = p.props[0];
+                const lc = leagueColor(p.league_slug);
+                const fmtD = (d: number) => `${d >= 0 ? "+" : ""}${d.toFixed(1)}`;
+
+                const topStatKey = topProp ? MARKET_TO_STAT[topProp.market] : null;
+                const topBaseline = topStatKey && p.avg10 ? p.avg10[topStatKey] : null;
+                const topRecent = topStatKey && p.avgSinceReturn ? p.avgSinceReturn[topStatKey] : null;
+                let topEv: EVResult | null = null;
+                if (curve && topStatKey && topBaseline != null && topBaseline > 0 && topProp?.line != null && p.gamesBack > 0) {
+                  topEv = computeEV({
+                    baseline: topBaseline, propLine: topProp.line,
+                    overOdds: parseOdds(topProp.over_price), underOdds: parseOdds(topProp.under_price),
+                    gamesSinceReturn: p.gamesBack, recentAvg: topRecent, curve,
+                    leagueSlug: p.league_slug, statKey: topStatKey,
+                    preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
+                  });
+                }
+
+                return (
+                  <div
+                    key={p.player_id}
+                    className="relative rounded-xl bg-white/[0.03] border border-white/8 p-4 hover:bg-white/[0.06] hover:border-white/15 transition-all overflow-hidden"
+                  >
+                    <div className="absolute left-0 top-0 bottom-0 w-[2px]" style={{ backgroundColor: `${lc}55` }} />
+
+                    <div className="flex items-center gap-3 mb-2.5">
+                      <PlayerAvatar src={p.headshot_url} name={p.player_name} size={36} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold truncate">{p.player_name}</p>
+                        <div className="flex items-center gap-1.5 text-[10px] text-white/35">
+                          <span style={{ color: `${lc}aa` }}>{LEAGUE_LABELS[p.league_slug]}</span>
+                          <span>·</span>
+                          <span>{p.injury_type}</span>
+                          <span>·</span>
+                          <span>{p.gamesBack} game{p.gamesBack !== 1 ? "s" : ""} back</span>
+                        </div>
+                      </div>
+                      {topProp && (
+                        <div className="text-right shrink-0">
+                          <p className="text-[9px] text-white/30">{MARKET_LABELS[topProp.market] ?? topProp.market} line</p>
+                          <p className="text-lg font-bold">{topProp.line}</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {curve && impG3 && (
+                      <div className="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2 mb-2">
+                        <p className="text-[10px] text-white/30 mb-1">
+                          Historical {p.injury_type?.toLowerCase()} return trend
+                        </p>
+                        <div className="flex items-center gap-4 text-[11px]">
+                          {([["G1", 0], ["G3", 2], ["G5", 4]] as [string, number][]).map(([label, gIdx]) => {
+                            const imp = getCurveImpact(curve, gIdx, p.league_slug);
+                            return (
+                              <span key={label} className="tabular-nums">
+                                <span className="text-white/25">{label}: </span>
+                                <span className={imp && imp.diff < 0 ? "text-red-400/80" : "text-green-400/80"}>
+                                  {imp ? `${fmtD(imp.diff)} ${imp.label}` : "—"}
+                                </span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {topEv && topEv.recommendation && topEv.bestEv != null && (
+                      <div className={`rounded-lg px-3 py-2 mb-1 border ${topEv.recommendation === "OVER" ? "bg-green-500/10 border-green-500/20" : "bg-red-500/10 border-red-500/20"}`}>
+                        <div className="flex items-center justify-between">
+                          <div className="text-[10px] text-white/40">
+                            <span>Model: <span className="text-white/60 font-medium tabular-nums">{topEv.expectedCombined.toFixed(1)}</span></span>
+                            <span className="mx-1.5">·</span>
+                            <span>P({topEv.recommendation.toLowerCase()}): <span className="text-white/60 font-medium tabular-nums">{Math.round((topEv.recommendation === "OVER" ? topEv.probOver : topEv.probUnder) * 100)}%</span></span>
+                          </div>
+                          <span className={`text-xs font-bold tabular-nums ${topEv.recommendation === "OVER" ? "text-green-400" : "text-red-400"}`}>
+                            EV {formatEV(topEv.bestEv)} · {topEv.recommendation}
+                          </span>
+                        </div>
+                        <p className="text-[9px] text-white/20 mt-0.5">
+                          Confidence: {topEv.confidence} · {topEv.sampleSize.toLocaleString()} historical cases
+                        </p>
+                      </div>
+                    )}
+
+                    {!topEv?.recommendation && impG3 && impG3.diff < 0 && (
+                      <p className="text-[10px] text-white/25 leading-snug">
+                        Market may still reflect injury uncertainty — historical {impG3.label.toLowerCase()} has typically lagged baseline in early return games.
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
 
         {/* Source tabs */}
         {activeSources.length > 1 && (
@@ -449,7 +1048,7 @@ export default function PropsPage() {
         )}
 
         {/* League filter */}
-        <div className="flex gap-1.5 mb-5 overflow-x-auto pb-1">
+        <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
           <button
             onClick={() => setLeagueFilter("all")}
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
@@ -474,11 +1073,32 @@ export default function PropsPage() {
           })}
         </div>
 
+        {/* Sort controls */}
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-[10px] text-white/25 shrink-0">Sort by</span>
+          {SORT_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setSortMode(opt.value)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                sortMode === opt.value
+                  ? "bg-white/12 text-white"
+                  : "bg-white/5 text-white/35 hover:text-white/55"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
         {/* Stats bar */}
         {filtered.length > 0 && (
           <div className="flex gap-4 text-xs text-white/40 mb-4">
             <span>{filtered.length} players with props</span>
             <span>{injuredCount} currently injured</span>
+            {recentlyReturned.length > 0 && (
+              <span>{recentlyReturned.length} recently returned</span>
+            )}
           </div>
         )}
 
@@ -494,11 +1114,37 @@ export default function PropsPage() {
             <p className="text-white/25 text-xs mt-1">Props are fetched daily before game time.</p>
           </div>
         ) : (
-          <div className="space-y-3">
-            {filtered.map((p) => (
-              <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} />
-            ))}
-          </div>
+          <>
+            {/* Recently Returned from Injury */}
+            {recentlyReturned.length > 0 && (
+              <section className="mb-8">
+                <div className="flex items-center gap-3 mb-3">
+                  <h2 className="text-xs font-bold text-[#3DFF8F]/80 uppercase tracking-widest">Recently Returned</h2>
+                  <span className="text-[10px] text-white/30">{recentlyReturned.length} players within 10 games of return</span>
+                </div>
+                <div className="space-y-3">
+                  {recentlyReturned.map((p) => (
+                    <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} curve={findCurve(p)} highlighted={highlightedPlayerId === p.player_id} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Other Player Props */}
+            {otherPlayers.length > 0 && (
+              <section>
+                <div className="flex items-center gap-3 mb-3">
+                  <h2 className="text-xs font-bold text-white/50 uppercase tracking-widest">Other Player Props</h2>
+                  <span className="text-[10px] text-white/30">{otherPlayers.length} players</span>
+                </div>
+                <div className="space-y-3">
+                  {otherPlayers.map((p) => (
+                    <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} curve={findCurve(p)} highlighted={highlightedPlayerId === p.player_id} />
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
         )}
       </div>
     </div>
