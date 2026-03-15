@@ -33,6 +33,18 @@ interface ReturningPlayer {
   curve: PerformanceCurve | null;
 }
 
+/** Check if a league is currently in-season. */
+function isInSeason(slug: string): boolean {
+  const month = new Date().getMonth() + 1; // 1-indexed
+  const seasons: Record<string, [number, number]> = {
+    nba: [10, 6], nfl: [9, 2], nhl: [10, 6], mlb: [3, 10], "premier-league": [8, 5],
+  };
+  const range = seasons[slug];
+  if (!range) return true;
+  const [start, end] = range;
+  return start <= end ? month >= start && month <= end : month >= start || month <= end;
+}
+
 function useReturningPlayers(leagueSlug?: string) {
   return useQuery<ReturningPlayer[]>({
     queryKey: ["returning-today", leagueSlug ?? "all"],
@@ -91,6 +103,8 @@ function useReturningPlayers(leagueSlug?: string) {
         const league = leagueMap.get(team.leagueId);
         if (!league) continue;
         if (leagueSlug && league.slug !== leagueSlug) continue;
+        // Skip off-season leagues — stale statuses from months ago
+        if (!isInSeason(league.slug)) continue;
         const curveKey = `${inj.injury_type_slug}|${league.slug}`;
         result.push({
           player_id: pid, player_name: p.player_name, player_slug: p.slug,

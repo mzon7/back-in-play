@@ -43,6 +43,17 @@ function slugify(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
+function isInSeason(slug: string): boolean {
+  const month = new Date().getMonth() + 1;
+  const seasons: Record<string, [number, number]> = {
+    nba: [10, 6], nfl: [9, 2], nhl: [10, 6], mlb: [3, 10], "premier-league": [8, 5],
+  };
+  const range = seasons[slug];
+  if (!range) return true;
+  const [start, end] = range;
+  return start <= end ? month >= start && month <= end : month >= start || month <= end;
+}
+
 function useReturningPlayers(leagueSlug?: string) {
   return useQuery<ReturningPlayer[]>({
     queryKey: ["returning-today", leagueSlug ?? "all"],
@@ -124,6 +135,7 @@ function useReturningPlayers(leagueSlug?: string) {
         const league = leagueMap.get(team.leagueId);
         if (!league) continue;
         if (leagueSlug && leagueSlug !== "all" && league.slug !== leagueSlug) continue;
+        if (!isInSeason(league.slug)) continue;
 
         const injSlug = slugify(inj.injury_type);
         const curveKey = `${league.slug}:${injSlug}`;
