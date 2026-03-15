@@ -386,11 +386,12 @@ export default function PerformanceCurvesPage() {
                 const leagueCurves = reliableCurves.filter((c) => c.league_slug === ls && c.median_pct_recent[0] != null);
                 if (leagueCurves.length === 0) return null;
                 const worst = leagueCurves.reduce((w, c) => (c.median_pct_recent[0]! < w.median_pct_recent[0]!) ? c : w);
-                const avgG1 = Math.round((leagueCurves.reduce((s, c) => s + c.median_pct_recent[0]!, 0) / leagueCurves.length) * 100);
+                const medianVals = leagueCurves.map((c) => c.median_pct_recent[0]!).sort((a, b) => a - b);
+                const medG1 = Math.round(medianVals[Math.floor(medianVals.length / 2)] * 100);
                 return (
                   <li key={ls}>
-                    <span className="text-white/80 font-medium">{LEAGUE_LABELS[ls]}</span>: Average game-1 return at{" "}
-                    <span className="text-white font-bold">{avgG1}%</span> of baseline across {leagueCurves.length} injury types.
+                    <span className="text-white/80 font-medium">{LEAGUE_LABELS[ls]}</span>: Median game-1 return at{" "}
+                    <span className="text-white font-bold">{medG1}%</span> of baseline across {leagueCurves.length} injury types.
                     Hardest: <span className="text-red-400 font-medium">{worst.injury_type}</span> at{" "}
                     <span className="text-red-400 font-bold">{Math.round(worst.median_pct_recent[0]! * 100)}%</span>{" "}
                     <span className="text-white/30">(n={worst.sample_size})</span>
@@ -566,8 +567,9 @@ export default function PerformanceCurvesPage() {
               {Object.entries(injuryGroups).sort(([, a], [, b]) => b.length - a.length).map(([group, groupCurves]) => {
                 const sorted = [...groupCurves].sort((a, b) => (a.median_pct_recent[0] ?? 1) - (b.median_pct_recent[0] ?? 1));
                 const reliableInGroup = sorted.filter((c) => c.sample_size >= 30);
-                const avgG1 = reliableInGroup.length > 0
-                  ? Math.round((reliableInGroup.filter((c) => c.median_pct_recent[0] != null).reduce((s, c) => s + c.median_pct_recent[0]!, 0) / reliableInGroup.filter((c) => c.median_pct_recent[0] != null).length) * 100)
+                const medianGroupVals = reliableInGroup.filter((c) => c.median_pct_recent[0] != null).map((c) => c.median_pct_recent[0]!).sort((a, b) => a - b);
+                const avgG1 = medianGroupVals.length > 0
+                  ? Math.round(medianGroupVals[Math.floor(medianGroupVals.length / 2)] * 100)
                   : null;
                 return (
                   <div key={group} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
@@ -575,7 +577,7 @@ export default function PerformanceCurvesPage() {
                       <h3 className="text-sm font-semibold text-white/80">{group}</h3>
                       <span className="text-[10px] text-white/30">
                         {sorted.length} injury type{sorted.length !== 1 ? "s" : ""} · {sorted.reduce((s, c) => s + c.sample_size, 0).toLocaleString()} cases
-                        {avgG1 != null && <> · Avg G1: {avgG1}%</>}
+                        {avgG1 != null && <> · Median G1: {avgG1}%</>}
                       </span>
                     </div>
                     <div className="flex flex-wrap gap-1.5">

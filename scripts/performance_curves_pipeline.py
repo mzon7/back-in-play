@@ -2401,9 +2401,9 @@ def phase_4_compute(cases, league=None):
                     if pre_games_count < 1:
                         continue
 
-                # Recent baseline (last 5 games)
-                recent_5 = pre_games[-min(5, pre_games_count):]
-                pre_baseline_5g = statistics.mean(g["composite"] for g in recent_5)
+                # Recent baseline (last 10 games — or fewer if not available)
+                recent_n = pre_games[-min(10, pre_games_count):]
+                pre_baseline_5g = statistics.mean(g["composite"] for g in recent_n)
 
                 # Season baseline
                 season_games = [g for g in pre_games if _season_for_date(g["date"], ls) == season_inj]
@@ -2417,7 +2417,7 @@ def phase_4_compute(cases, league=None):
                 # Per-stat baselines
                 pre_stat_baselines = {}
                 for sc in stat_cols:
-                    vals = [g[sc] for g in recent_5 if g.get(sc) is not None]
+                    vals = [g[sc] for g in recent_n if g.get(sc) is not None]
                     if vals:
                         pre_stat_baselines[sc] = round(statistics.mean(vals), 2)
 
@@ -2561,18 +2561,18 @@ def phase_5_aggregate(league=None):
                 gn = entry.get("game_num", 0)
                 comp = entry.get("composite", 0)
                 if 1 <= gn <= 10 and baseline_5g > 0:
-                    pct = min(comp / baseline_5g, 2.0)  # cap at 200%
+                    pct = min(comp / baseline_5g, 1.5)  # cap at 150%
                     game_data[gn].append(pct)
                     if entry.get("minutes_pct"):
-                        game_min_data[gn].append(min(entry["minutes_pct"], 2.0))
+                        game_min_data[gn].append(min(entry["minutes_pct"], 1.5))
                     if baseline_season and baseline_season > 0:
-                        season_data[gn].append(min(comp / baseline_season, 2.0))
+                        season_data[gn].append(min(comp / baseline_season, 1.5))
                     # Per-stat: compute pct of pre-injury baseline for each stat
                     for sc in stat_cols:
                         stat_val = entry.get(sc)
                         stat_base = pre_stat_baselines.get(sc)
                         if stat_val is not None and stat_base and stat_base > 0:
-                            stat_game_data[sc][gn].append(min(stat_val / stat_base, 3.0))  # cap at 300% for individual stats
+                            stat_game_data[sc][gn].append(min(stat_val / stat_base, 1.5))  # cap at 150% for individual stats
 
         def _trimmed_mean(vals, trim_pct=0.05):
             """Trimmed mean: exclude top/bottom trim_pct of values."""
@@ -2660,10 +2660,10 @@ def phase_5_aggregate(league=None):
                 stat_sample_sizes[sc] = max_n
 
         # Rest-of-season aggregates
-        ros_recent = [c["rest_of_season_avg"] / c["pre_baseline_5g"]
+        ros_recent = [min(c["rest_of_season_avg"] / c["pre_baseline_5g"], 1.5)
                       for c in group_cases
                       if c.get("rest_of_season_avg") and c.get("pre_baseline_5g") and c["pre_baseline_5g"] > 0]
-        ros_season = [c["rest_of_season_avg"] / c["pre_baseline_season"]
+        ros_season = [min(c["rest_of_season_avg"] / c["pre_baseline_season"], 1.5)
                       for c in group_cases
                       if c.get("rest_of_season_avg") and c.get("pre_baseline_season") and c["pre_baseline_season"] > 0]
 
