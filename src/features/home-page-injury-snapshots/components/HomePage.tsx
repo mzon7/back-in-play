@@ -974,7 +974,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
 
         {/* League tabs — navigation style */}
         <div className="max-w-5xl mx-auto px-4">
-          <div className="flex gap-1 border-b border-white/8">
+          <div className="flex gap-1 border-b border-white/8 overflow-x-auto">
             {allTabs.map(({ key, label }) => (
               <button
                 key={key}
