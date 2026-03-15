@@ -2691,7 +2691,10 @@ def phase_5_aggregate(league=None):
             if composites:
                 cases_with_data += 1
 
-        games_missed_values = [c["games_missed"] for c in group_cases if c.get("games_missed")]
+        # Prefer games_missed_actual (computed from game logs) over scraped games_missed
+        games_missed_values = [c["games_missed_actual"] for c in group_cases if c.get("games_missed_actual")]
+        if not games_missed_values:
+            games_missed_values = [c["games_missed"] for c in group_cases if c.get("games_missed")]
         recovery_values = [c["recovery_days"] for c in group_cases if c.get("recovery_days")]
 
         return {
@@ -2700,8 +2703,8 @@ def phase_5_aggregate(league=None):
             "injury_type": group_cases[0]["injury_type"],
             "position": position,
             "sample_size": cases_with_data,
-            "games_missed_avg": round(statistics.mean(games_missed_values), 1) if games_missed_values else None,
-            "recovery_days_avg": round(statistics.mean(recovery_values), 1) if recovery_values else None,
+            "games_missed_avg": round(statistics.median(games_missed_values), 1) if games_missed_values else None,
+            "recovery_days_avg": round(statistics.median(recovery_values), 1) if recovery_values else None,
             "avg_pct_recent": json.dumps(avg_pct_recent),
             "avg_pct_season": json.dumps(avg_pct_season),
             "median_pct_recent": json.dumps(median_pct_recent),

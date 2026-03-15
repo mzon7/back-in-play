@@ -100,8 +100,8 @@ function CurveCard({ curve, forceExpand }: { curve: PerformanceCurve; forceExpan
           </div>
           <div className="flex items-center gap-4 mt-1 text-xs text-white/40">
             <span className="font-medium">{curve.sample_size} cases</span>
-            {curve.games_missed_avg != null && <span>{curve.games_missed_avg} avg games missed</span>}
-            {curve.recovery_days_avg != null && <span>{Math.round(curve.recovery_days_avg)}d avg recovery</span>}
+            {curve.games_missed_avg != null && <span>{curve.games_missed_avg} games missed</span>}
+            {curve.recovery_days_avg != null && <span>{Math.round(curve.recovery_days_avg)}d recovery</span>}
           </div>
           {/* Overall stat + minute change summary */}
           <div className="flex items-center gap-3 mt-1 text-[11px]">
@@ -236,12 +236,17 @@ export default function PerformanceCurvesPage() {
     [filteredCurves]
   );
 
-  // Top 5 most impactful injuries (lowest game-1 median)
+  // Most impactful injury per league (lowest game-1 median, 1 per league)
   const mostImpactful = useMemo(() => {
-    return [...reliableCurves]
-      .filter((c) => c.median_pct_recent[0] != null)
-      .sort((a, b) => (a.median_pct_recent[0] ?? 1) - (b.median_pct_recent[0] ?? 1))
-      .slice(0, 5);
+    const byLeague = new Map<string, PerformanceCurve>();
+    for (const c of reliableCurves) {
+      if (c.median_pct_recent[0] == null) continue;
+      const existing = byLeague.get(c.league_slug);
+      if (!existing || c.median_pct_recent[0]! < existing.median_pct_recent[0]!) {
+        byLeague.set(c.league_slug, c);
+      }
+    }
+    return [...byLeague.values()].sort((a, b) => (a.median_pct_recent[0] ?? 1) - (b.median_pct_recent[0] ?? 1));
   }, [reliableCurves]);
 
   // Latest computed_at date across all curves
