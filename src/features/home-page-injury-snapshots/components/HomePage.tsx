@@ -1,5 +1,5 @@
 // @refresh reset
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   useLeagues,
@@ -17,6 +17,11 @@ import { supabase } from "../../../lib/supabase";
 import { leagueColor } from "../../../lib/leagueColors";
 import { trackHeadlineClick } from "../../../lib/analytics";
 import { isTrackedPlayer, toggleTrackedPlayer } from "../../../lib/trackedPlayers";
+
+const LazyReturningToday = lazy(() => import("../../../pages/ReturningTodayEmbed"));
+const LazyRecoveryStats = lazy(() => import("../../../pages/RecoveryStatsPageEmbed"));
+
+type HomeSection = "injuries" | "returning" | "recovery";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -927,7 +932,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
   const { leagueSlug: routeLeague } = useParams<{ leagueSlug: string }>();
   const { data: leagues = [] } = useLeagues();
   const [activeTab, setActiveTab] = useState<Tab>(routeLeague ?? initialLeague ?? "top");
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [section, setSection] = useState<HomeSection>("injuries");
 
   const orderedSlugs = LEAGUE_ORDER.filter(
     (s) => leagues.length === 0 || leagues.some((l) => l.slug === s),
@@ -967,35 +972,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
             <Link to="/tracked-players" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0" title="Tracked Players">&#9733; <span className="hidden sm:inline">Tracked</span></Link>
           </div>
 
-          {/* Mobile hamburger */}
-          <button
-            onClick={() => setMenuOpen(!menuOpen)}
-            className="md:hidden flex flex-col gap-1 p-2 -mr-2"
-            aria-label="Menu"
-          >
-            <span className={`block w-5 h-0.5 bg-white/60 transition-transform ${menuOpen ? "rotate-45 translate-y-1.5" : ""}`} />
-            <span className={`block w-5 h-0.5 bg-white/60 transition-opacity ${menuOpen ? "opacity-0" : ""}`} />
-            <span className={`block w-5 h-0.5 bg-white/60 transition-transform ${menuOpen ? "-rotate-45 -translate-y-1.5" : ""}`} />
-          </button>
         </div>
-
-        {/* Mobile dropdown menu */}
-        {menuOpen && (
-          <div className="md:hidden border-t border-white/10 bg-[#0A0E1A]/95 backdrop-blur-md">
-            <div className="flex flex-col px-4 py-2 text-sm font-medium">
-              <Link to="/" onClick={() => setMenuOpen(false)} className="py-2.5 text-[#1C7CFF]">Home</Link>
-              <Link to="/performance-curves" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Performance Curves</Link>
-              <Link to="/props" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Props</Link>
-              <Link to="/tracked-players" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Tracked Players</Link>
-              {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (
-                <>
-                  <Link to="/recovery-stats" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Recovery Stats</Link>
-                  <Link to="/returning-today" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Returning Today</Link>
-                </>
-              )}
-            </div>
-          </div>
-        )}
 
         {/* League filter — scrollable chips */}
         <div className="relative max-w-5xl mx-auto">
@@ -1042,27 +1019,49 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
           {/* Right gradient fade hint */}
           <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-10 bg-gradient-to-l from-[#0A0E1A] to-transparent md:hidden" />
         </div>
-      </nav>
 
-      {/* Early Access Banner */}
-      <div className="border-b border-white/5 bg-[#0A0E1A]/80">
-        <div className="max-w-5xl mx-auto px-4 py-1.5 flex items-center justify-between gap-4">
-          <p className="text-[11px] text-white/40 leading-relaxed">
-            🚀 Early Access — Back In Play is the first public version of a sports injury recovery analytics platform. New data and models are added weekly.
-          </p>
-          <a href="mailto:feedback@backinplay.ai" className="text-[11px] text-white/30 hover:text-white/50 transition-colors whitespace-nowrap shrink-0">
-            Send feedback
-          </a>
+        {/* Section tabs */}
+        <div className="max-w-5xl mx-auto px-4">
+          <div className="flex border-t border-white/8">
+            {([
+              { key: "injuries" as HomeSection, label: "Injuries" },
+              { key: "returning" as HomeSection, label: "Returning Today" },
+              { key: "recovery" as HomeSection, label: "Recovery Stats" },
+            ]).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setSection(key)}
+                className={`flex-1 py-2.5 text-[13px] font-semibold transition-colors relative ${
+                  section === key ? "text-white" : "text-white/35 hover:text-white/55"
+                }`}
+              >
+                {label}
+                {section === key && (
+                  <span className="absolute bottom-0 left-3 right-3 h-[2px] rounded-full bg-[#1C7CFF]" />
+                )}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      </nav>
 
       {/* Content */}
       <main className="max-w-5xl mx-auto px-4 py-8 pb-16">
-        <InjuriesView activeTab={activeTab} />
+        {section === "injuries" && <InjuriesView activeTab={activeTab} />}
+        {section === "returning" && (
+          <Suspense fallback={<div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-28 rounded-xl bg-white/10 animate-pulse" />)}</div>}>
+            <LazyReturningToday leagueSlug={activeTab === "top" ? undefined : activeTab} />
+          </Suspense>
+        )}
+        {section === "recovery" && (
+          <Suspense fallback={<div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-12 rounded-lg bg-white/10 animate-pulse" />)}</div>}>
+            <LazyRecoveryStats leagueSlug={activeTab === "top" ? undefined : activeTab} />
+          </Suspense>
+        )}
       </main>
 
-      {/* SEO intro — homepage only */}
-      {activeTab === "top" && (
+      {/* SEO intro — homepage injuries tab only */}
+      {activeTab === "top" && section === "injuries" && (
         <section className="max-w-5xl mx-auto px-4 pb-8">
           <div className="border-t border-white/5 pt-8">
             <h2 className="text-base font-semibold text-white/60 mb-2">Sports Injury Tracker and Recovery Analysis</h2>
