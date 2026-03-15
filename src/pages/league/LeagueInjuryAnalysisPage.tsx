@@ -50,7 +50,7 @@ export default function LeagueInjuryAnalysisPage() {
   const isLoading = curvesLoading || statsLoading;
 
   // All-positions curves, exclude "other"
-  const allPosCurves = curves.filter((c) => !c.position && c.injury_type_slug !== "other");
+  const allPosCurves = curves.filter((c) => !c.position && c.injury_type_slug !== "other" && c.injury_type_slug !== "unknown");
   const totalCases = allPosCurves.reduce((sum, c) => sum + c.sample_size, 0);
   const totalInjuryTypes = allPosCurves.length;
 

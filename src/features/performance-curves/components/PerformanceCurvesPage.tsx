@@ -223,7 +223,7 @@ export default function PerformanceCurvesPage() {
 
   // Filter out "other" category and require n >= 30
   const filteredCurves = useMemo(
-    () => curves.filter((c) => c.injury_type_slug !== "other" && c.sample_size >= 30),
+    () => curves.filter((c) => c.injury_type_slug !== "other" && c.injury_type_slug !== "unknown" && c.sample_size >= 30),
     [curves]
   );
 
@@ -236,18 +236,25 @@ export default function PerformanceCurvesPage() {
     [filteredCurves]
   );
 
-  // Most impactful injury per league (lowest game-1 median, 1 per league)
+  // Most impactful injuries: 1 per league when "All", top 5 when specific league selected
   const mostImpactful = useMemo(() => {
+    const candidates = reliableCurves.filter((c) => c.median_pct_recent[0] != null);
+    if (league !== "all") {
+      // Specific league: show top 5
+      return [...candidates]
+        .sort((a, b) => (a.median_pct_recent[0] ?? 1) - (b.median_pct_recent[0] ?? 1))
+        .slice(0, 5);
+    }
+    // All leagues: 1 per league
     const byLeague = new Map<string, PerformanceCurve>();
-    for (const c of reliableCurves) {
-      if (c.median_pct_recent[0] == null) continue;
+    for (const c of candidates) {
       const existing = byLeague.get(c.league_slug);
       if (!existing || c.median_pct_recent[0]! < existing.median_pct_recent[0]!) {
         byLeague.set(c.league_slug, c);
       }
     }
     return [...byLeague.values()].sort((a, b) => (a.median_pct_recent[0] ?? 1) - (b.median_pct_recent[0] ?? 1));
-  }, [reliableCurves]);
+  }, [reliableCurves, league]);
 
   // Latest computed_at date across all curves
   const latestComputedAt = useMemo(() => {
@@ -418,8 +425,8 @@ export default function PerformanceCurvesPage() {
           ))}
         </div>
 
-        {/* Position filter */}
-        {positions.length > 0 && (
+        {/* Position filter — only shown when a specific league is selected */}
+        {league !== "all" && positions.length > 0 && (
           <div className="flex gap-1 overflow-x-auto pb-3 mb-4">
             <button
               onClick={() => setPosition("all")}

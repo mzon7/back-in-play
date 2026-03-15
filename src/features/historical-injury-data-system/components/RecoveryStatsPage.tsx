@@ -86,7 +86,7 @@ function computeReinjuryStats(rows: { total_prior_injuries: number | null; same_
   };
 }
 
-function SeverityTierSection({ tier, stats }: { tier: string; stats: RecoveryStat[] }) {
+function SeverityTierSection({ tier, stats, showLeague }: { tier: string; stats: RecoveryStat[]; showLeague: boolean }) {
   const label = SEVERITY_LABEL[tier] ?? tier;
   const color = {
     critical: "#FF4D4D",
@@ -117,6 +117,9 @@ function SeverityTierSection({ tier, stats }: { tier: string; stats: RecoverySta
             >
               <span className="text-sm text-white/80 w-36 sm:w-48 shrink-0 truncate group-hover:text-white">
                 {stat.injury_type}
+                {showLeague && (
+                  <span className="text-[10px] text-white/30 ml-1">({LEAGUE_LABELS[stat.league_slug] ?? stat.league_slug})</span>
+                )}
               </span>
               <div className="flex-1 h-5 bg-white/5 rounded-full overflow-hidden relative">
                 <div
@@ -202,7 +205,7 @@ function RecoveryOverviewTable({ stats, leagueFilter }: { stats: RecoveryStat[];
             <th className="pb-2 px-3 text-center cursor-pointer select-none" onClick={() => toggleSort("avg")}>
               Avg Days{arrow("avg")}
             </th>
-            <th className="pb-2 px-3 text-center">Range</th>
+            <th className="pb-2 px-3 text-center">Typical Range</th>
             <th className="pb-2 px-3 text-center cursor-pointer select-none" onClick={() => toggleSort("samples")}>
               Cases{arrow("samples")}
             </th>
@@ -235,7 +238,10 @@ function RecoveryOverviewTable({ stats, leagueFilter }: { stats: RecoveryStat[];
                   {stat.average_recovery_days != null ? `${Math.round(stat.average_recovery_days)}` : "—"}
                 </td>
                 <td className="py-2.5 px-3 text-center text-xs text-white/30 tabular-nums">
-                  {stat.min_recovery_days ?? "?"}&ndash;{stat.max_recovery_days ?? "?"}d
+                  {stat.median_recovery_days != null && stat.stddev_recovery_days != null
+                    ? `${Math.max(0, Math.round(stat.median_recovery_days - 2 * stat.stddev_recovery_days))}–${Math.round(stat.median_recovery_days + 2 * stat.stddev_recovery_days)}d`
+                    : `${stat.min_recovery_days ?? "?"}–${stat.max_recovery_days ?? "?"}d`
+                  }
                 </td>
                 <td className="py-2.5 px-3 text-center text-sm text-white/50 tabular-nums">
                   {stat.sample_size.toLocaleString()}
@@ -280,8 +286,8 @@ export function RecoveryStatsPage() {
 
   // If we're on /injuries/:injurySlug, filter to that injury
   const filteredStats = useMemo(() => {
-    if (!injurySlug) return stats;
-    return stats.filter((s) => s.injury_type_slug === injurySlug);
+    const base = injurySlug ? stats.filter((s) => s.injury_type_slug === injurySlug) : stats;
+    return base.filter((s) => s.sample_size >= 30 && s.injury_type_slug !== "other" && s.injury_type_slug !== "unknown");
   }, [stats, injurySlug]);
 
   // Get injury name from slug
@@ -345,12 +351,6 @@ export function RecoveryStatsPage() {
 
     return { longestRecovery, mostCommon, mostGamesMissed };
   }, [filteredStats]);
-
-  // Small sample warning: injury types with <10 cases
-  const smallSampleStats = useMemo(
-    () => filteredStats.filter((s) => s.sample_size < 10),
-    [filteredStats]
-  );
 
   // Comparable injuries (same severity tier, excluding current if on detail page)
   const comparableInjuries = useMemo(() => {
@@ -510,18 +510,6 @@ export function RecoveryStatsPage() {
       </div>
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
-        {/* Small sample warning */}
-        {!isLoading && smallSampleStats.length > 0 && (
-          <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
-            <span className="font-semibold">Sample size warning:</span>{" "}
-            {smallSampleStats.length === 1
-              ? `"${smallSampleStats[0].injury_type}" has only ${smallSampleStats[0].sample_size} case${smallSampleStats[0].sample_size !== 1 ? "s" : ""}. `
-              : `${smallSampleStats.length} injury type${smallSampleStats.length !== 1 ? "s" : ""} have fewer than 10 cases (${smallSampleStats.map((s) => `${s.injury_type}: ${s.sample_size}`).join(", ")}). `
-            }
-            Recovery estimates with small samples are less reliable and should be treated as preliminary.
-          </div>
-        )}
-
         {/* Filter bar */}
         <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">
           <LeagueFilterBar value={leagueFilter} onChange={handleLeagueChange} />
@@ -576,7 +564,7 @@ export function RecoveryStatsPage() {
               <section className="mb-8">
                 {SEVERITY_ORDER.map((tier) =>
                   severityGroups[tier]?.length ? (
-                    <SeverityTierSection key={tier} tier={tier} stats={severityGroups[tier]} />
+                    <SeverityTierSection key={tier} tier={tier} stats={severityGroups[tier]} showLeague={leagueFilter === "all"} />
                   ) : null
                 )}
               </section>
@@ -590,38 +578,6 @@ export function RecoveryStatsPage() {
                   Average recovery days by age group, based on {returnCases.filter((r) => r.age_at_injury != null).length} cases with age data
                 </p>
                 <AgeBucketChart buckets={ageBuckets} />
-              </section>
-            )}
-
-            {/* Reinjury Rate */}
-            {reinjuryStats.total > 10 && (
-              <section className="mb-8 rounded-xl border border-white/10 bg-white/5 p-5">
-                <h2 className="text-lg font-bold mb-1">Reinjury Analysis</h2>
-                <p className="text-xs text-white/40 mb-4">
-                  How prior injuries affect recovery time ({reinjuryStats.total} cases analyzed)
-                </p>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  <div className="text-center">
-                    <p className="text-2xl font-bold text-amber-400">{reinjuryStats.reinjuryRate}%</p>
-                    <p className="text-[10px] text-white/40 uppercase mt-1">Had Prior Injuries</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-2xl font-bold text-red-400">{reinjuryStats.samePartRate}%</p>
-                    <p className="text-[10px] text-white/40 uppercase mt-1">Same Body Part</p>
-                  </div>
-                  {reinjuryStats.avgDaysWithPrior != null && (
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-white/70">{reinjuryStats.avgDaysWithPrior}d</p>
-                      <p className="text-[10px] text-white/40 uppercase mt-1">Avg w/ Prior Injury</p>
-                    </div>
-                  )}
-                  {reinjuryStats.avgDaysWithout != null && (
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-green-400">{reinjuryStats.avgDaysWithout}d</p>
-                      <p className="text-[10px] text-white/40 uppercase mt-1">Avg First Injury</p>
-                    </div>
-                  )}
-                </div>
               </section>
             )}
 

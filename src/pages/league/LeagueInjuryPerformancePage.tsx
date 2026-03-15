@@ -78,7 +78,7 @@ export default function LeagueInjuryPerformancePage() {
   const { data: positions = [] } = usePositionsWithCurves(leagueSlug);
 
   // All-positions curves only, exclude "other"
-  const allPosCurves = curves.filter((c) => !c.position && c.injury_type_slug !== "other");
+  const allPosCurves = curves.filter((c) => !c.position && c.injury_type_slug !== "other" && c.injury_type_slug !== "unknown");
   const totalCases = allPosCurves.reduce((sum, c) => sum + c.sample_size, 0);
 
   // Top curves by sample size
