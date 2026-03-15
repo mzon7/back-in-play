@@ -286,29 +286,53 @@ interface BacktestBet {
   gn: number; // game number (1-10)
   conf: "High" | "Medium" | "Low";
   injury: string;
+  league?: string;
 }
 
+const BACKTEST_LEAGUES = ["nba", "nhl", "mlb", "premier-league"] as const;
+
 function useBacktestBets() {
-  return useQuery<BacktestBet[]>({
-    queryKey: ["backtest-bets"],
+  return useQuery<{ bets: BacktestBet[]; byLeague: Record<string, BacktestBet[]> }>({
+    queryKey: ["backtest-bets-all"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("back_in_play_backtest_results")
-        .select("results")
-        .eq("league", "nba")
-        .single();
-      if (error || !data) return [];
-      const parsed = typeof data.results === "string" ? JSON.parse(data.results) : data.results;
-      return parsed.bets ?? [];
+        .select("league, results")
+        .in("league", [...BACKTEST_LEAGUES]);
+      if (error || !data) return { bets: [], byLeague: {} };
+      const allBets: BacktestBet[] = [];
+      const byLeague: Record<string, BacktestBet[]> = {};
+      for (const row of data) {
+        const parsed = typeof row.results === "string" ? JSON.parse(row.results) : row.results;
+        const bets: BacktestBet[] = (parsed.bets ?? []).map((b: BacktestBet) => ({ ...b, league: row.league }));
+        allBets.push(...bets);
+        byLeague[row.league] = bets;
+      }
+      return { bets: allBets, byLeague };
     },
     staleTime: 60 * 60 * 1000,
   });
 }
 
+const LEAGUE_LABELS: Record<string, string> = {
+  all: "All Leagues",
+  nba: "NBA",
+  nhl: "NHL",
+  mlb: "MLB",
+  "premier-league": "EPL",
+};
+
 function HistoricalBacktest() {
-  const { data: allBets = [], isLoading: betsLoading } = useBacktestBets();
+  const { data, isLoading: betsLoading } = useBacktestBets();
+  const allBetsRaw = data?.bets ?? [];
   const [minEv, setMinEv] = useState(0);
   const [maxGamesBack, setMaxGamesBack] = useState(10);
+  const [league, setLeague] = useState("all");
+
+  const allBets = useMemo(() => {
+    if (league === "all") return allBetsRaw;
+    return allBetsRaw.filter((b) => b.league === league);
+  }, [allBetsRaw, league]);
 
   const filtered = useMemo(() => {
     return allBets.filter((b) => b.ev >= minEv && b.gn <= maxGamesBack);
@@ -364,15 +388,31 @@ function HistoricalBacktest() {
   const gamesBackOptions = [1, 2, 3, 5, 7, 10];
 
   if (betsLoading) return <div className="text-white/30 text-center py-10">Loading backtest data...</div>;
-  if (allBets.length === 0) return <div className="text-white/30 text-center py-10">No backtest data. Run the simulation on the droplet first.</div>;
+  if (allBetsRaw.length === 0) return <div className="text-white/30 text-center py-10">No backtest data. Run the simulation on the droplet first.</div>;
+
+  const leagueCounts = Object.fromEntries(
+    ["all", ...BACKTEST_LEAGUES].map((l) => [l, l === "all" ? allBetsRaw.length : (data?.byLeague[l]?.length ?? 0)])
+  );
 
   return (
     <div className="mb-8">
       <div className="flex items-center gap-3 mb-4">
         <h2 className="text-lg font-bold">Historical Backtest</h2>
         <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400/80 font-semibold">
-          {allBets.length.toLocaleString()} total bets · NBA 2023-25
+          {allBets.length.toLocaleString()} bets · Holdout
         </span>
+      </div>
+
+      {/* League selector */}
+      <div className="flex flex-wrap gap-1.5 mb-4">
+        {["all", ...BACKTEST_LEAGUES].map((l) => (
+          <button key={l} onClick={() => setLeague(l)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              league === l ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border border-[#1C7CFF]/30" : "bg-white/5 text-white/50 hover:text-white/70 border border-transparent"
+            }`}>
+            {LEAGUE_LABELS[l] ?? l} ({leagueCounts[l]?.toLocaleString()})
+          </button>
+        ))}
       </div>
 
       {/* Parameter controls */}
