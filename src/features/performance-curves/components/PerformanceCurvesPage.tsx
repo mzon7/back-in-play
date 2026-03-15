@@ -76,13 +76,14 @@ function CurveCard({ curve, forceExpand }: { curve: PerformanceCurve; forceExpan
   const reachedFull = median10 != null && median10 >= 1.0;
   const leagueLabel = LEAGUE_LABELS[curve.league_slug] ?? curve.league_slug.toUpperCase();
 
-  // Compute overall stat change % (average of all per-stat game-10 values)
+  // Compute overall stat change % (median of all per-stat game-10 values)
   const stats = getStatsForCurve(curve);
   const statG10Values = stats
-    .map((s) => curve.stat_avg_pct?.[s]?.[9])
-    .filter((v): v is number => v != null);
+    .map((s) => curve.stat_median_pct?.[s]?.[9] ?? curve.stat_avg_pct?.[s]?.[9])
+    .filter((v): v is number => v != null)
+    .sort((a, b) => a - b);
   const overallStatChange = statG10Values.length > 0
-    ? Math.round((statG10Values.reduce((a, b) => a + b, 0) / statG10Values.length) * 100)
+    ? Math.round(statG10Values[Math.floor(statG10Values.length / 2)] * 100)
     : null;
 
   const minuteG10 = curve.avg_minutes_pct[9];
