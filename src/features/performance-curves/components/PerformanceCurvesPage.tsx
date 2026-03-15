@@ -68,8 +68,8 @@ function StatFilterBar({ curve, selectedStat, onSelect }: { curve: PerformanceCu
   );
 }
 
-function CurveCard({ curve }: { curve: PerformanceCurve }) {
-  const [expanded, setExpanded] = useState(false);
+function CurveCard({ curve, forceExpand }: { curve: PerformanceCurve; forceExpand?: boolean }) {
+  const [expanded, setExpanded] = useState(forceExpand ?? false);
   const [selectedStat, setSelectedStat] = useState<string | null>(null);
 
   const median10 = curve.median_pct_recent[9];
@@ -89,7 +89,7 @@ function CurveCard({ curve }: { curve: PerformanceCurve }) {
   const minuteChange = minuteG10 != null ? Math.round(minuteG10 * 100) : null;
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
+    <div id={`curve-${curve.injury_type_slug}-${curve.league_slug}`} className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
       <button
         onClick={() => { if (!expanded) trackCurveExpand(curve.injury_type_slug, curve.league_slug); setExpanded(!expanded); }}
         className="w-full text-left px-5 py-4 flex items-center gap-3 hover:bg-white/[0.03] transition-colors"
@@ -101,7 +101,7 @@ function CurveCard({ curve }: { curve: PerformanceCurve }) {
             {curve.position && (
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400/60 shrink-0">{curve.position}</span>
             )}
-            {curve.sample_size < 10 && (
+            {curve.sample_size < 30 && (
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400/80 shrink-0" title="Small sample size — interpret with caution">Low n</span>
             )}
           </div>
@@ -228,9 +228,9 @@ export default function PerformanceCurvesPage() {
   );
   const { data: positions = [] } = usePositionsWithCurves(league === "all" ? undefined : league);
 
-  // Filter out "other" category which is unclear
+  // Filter out "other" category and require n >= 30
   const filteredCurves = useMemo(
-    () => curves.filter((c) => c.injury_type_slug !== "other"),
+    () => curves.filter((c) => c.injury_type_slug !== "other" && c.sample_size >= 30),
     [curves]
   );
 
@@ -239,7 +239,7 @@ export default function PerformanceCurvesPage() {
 
   // Reliable curves = sample_size >= 10
   const reliableCurves = useMemo(
-    () => filteredCurves.filter((c) => c.sample_size >= 10),
+    () => filteredCurves.filter((c) => c.sample_size >= 30),
     [filteredCurves]
   );
 
@@ -263,20 +263,16 @@ export default function PerformanceCurvesPage() {
   const keyFindings = useMemo(() => {
     if (reliableCurves.length === 0) return null;
     const withG1 = reliableCurves.filter((c) => c.median_pct_recent[0] != null);
-    const withG10 = reliableCurves.filter((c) => c.median_pct_recent[9] != null);
     const withMinutes = reliableCurves.filter((c) => c.avg_minutes_pct[0] != null);
 
     const worstG1 = withG1.length > 0
       ? withG1.reduce((worst, c) => (c.median_pct_recent[0]! < worst.median_pct_recent[0]!) ? c : worst)
       : null;
-    const bestG10 = withG10.length > 0
-      ? withG10.reduce((best, c) => (c.median_pct_recent[9]! > best.median_pct_recent[9]!) ? c : best)
-      : null;
     const avgMinutesDrop = withMinutes.length > 0
       ? Math.round((1 - withMinutes.reduce((sum, c) => sum + c.avg_minutes_pct[0]!, 0) / withMinutes.length) * 100)
       : null;
 
-    return { worstG1, bestG10, avgMinutesDrop };
+    return { worstG1, avgMinutesDrop };
   }, [reliableCurves]);
 
   // Group injuries by body region for "Comparable Injuries"
@@ -396,44 +392,28 @@ export default function PerformanceCurvesPage() {
           </section>
         )}
 
-        {/* Key Findings (local only until audited) */}
-        {typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && !isLoading && keyFindings && (
+        {/* Key Findings — per league */}
+        {typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && !isLoading && reliableCurves.length > 0 && (
           <section className="mb-6 rounded-xl border border-[#1C7CFF]/20 bg-gradient-to-br from-[#1C7CFF]/5 to-transparent p-5">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1C7CFF] mb-3">Key Findings</h2>
+            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1C7CFF] mb-3">Key Findings by League</h2>
             <ul className="space-y-2 text-sm text-white/60 leading-relaxed">
-              {keyFindings.worstG1 && (
-                <li>
-                  <span className="text-white/80 font-medium">{LEAGUE_LABELS[keyFindings.worstG1.league_slug]} {keyFindings.worstG1.injury_type}</span> injuries show the largest game-1 performance drop at{" "}
-                  <span className="text-red-400 font-bold">{Math.round((1 - keyFindings.worstG1.median_pct_recent[0]!) * 100)}%</span> below baseline
-                  {" "}(n={keyFindings.worstG1.sample_size} cases).
-                </li>
-              )}
-              {keyFindings.bestG10 && (
-                <li>
-                  <span className="text-white/80 font-medium">{LEAGUE_LABELS[keyFindings.bestG10.league_slug]} {keyFindings.bestG10.injury_type}</span> injuries recover fastest, reaching{" "}
-                  <span className="text-green-400 font-bold">{Math.round(keyFindings.bestG10.median_pct_recent[9]! * 100)}%</span> of baseline by game 10
-                  {" "}(n={keyFindings.bestG10.sample_size} cases).
-                </li>
-              )}
-              {keyFindings.avgMinutesDrop != null && keyFindings.avgMinutesDrop > 0 && (
-                <li>
-                  Players average a <span className="text-amber-400 font-bold">{keyFindings.avgMinutesDrop}%</span> minutes reduction in their first game back across {reliableCurves.filter((c) => c.avg_minutes_pct[0] != null).length} injury types analyzed.
-                </li>
-              )}
-              {reliableCurves.length > 0 && (
-                <li>
-                  Across {reliableCurves.length} injury types with 10+ cases, the average game-1 performance is{" "}
-                  <span className="text-white font-bold">
-                    {Math.round(
-                      (reliableCurves.filter((c) => c.median_pct_recent[0] != null).reduce((s, c) => s + c.median_pct_recent[0]!, 0) /
-                        reliableCurves.filter((c) => c.median_pct_recent[0] != null).length) * 100
-                    )}%
-                  </span>{" "}
-                  of pre-injury baseline.
-                </li>
-              )}
+              {(["nba", "nfl", "mlb", "nhl", "premier-league"] as const).map((ls) => {
+                const leagueCurves = reliableCurves.filter((c) => c.league_slug === ls && c.median_pct_recent[0] != null);
+                if (leagueCurves.length === 0) return null;
+                const worst = leagueCurves.reduce((w, c) => (c.median_pct_recent[0]! < w.median_pct_recent[0]!) ? c : w);
+                const avgG1 = Math.round((leagueCurves.reduce((s, c) => s + c.median_pct_recent[0]!, 0) / leagueCurves.length) * 100);
+                return (
+                  <li key={ls}>
+                    <span className="text-white/80 font-medium">{LEAGUE_LABELS[ls]}</span>: Average game-1 return at{" "}
+                    <span className="text-white font-bold">{avgG1}%</span> of baseline across {leagueCurves.length} injury types.
+                    Hardest: <span className="text-red-400 font-medium">{worst.injury_type}</span> at{" "}
+                    <span className="text-red-400 font-bold">{Math.round(worst.median_pct_recent[0]! * 100)}%</span>{" "}
+                    <span className="text-white/30">(n={worst.sample_size})</span>
+                  </li>
+                );
+              })}
             </ul>
-            <p className="text-[10px] text-white/25 mt-3">Findings exclude injury types with fewer than 10 historical cases.</p>
+            <p className="text-[10px] text-white/25 mt-3">Based on injury types with 30+ historical return cases.</p>
           </section>
         )}
 
@@ -491,11 +471,20 @@ export default function PerformanceCurvesPage() {
                 const g10 = curve.median_pct_recent[9] != null ? Math.round(curve.median_pct_recent[9] * 100) : null;
                 const leagueLabel = LEAGUE_LABELS[curve.league_slug] ?? "";
                 return (
-                  <div key={curve.curve_id} className="bg-white/[0.04] rounded-lg p-3 text-center border border-white/5">
+                  <button
+                    key={curve.curve_id}
+                    onClick={() => {
+                      const el = document.getElementById(`curve-${curve.injury_type_slug}-${curve.league_slug}`);
+                      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); }
+                      // Expand the card after scrolling
+                      setTimeout(() => el?.querySelector("button")?.click(), 400);
+                    }}
+                    className="bg-white/[0.04] rounded-lg p-3 text-center border border-white/5 cursor-pointer transition-all hover:scale-[1.03] hover:bg-white/[0.08] hover:border-white/15 hover:shadow-lg"
+                  >
                     <p className="text-[10px] text-white/30 uppercase">{leagueLabel}</p>
                     <p className="text-sm font-semibold text-white mt-1 truncate">{curve.injury_type}</p>
                     <p className="text-2xl font-black text-red-400 mt-1">{g1 != null ? `${g1}%` : "—"}</p>
-                    <p className="text-[10px] text-white/30">Game 1 back</p>
+                    <p className="text-[10px] text-white/30">Game 1 return</p>
                     {g10 != null && (
                       <p className="text-[10px] mt-1">
                         <span className={g10 >= 95 ? "text-green-400/60" : "text-amber-400/60"}>
@@ -504,7 +493,7 @@ export default function PerformanceCurvesPage() {
                       </p>
                     )}
                     <p className="text-[9px] text-white/20 mt-1">{curve.sample_size} cases</p>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -591,7 +580,7 @@ export default function PerformanceCurvesPage() {
             <div className="space-y-4">
               {Object.entries(injuryGroups).sort(([, a], [, b]) => b.length - a.length).map(([group, groupCurves]) => {
                 const sorted = [...groupCurves].sort((a, b) => (a.median_pct_recent[0] ?? 1) - (b.median_pct_recent[0] ?? 1));
-                const reliableInGroup = sorted.filter((c) => c.sample_size >= 10);
+                const reliableInGroup = sorted.filter((c) => c.sample_size >= 30);
                 const avgG1 = reliableInGroup.length > 0
                   ? Math.round((reliableInGroup.filter((c) => c.median_pct_recent[0] != null).reduce((s, c) => s + c.median_pct_recent[0]!, 0) / reliableInGroup.filter((c) => c.median_pct_recent[0] != null).length) * 100)
                   : null;
@@ -613,7 +602,7 @@ export default function PerformanceCurvesPage() {
                             {c.injury_type}
                             <span className="text-[10px] text-white/25">({LEAGUE_LABELS[c.league_slug]})</span>
                             {g1 != null && <span className={`font-bold ${color}`}>{g1}%</span>}
-                            {c.sample_size < 10 && <span className="text-[9px] text-amber-400/60">*</span>}
+                            {c.sample_size < 30 && <span className="text-[9px] text-amber-400/60">*</span>}
                           </span>
                         );
                       })}

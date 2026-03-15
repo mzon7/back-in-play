@@ -36,12 +36,14 @@ export default function TrackedPlayersPage() {
 
     (async () => {
       setLoading(true);
+      console.log("[TrackedPlayers] Looking up slugs:", slugs);
       // First get player_ids from the players table by slug
-      const { data: playerRows } = await supabase
+      const { data: playerRows, error: playerErr } = await supabase
         .from(dbTable("players"))
         .select("player_id, slug, player_name")
         .in("slug", slugs);
 
+      console.log("[TrackedPlayers] Players found:", playerRows?.length, "error:", playerErr);
       if (!playerRows || playerRows.length === 0) {
         setPlayers([]);
         setLoading(false);
@@ -51,21 +53,46 @@ export default function TrackedPlayersPage() {
       const playerIds = playerRows.map((p) => p.player_id);
       const slugById = Object.fromEntries(playerRows.map((p) => [p.player_id, p.slug]));
 
-      // Now fetch injuries for those player_ids
-      const { data } = await supabase
+      // Fetch injuries with player join (injuries table doesn't have player_name etc directly)
+      const { data, error: injErr } = await supabase
         .from(dbTable("injuries"))
-        .select("player_id, player_name, position, team_name, league_slug, headshot_url, status, injury_type, date_injured, expected_return, is_star, is_starter, games_missed")
+        .select(`
+          player_id, status, injury_type, date_injured, expected_return, games_missed,
+          player:${dbTable("players")}!inner(
+            player_name, slug, position, headshot_url, is_star, is_starter,
+            team:${dbTable("teams")}!inner(team_name, league:${dbTable("leagues")}(slug))
+          )
+        `)
         .in("player_id", playerIds)
         .order("date_injured", { ascending: false });
 
-      // Deduplicate — keep the most recent injury per player
+      console.log("[TrackedPlayers] Injuries found:", data?.length, "error:", injErr);
+
+      // Flatten and deduplicate
       const seen = new Set<string>();
       const deduped: TrackedPlayerData[] = [];
       for (const row of data ?? []) {
-        const slug = slugById[row.player_id];
+        const p = (row as any).player;
+        const t = p?.team;
+        const l = t?.league;
+        const slug = slugById[row.player_id] || p?.slug;
         if (slug && !seen.has(slug)) {
           seen.add(slug);
-          deduped.push({ ...row, player_slug: slug } as TrackedPlayerData);
+          deduped.push({
+            player_slug: slug,
+            player_name: p?.player_name ?? "",
+            position: p?.position ?? "",
+            team_name: t?.team_name ?? "",
+            league_slug: l?.slug ?? "",
+            headshot_url: p?.headshot_url ?? null,
+            status: row.status,
+            injury_type: row.injury_type,
+            date_injured: row.date_injured,
+            expected_return: row.expected_return,
+            is_star: p?.is_star ?? false,
+            is_starter: p?.is_starter ?? false,
+            games_missed: row.games_missed,
+          });
         }
       }
       setPlayers(deduped);
