@@ -290,6 +290,7 @@ interface BacktestBet {
 }
 
 const BACKTEST_LEAGUES = ["nba", "nhl", "mlb", "premier-league"] as const;
+const ALL_RESULT_KEYS = [...BACKTEST_LEAGUES, "nba_lgbm", "nhl_lgbm", "nba_v2", "nhl_v2"];
 
 function useBacktestBets() {
   return useQuery<{ bets: BacktestBet[]; byLeague: Record<string, BacktestBet[]> }>({
@@ -298,20 +299,193 @@ function useBacktestBets() {
       const { data, error } = await supabase
         .from("back_in_play_backtest_results")
         .select("league, results")
-        .in("league", [...BACKTEST_LEAGUES]);
+        .in("league", ALL_RESULT_KEYS);
       if (error || !data) return { bets: [], byLeague: {} };
       const allBets: BacktestBet[] = [];
       const byLeague: Record<string, BacktestBet[]> = {};
       for (const row of data) {
         const parsed = typeof row.results === "string" ? JSON.parse(row.results) : row.results;
         const bets: BacktestBet[] = (parsed.bets ?? []).map((b: BacktestBet) => ({ ...b, league: row.league }));
-        allBets.push(...bets);
+        // Only add base league bets to "all" pool
+        if (!row.league.includes("_")) {
+          allBets.push(...bets);
+        }
         byLeague[row.league] = bets;
       }
       return { bets: allBets, byLeague };
     },
     staleTime: 60 * 60 * 1000,
   });
+}
+
+/** Kelly criterion: f* = (p*b - q) / b */
+function kellyFraction(winRate: number, avgOddsProfit: number): number {
+  const p = winRate;
+  const q = 1 - p;
+  const b = avgOddsProfit;
+  if (b <= 0) return 0;
+  return Math.max((p * b - q) / b, 0);
+}
+
+function kellyProfit(bets: BacktestBet[], fraction: number): number {
+  let bankroll = 100; // start with 100 units
+  for (const b of bets) {
+    const k = kellyFraction(0.524, 0.909); // approximate for -110
+    const stake = bankroll * k * fraction;
+    if (b.correct) {
+      bankroll += stake * 0.909; // profit at -110
+    } else {
+      bankroll -= stake;
+    }
+  }
+  return bankroll - 100; // net profit
+}
+
+interface StatRow {
+  league: string;
+  market: string;
+  model: string;
+  bets: number;
+  wins: number;
+  winRate: number;
+  flatPnl: number;
+  flatRoi: number;
+  halfKellyPnl: number;
+  fullKellyPnl: number;
+}
+
+function LeagueStatTable({ allData }: { allData: Record<string, BacktestBet[]> }) {
+  const [evThreshold, setEvThreshold] = useState(0);
+
+  const rows = useMemo(() => {
+    const result: StatRow[] = [];
+    const models = [
+      { suffix: "", label: "Heuristic" },
+      { suffix: "_lgbm", label: "LightGBM" },
+      { suffix: "_v2", label: "V2 Edge" },
+    ];
+
+    for (const leagueBase of BACKTEST_LEAGUES) {
+      for (const { suffix, label } of models) {
+        const key = `${leagueBase}${suffix}`;
+        const bets = (allData[key] ?? []).filter((b) => b.ev >= evThreshold);
+        if (bets.length === 0) continue;
+
+        // Group by market
+        const byMarket: Record<string, BacktestBet[]> = {};
+        for (const b of bets) {
+          const m = b.market || "all";
+          if (!byMarket[m]) byMarket[m] = [];
+          byMarket[m].push(b);
+        }
+
+        // Add "all" row
+        const allBets = bets;
+        const allWins = allBets.filter((b) => b.correct).length;
+        const wr = allWins / allBets.length;
+        result.push({
+          league: leagueBase, market: "ALL", model: label,
+          bets: allBets.length, wins: allWins,
+          winRate: wr,
+          flatPnl: allBets.reduce((s, b) => s + b.pnl, 0),
+          flatRoi: allBets.reduce((s, b) => s + b.pnl, 0) / allBets.length * 100,
+          halfKellyPnl: kellyProfit(allBets, 0.5),
+          fullKellyPnl: kellyProfit(allBets, 1.0),
+        });
+
+        // Add per-market rows
+        for (const [market, mBets] of Object.entries(byMarket)) {
+          const mWins = mBets.filter((b) => b.correct).length;
+          result.push({
+            league: leagueBase, market, model: label,
+            bets: mBets.length, wins: mWins,
+            winRate: mWins / mBets.length,
+            flatPnl: mBets.reduce((s, b) => s + b.pnl, 0),
+            flatRoi: mBets.reduce((s, b) => s + b.pnl, 0) / mBets.length * 100,
+            halfKellyPnl: kellyProfit(mBets, 0.5),
+            fullKellyPnl: kellyProfit(mBets, 1.0),
+          });
+        }
+      }
+    }
+    return result;
+  }, [allData, evThreshold]);
+
+  const evOptions = [0, 5, 10, 15, 20, 30];
+
+  return (
+    <div className="mb-8">
+      <div className="flex items-center gap-3 mb-4">
+        <h2 className="text-lg font-bold">League / Stat Breakdown</h2>
+      </div>
+
+      <div className="mb-4">
+        <p className="text-[11px] text-white/40 mb-2">Min EV % threshold</p>
+        <div className="flex flex-wrap gap-1.5">
+          {evOptions.map((t) => (
+            <button key={t} onClick={() => setEvThreshold(t)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                evThreshold === t ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border border-[#1C7CFF]/30" : "bg-white/5 text-white/50 hover:text-white/70 border border-transparent"
+              }`}>
+              {t === 0 ? "All" : `>=${t}%`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-white/40 border-b border-white/10">
+              <th className="text-left py-2 px-2">League</th>
+              <th className="text-left py-2 px-2">Stat</th>
+              <th className="text-left py-2 px-2">Model</th>
+              <th className="text-right py-2 px-2">Bets</th>
+              <th className="text-right py-2 px-2">Win%</th>
+              <th className="text-right py-2 px-2">Flat ROI</th>
+              <th className="text-right py-2 px-2">Flat PnL</th>
+              <th className="text-right py-2 px-2">0.5K PnL</th>
+              <th className="text-right py-2 px-2">1.0K PnL</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const isAll = r.market === "ALL";
+              return (
+                <tr key={i} className={`border-b border-white/5 ${isAll ? "bg-white/[0.03] font-medium" : ""}`}>
+                  <td className="py-1.5 px-2">{isAll ? (LEAGUE_LABELS[r.league] ?? r.league) : ""}</td>
+                  <td className="py-1.5 px-2">{isAll ? "ALL" : (MARKET_LABELS[r.market] ?? r.market)}</td>
+                  <td className="py-1.5 px-2">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${
+                      r.model === "Heuristic" ? "bg-white/5 text-white/50" :
+                      r.model === "LightGBM" ? "bg-blue-500/10 text-blue-400/70" :
+                      "bg-purple-500/10 text-purple-400/70"
+                    }`}>{r.model}</span>
+                  </td>
+                  <td className="py-1.5 px-2 text-right tabular-nums">{r.bets.toLocaleString()}</td>
+                  <td className={`py-1.5 px-2 text-right tabular-nums ${r.winRate > 0.524 ? "text-green-400" : "text-red-400/70"}`}>
+                    {(r.winRate * 100).toFixed(1)}%
+                  </td>
+                  <td className={`py-1.5 px-2 text-right tabular-nums ${r.flatRoi > 0 ? "text-green-400" : "text-red-400/70"}`}>
+                    {r.flatRoi >= 0 ? "+" : ""}{r.flatRoi.toFixed(1)}%
+                  </td>
+                  <td className={`py-1.5 px-2 text-right tabular-nums ${r.flatPnl > 0 ? "text-green-400" : "text-red-400/70"}`}>
+                    {r.flatPnl >= 0 ? "+" : ""}{r.flatPnl.toFixed(0)}u
+                  </td>
+                  <td className={`py-1.5 px-2 text-right tabular-nums ${r.halfKellyPnl > 0 ? "text-green-400" : "text-red-400/70"}`}>
+                    {r.halfKellyPnl >= 0 ? "+" : ""}{r.halfKellyPnl.toFixed(0)}u
+                  </td>
+                  <td className={`py-1.5 px-2 text-right tabular-nums ${r.fullKellyPnl > 0 ? "text-green-400" : "text-red-400/70"}`}>
+                    {r.fullKellyPnl >= 0 ? "+" : ""}{r.fullKellyPnl.toFixed(0)}u
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 const LEAGUE_LABELS: Record<string, string> = {
@@ -545,6 +719,13 @@ function HistoricalBacktest() {
   );
 }
 
+function LeagueStatTableWrapper() {
+  const { data, isLoading } = useBacktestBets();
+  if (isLoading) return <div className="text-white/30 text-center py-6">Loading...</div>;
+  if (!data || Object.keys(data.byLeague).length === 0) return null;
+  return <LeagueStatTable allData={data.byLeague} />;
+}
+
 export default function ModelAnalysisPage() {
   const { data: settled, isLoading } = useModelAnalysis();
   const [minEv, setMinEv] = useState(0);
@@ -597,6 +778,9 @@ export default function ModelAnalysisPage() {
 
         {/* Historical backtest results */}
         <HistoricalBacktest />
+
+        {/* League / Stat breakdown table */}
+        <LeagueStatTableWrapper />
 
         <h2 className="text-lg font-bold mb-4">Live Model Tracking</h2>
 
