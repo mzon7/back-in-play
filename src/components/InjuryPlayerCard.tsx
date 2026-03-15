@@ -160,10 +160,10 @@ export function InjuryPlayerCard({
               <button
                 onClick={handleTrackClick}
                 title={tracked ? "Tracking player" : "Track player"}
-                className="shrink-0 p-0.5 rounded transition-colors hover:bg-white/10"
+                className="shrink-0 p-0.5 rounded transition-colors hover:bg-white/10 flex items-center gap-1"
               >
                 {tracked
-                  ? <span className="text-amber-400 text-sm">&#9733;</span>
+                  ? <><span className="text-amber-400 text-sm">&#9733;</span><span className="hidden sm:inline text-[10px] text-amber-400/70">Tracking</span></>
                   : <span className="text-white/25 text-sm hover:text-white/50">&#9734;</span>
                 }
               </button>
