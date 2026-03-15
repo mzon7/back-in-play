@@ -259,21 +259,6 @@ export default function PerformanceCurvesPage() {
     );
   }, [filteredCurves]);
 
-  // Key findings from reliable curves only
-  const keyFindings = useMemo(() => {
-    if (reliableCurves.length === 0) return null;
-    const withG1 = reliableCurves.filter((c) => c.median_pct_recent[0] != null);
-    const withMinutes = reliableCurves.filter((c) => c.avg_minutes_pct[0] != null);
-
-    const worstG1 = withG1.length > 0
-      ? withG1.reduce((worst, c) => (c.median_pct_recent[0]! < worst.median_pct_recent[0]!) ? c : worst)
-      : null;
-    const avgMinutesDrop = withMinutes.length > 0
-      ? Math.round((1 - withMinutes.reduce((sum, c) => sum + c.avg_minutes_pct[0]!, 0) / withMinutes.length) * 100)
-      : null;
-
-    return { worstG1, avgMinutesDrop };
-  }, [reliableCurves]);
 
   // Group injuries by body region for "Comparable Injuries"
   const injuryGroups = useMemo(() => {

@@ -53,16 +53,11 @@ export default function TrackedPlayersPage() {
       const playerIds = playerRows.map((p) => p.player_id);
       const slugById = Object.fromEntries(playerRows.map((p) => [p.player_id, p.slug]));
 
-      // Fetch injuries with player join (injuries table doesn't have player_name etc directly)
+      // Fetch injuries with player join
+      const selectStr = `player_id, status, injury_type, date_injured, expected_return, games_missed, player:back_in_play_players!inner(player_name, slug, position, headshot_url, is_star, is_starter, team:back_in_play_teams!inner(team_name, league:back_in_play_leagues(slug)))`;
       const { data, error: injErr } = await supabase
         .from(dbTable("injuries"))
-        .select(`
-          player_id, status, injury_type, date_injured, expected_return, games_missed,
-          player:${dbTable("players")}!inner(
-            player_name, slug, position, headshot_url, is_star, is_starter,
-            team:${dbTable("teams")}!inner(team_name, league:${dbTable("leagues")}(slug))
-          )
-        `)
+        .select(selectStr)
         .in("player_id", playerIds)
         .order("date_injured", { ascending: false });
 
@@ -71,8 +66,8 @@ export default function TrackedPlayersPage() {
       // Flatten and deduplicate
       const seen = new Set<string>();
       const deduped: TrackedPlayerData[] = [];
-      for (const row of data ?? []) {
-        const p = (row as any).player;
+      for (const row of (data ?? []) as any[]) {
+        const p = row.player;
         const t = p?.team;
         const l = t?.league;
         const slug = slugById[row.player_id] || p?.slug;
