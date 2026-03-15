@@ -28,12 +28,15 @@ function getStatsForCurve(curve: PerformanceCurve): string[] {
 }
 
 
-function StatFilterBar({ curve, selectedStat, onSelect }: { curve: PerformanceCurve; selectedStat: string | null; onSelect: (s: string | null) => void }) {
+function StatFilterBar({ curve, selectedStat, onSelect, useMedian }: { curve: PerformanceCurve; selectedStat: string | null; onSelect: (s: string | null) => void; useMedian: boolean }) {
   const stats = getStatsForCurve(curve);
   const availableStats = stats.filter(
     (s) => curve.stat_avg_pct?.[s]?.some((v) => v != null)
   );
   if (availableStats.length === 0) return null;
+
+  const statSource = useMedian ? curve.stat_median_pct : curve.stat_avg_pct;
+  const hasComposite = statSource?.["composite"]?.some((v) => v != null);
 
   return (
     <div className="mb-3">
@@ -47,12 +50,29 @@ function StatFilterBar({ curve, selectedStat, onSelect }: { curve: PerformanceCu
               : "bg-white/5 text-white/50 hover:text-white/70 border border-transparent"
           }`}
         >
-          All Stats
+          Overall
         </button>
+        {hasComposite && (
+          <button
+            onClick={() => { onSelect(selectedStat === "composite" ? null : "composite"); if (selectedStat !== "composite") trackStatDrillDown("composite", curve.injury_type_slug); }}
+            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+              selectedStat === "composite"
+                ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border border-[#1C7CFF]/30"
+                : "bg-white/5 text-white/50 hover:text-white/70 border border-transparent"
+            }`}
+          >
+            Composite
+            {statSource?.["composite"]?.[9] != null && (
+              <span className={`ml-1 ${statSource["composite"][9]! >= 1.0 ? "text-green-400" : statSource["composite"][9]! >= 0.8 ? "text-amber-400" : "text-red-400"}`}>
+                {Math.round(statSource["composite"][9]! * 100)}%
+              </span>
+            )}
+          </button>
+        )}
         {availableStats.map((stat) => {
-          const avg10 = curve.stat_avg_pct?.[stat]?.[9];
-          const pctColor = avg10 != null
-            ? avg10 >= 1.0 ? "text-green-400" : avg10 >= 0.8 ? "text-amber-400" : "text-red-400"
+          const val10 = statSource?.[stat]?.[9];
+          const pctColor = val10 != null
+            ? val10 >= 1.0 ? "text-green-400" : val10 >= 0.8 ? "text-amber-400" : "text-red-400"
             : "text-white/30";
           return (
             <button
@@ -65,8 +85,8 @@ function StatFilterBar({ curve, selectedStat, onSelect }: { curve: PerformanceCu
               }`}
             >
               {STAT_LABELS[stat] ?? stat}
-              {avg10 != null && (
-                <span className={`ml-1 ${pctColor}`}>{Math.round(avg10 * 100)}%</span>
+              {val10 != null && (
+                <span className={`ml-1 ${pctColor}`}>{Math.round(val10 * 100)}%</span>
               )}
             </button>
           );
@@ -140,8 +160,11 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
   const [expanded, setExpanded] = useState(forceExpand ?? false);
   const [selectedStat, setSelectedStat] = useState<string | null>(null);
   const [showMinutes, setShowMinutes] = useState(false);
+  const [useMedian, setUseMedian] = useState(true);
+  const [showInfo, setShowInfo] = useState(false);
 
-  const median10 = curve.median_pct_recent[9];
+  const mainData = useMedian ? curve.median_pct_recent : curve.avg_pct_recent;
+  const median10 = mainData[9];
   const reachedFull = median10 != null && median10 >= 1.0;
   const leagueLabel = LEAGUE_LABELS[curve.league_slug] ?? curve.league_slug.toUpperCase();
 
@@ -183,7 +206,7 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
           <div className="flex items-center gap-3 mt-1 text-[11px]">
             {overallStatChange != null && (
               <span className={overallStatChange >= 100 ? "text-green-400/70" : "text-amber-400/70"}>
-                Median: {overallStatChange}% by G10
+                {useMedian ? "Median" : "Average"}: {overallStatChange}% by G10
               </span>
             )}
             {minuteChange != null && (
@@ -218,9 +241,49 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
             <PositionDrillDown curve={curve} currentPosition={currentPosition} onSelectPosition={onSelectPosition} />
           </div>
 
+          {/* Median/Average toggle + Info button */}
+          <div className="mt-2 flex items-center gap-2 mb-3">
+            <div className="flex rounded-lg overflow-hidden border border-white/10">
+              <button
+                onClick={() => setUseMedian(true)}
+                className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                  useMedian ? "bg-[#1C7CFF]/20 text-[#1C7CFF]" : "bg-white/5 text-white/40 hover:text-white/60"
+                }`}
+              >
+                Median
+              </button>
+              <button
+                onClick={() => setUseMedian(false)}
+                className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                  !useMedian ? "bg-[#1C7CFF]/20 text-[#1C7CFF]" : "bg-white/5 text-white/40 hover:text-white/60"
+                }`}
+              >
+                Average
+              </button>
+            </div>
+            <button
+              onClick={() => setShowInfo(!showInfo)}
+              className="w-5 h-5 rounded-full border border-white/20 text-[10px] text-white/40 hover:text-white/60 hover:border-white/40 transition-colors flex items-center justify-center shrink-0"
+              title="Methodology"
+            >
+              i
+            </button>
+          </div>
+
+          {/* Methodology info panel */}
+          {showInfo && (
+            <div className="mb-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 text-[11px] text-white/50 leading-relaxed space-y-1.5">
+              <p>Performance curves show how players perform after returning from injury, compared to their pre-injury baseline.</p>
+              <p><strong className="text-white/70">Overall (default):</strong> For each game back, we compute each stat as a % of the player's pre-injury average, then average those stat percentages together. The curve shows the {useMedian ? "median" : "average"} across all players.</p>
+              <p><strong className="text-white/70">Per-stat view:</strong> Shows a single stat's % of pre-injury baseline.</p>
+              <p><strong className="text-white/70">Composite:</strong> A weighted fantasy-style score combining all stats. NBA: PTS + 1.2xREB + 1.5xAST + 3xSTL + 3xBLK. NFL: 0.04xPassYds + 4xPassTD + 0.1xRushYds + 6xRushTD + REC + 0.1xRecYds. MLB Hitters: H + 4xHR + RBI + R + 2xSB. MLB Pitchers: 3xIP + 2xK - 2xH - 3xER. NHL Skaters: 3xGoals + 2xAssists + 0.5xSOG.</p>
+              <p><strong className="text-white/70">Median vs Average:</strong> Median is less affected by outliers. Average (trimmed 5%) gives the typical outcome.</p>
+            </div>
+          )}
+
           {/* Stat filter pills + Minutes toggle */}
-          <div className="mt-2">
-            <StatFilterBar curve={curve} selectedStat={selectedStat} onSelect={(s) => { setSelectedStat(s); setShowMinutes(false); }} />
+          <div>
+            <StatFilterBar curve={curve} selectedStat={selectedStat} onSelect={(s) => { setSelectedStat(s); setShowMinutes(false); }} useMedian={useMedian} />
             {/* Minutes toggle button */}
             {curve.avg_minutes_pct.some((v) => v != null) && (
               <div className="flex gap-1 mt-1">
@@ -242,14 +305,14 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
           </div>
 
           {/* Selected stat detail */}
-          {selectedStat && curve.stat_avg_pct?.[selectedStat] && (
+          {selectedStat && (useMedian ? curve.stat_median_pct : curve.stat_avg_pct)?.[selectedStat] && (
             <div className="bg-white/[0.03] rounded-lg p-3 border border-white/5 mb-3 mt-3">
               <p className="text-xs text-white/50 mb-2">
-                {STAT_LABELS[selectedStat]} — % of pre-injury average over 10 games
+                {STAT_LABELS[selectedStat] ?? (selectedStat === "composite" ? "Composite" : selectedStat)} — {useMedian ? "median" : "avg"} % of pre-injury baseline over 10 games
                 <span className="text-white/25 ml-2">(n={curve.sample_size})</span>
               </p>
               <div className="grid grid-cols-10 gap-1">
-                {(curve.stat_avg_pct[selectedStat] ?? []).map((val, i) => {
+                {((useMedian ? curve.stat_median_pct : curve.stat_avg_pct)?.[selectedStat] ?? []).map((val, i) => {
                   const pct = val != null ? Math.round(val * 100) : null;
                   const color = pct == null ? "text-white/20"
                     : pct >= 100 ? "text-green-400"
@@ -280,7 +343,7 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
             <div className="bg-white/5 rounded-lg p-3 text-center">
               <p className="text-xs text-white/40 mb-1">Game 1 Return</p>
               <p className="text-sm font-bold text-white">
-                {curve.median_pct_recent[0] != null ? `${Math.round(curve.median_pct_recent[0] * 100)}%` : "—"}
+                {mainData[0] != null ? `${Math.round(mainData[0] * 100)}%` : "—"}
               </p>
               {curve.stderr_pct_recent[0] != null && (
                 <p className="text-[10px] text-white/25">±{Math.round(curve.stderr_pct_recent[0] * 100)}%</p>
@@ -289,7 +352,7 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
             <div className="bg-white/5 rounded-lg p-3 text-center">
               <p className="text-xs text-white/40 mb-1">Game 5 Return</p>
               <p className="text-sm font-bold text-white">
-                {curve.median_pct_recent[4] != null ? `${Math.round(curve.median_pct_recent[4] * 100)}%` : "—"}
+                {mainData[4] != null ? `${Math.round(mainData[4] * 100)}%` : "—"}
               </p>
               {curve.stderr_pct_recent[4] != null && (
                 <p className="text-[10px] text-white/25">±{Math.round(curve.stderr_pct_recent[4] * 100)}%</p>
@@ -298,7 +361,7 @@ function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
             <div className="bg-white/5 rounded-lg p-3 text-center">
               <p className="text-xs text-white/40 mb-1">By Game 10</p>
               <p className="text-sm font-bold text-white">
-                {curve.median_pct_recent[9] != null ? `${Math.round(curve.median_pct_recent[9] * 100)}%` : "—"}
+                {mainData[9] != null ? `${Math.round(mainData[9] * 100)}%` : "—"}
               </p>
               {curve.games_to_full != null ? (
                 <p className="text-[10px] text-white/25">~{Math.round(curve.games_to_full)} games to full</p>
@@ -584,6 +647,10 @@ export default function PerformanceCurvesPage() {
               })
             )}
           </div>
+        )}
+
+        {position !== "all" && (
+          <p className="text-xs text-white/30 mt-1 mb-3">Only showing injury types with &ge; 3 cases for this position</p>
         )}
 
         {/* Return type filter: all / same season / next season */}

@@ -682,12 +682,22 @@ function HeadlineTrackStar({ slug, name }: { slug: string; name: string }) {
 }
 
 function HeadlineStories({ injuries, statusChanges, showLeague, leagueSlug, teamFilter }: { injuries: InjuryRow[]; statusChanges: StatusChangeRow[]; showLeague?: boolean; leagueSlug?: string; teamFilter?: string | null }) {
+  const [headlineFilter, setHeadlineFilter] = useState<"all" | "injured" | "returned">("all");
   const filteredChanges = (statusChanges ?? [])
     .filter((c) => !leagueSlug || c.league_slug === leagueSlug)
     .filter((c) => !teamFilter || c.team_name === teamFilter);
-  const cards = buildHeadlineCards(injuries, filteredChanges, teamFilter ? 5 : 8);
+  const allCards = buildHeadlineCards(injuries, filteredChanges, teamFilter ? 5 : 8);
 
-  if (cards.length === 0) return null;
+  // Sort: injuries first, then returns, then status changes
+  const TYPE_ORDER: Record<string, number> = { injury: 0, status_change: 1, return: 2 };
+  const sortedCards = [...allCards].sort((a, b) => (TYPE_ORDER[a.type] ?? 1) - (TYPE_ORDER[b.type] ?? 1));
+
+  // Apply headline filter
+  const cards = headlineFilter === "all" ? sortedCards
+    : headlineFilter === "injured" ? sortedCards.filter((c) => c.type === "injury" || c.type === "status_change")
+    : sortedCards.filter((c) => c.type === "return");
+
+  if (allCards.length === 0) return null;
 
   return (
     <div id="section-headlines" className="scroll-mt-32 space-y-3">
@@ -699,6 +709,25 @@ function HeadlineStories({ injuries, statusChanges, showLeague, leagueSlug, team
         <span className="text-xs text-white/40">({cards.length})</span>
         <span className="ml-auto text-white/25 text-xs animate-pulse">scroll &rarr;</span>
       </div>
+      {/* Headline filter buttons */}
+      <div className="flex items-center gap-1.5">
+        {([["all", "All"], ["injured", "Injured"], ["returned", "Returned"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setHeadlineFilter(key)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+              headlineFilter === key
+                ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30"
+                : "bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {cards.length === 0 ? (
+        <p className="text-xs text-white/30 py-4 text-center">No {headlineFilter} headlines right now</p>
+      ) : (
       <div className="relative">
         {/* Left/right edge fades */}
         <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-6 z-10 bg-gradient-to-r from-[#0A0E1A] to-transparent" />
@@ -777,6 +806,7 @@ function HeadlineStories({ injuries, statusChanges, showLeague, leagueSlug, team
         })}
       </div>
       </div>
+      )}
     </div>
   );
 }

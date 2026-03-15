@@ -2548,6 +2548,7 @@ def phase_5_aggregate(league=None):
         # Per-stat game data: stat_name -> game_num -> [pct values]
         stat_cols = _get_stat_cols(ls, position)
         stat_game_data = {sc: {i: [] for i in range(1, 11)} for sc in stat_cols}
+        stat_game_data["composite"] = {i: [] for i in range(1, 11)}
 
         for c in group_cases:
             baseline_5g = c.get("pre_baseline_5g")
@@ -2567,18 +2568,29 @@ def phase_5_aggregate(league=None):
                 gn = entry.get("game_num", 0)
                 comp = entry.get("composite", 0)
                 if 1 <= gn <= 10 and baseline_5g > 0:
-                    pct = min(comp / baseline_5g, 1.5)  # cap at 150%
-                    game_data[gn].append(pct)
-                    if entry.get("minutes_pct"):
-                        game_min_data[gn].append(min(entry["minutes_pct"], 1.5))
-                    if baseline_season and baseline_season > 0:
-                        season_data[gn].append(min(comp / baseline_season, 1.5))
-                    # Per-stat: compute pct of pre-injury baseline for each stat
+                    # Compute per-stat ratios for this game
+                    stat_ratios = []
                     for sc in stat_cols:
                         stat_val = entry.get(sc)
                         stat_base = pre_stat_baselines.get(sc)
                         if stat_val is not None and stat_base and stat_base > 0:
-                            stat_game_data[sc][gn].append(min(stat_val / stat_base, 1.5))  # cap at 150% for individual stats
+                            ratio = min(stat_val / stat_base, 1.5)
+                            stat_game_data[sc][gn].append(ratio)
+                            stat_ratios.append(ratio)
+
+                    # Main curve: average of per-stat ratios (or composite fallback)
+                    if stat_ratios:
+                        game_data[gn].append(min(statistics.mean(stat_ratios), 1.5))
+                    else:
+                        game_data[gn].append(min(comp / baseline_5g, 1.5))
+
+                    # Composite as a selectable stat
+                    stat_game_data["composite"][gn].append(min(comp / baseline_5g, 1.5))
+
+                    if entry.get("minutes_pct"):
+                        game_min_data[gn].append(min(entry["minutes_pct"], 1.5))
+                    if baseline_season and baseline_season > 0:
+                        season_data[gn].append(min(comp / baseline_season, 1.5))
 
         def _trimmed_mean(vals, trim_pct=0.05):
             """Trimmed mean: exclude top/bottom trim_pct of values."""
@@ -2636,7 +2648,7 @@ def phase_5_aggregate(league=None):
         stat_stddev_pct = {}
         stat_stderr_pct = {}
         stat_sample_sizes = {}  # per-stat case counts
-        for sc in stat_cols:
+        for sc in list(stat_cols) + ["composite"]:
             avg_arr = []
             med_arr = []
             sd_arr = []
