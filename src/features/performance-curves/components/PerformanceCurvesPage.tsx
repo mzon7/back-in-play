@@ -642,8 +642,14 @@ export default function PerformanceCurvesPage() {
         el.style.transition = "box-shadow 0.3s ease, border-color 0.3s ease";
         el.style.boxShadow = "0 0 0 2px rgba(28,124,255,0.5), 0 0 20px rgba(28,124,255,0.15)";
         el.style.borderColor = "rgba(28,124,255,0.4)";
-        // Auto-expand the card
-        setTimeout(() => el.querySelector("button")?.click(), 400);
+        // Auto-expand the card, then re-scroll so the chart is visible
+        setTimeout(() => {
+          el.querySelector("button")?.click();
+          // After expand animation, scroll to show the chart at the top
+          setTimeout(() => {
+            el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 300);
+        }, 400);
         // Remove highlight after 2s
         setTimeout(() => {
           el.style.boxShadow = "";
