@@ -1020,8 +1020,8 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
           <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-10 bg-gradient-to-l from-[#0A0E1A] to-transparent md:hidden" />
         </div>
 
-        {/* Section tabs */}
-        <div className="max-w-5xl mx-auto px-4">
+        {/* Section tabs — mobile only */}
+        <div className="max-w-5xl mx-auto px-4 md:hidden">
           <div className="flex border-t border-white/8">
             {([
               { key: "injuries" as HomeSection, label: "Injuries" },
@@ -1047,16 +1047,23 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
 
       {/* Content */}
       <main className="max-w-5xl mx-auto px-4 py-8 pb-16">
-        {section === "injuries" && <InjuriesView activeTab={activeTab} />}
+        {/* Desktop always shows injuries; mobile switches via tabs */}
+        <div className={section === "injuries" ? "" : "hidden md:block"}>
+          <InjuriesView activeTab={activeTab} />
+        </div>
         {section === "returning" && (
-          <Suspense fallback={<div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-28 rounded-xl bg-white/10 animate-pulse" />)}</div>}>
-            <LazyReturningToday leagueSlug={activeTab === "top" ? undefined : activeTab} />
-          </Suspense>
+          <div className="md:hidden">
+            <Suspense fallback={<div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-28 rounded-xl bg-white/10 animate-pulse" />)}</div>}>
+              <LazyReturningToday leagueSlug={activeTab === "top" ? undefined : activeTab} />
+            </Suspense>
+          </div>
         )}
         {section === "recovery" && (
-          <Suspense fallback={<div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-12 rounded-lg bg-white/10 animate-pulse" />)}</div>}>
-            <LazyRecoveryStats leagueSlug={activeTab === "top" ? undefined : activeTab} />
-          </Suspense>
+          <div className="md:hidden">
+            <Suspense fallback={<div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-12 rounded-lg bg-white/10 animate-pulse" />)}</div>}>
+              <LazyRecoveryStats leagueSlug={activeTab === "top" ? undefined : activeTab} />
+            </Suspense>
+          </div>
         )}
       </main>
 

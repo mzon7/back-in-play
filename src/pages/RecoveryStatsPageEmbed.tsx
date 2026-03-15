@@ -30,6 +30,11 @@ function SeveritySection({ tier, stats, showLeague }: { tier: string; stats: Rec
         <div className="flex-1 h-px bg-white/10" />
         <span className="text-xs text-white/30">{stats.length} types</span>
       </div>
+      <div className="flex items-center gap-3 px-3 mb-1">
+        <span className="text-[10px] text-white/25 uppercase tracking-wider w-36 sm:w-48 shrink-0">Injury</span>
+        <span className="flex-1 text-[10px] text-white/25 uppercase tracking-wider">Distribution</span>
+        <span className="text-[10px] text-white/25 uppercase tracking-wider w-12 text-right">Days</span>
+      </div>
       <div className="space-y-1.5">
         {sorted.map((stat) => {
           const pct = maxDays > 0 ? ((stat.median_recovery_days ?? 0) / maxDays) * 100 : 0;

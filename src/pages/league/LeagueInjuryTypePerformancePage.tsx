@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Link, useParams } from "react-router-dom";
 import { SiteHeader } from "../../components/SiteHeader";
 import { SEO } from "../../components/seo/SEO";
@@ -12,6 +13,18 @@ import { STAT_LABELS, LEAGUE_STATS } from "../../features/performance-curves/lib
 import type { PerformanceCurve } from "../../features/performance-curves/lib/types";
 import { useQuery } from "@tanstack/react-query";
 import { supabase, dbTable } from "../../lib/supabase";
+
+const PositionInjuryRecoveryPage = lazy(() => import("../position/PositionInjuryRecoveryPage"));
+
+/** Known position plural slugs that appear in URLs like /nba/guards/acl-recovery */
+const KNOWN_POSITION_PLURALS = new Set([
+  "guards", "forwards", "centers",
+  "quarterbacks", "running-backs", "wide-receivers", "tight-ends",
+  "offensive-linemen", "defensive-linemen", "linebackers", "defensive-backs", "kickers",
+  "pitchers", "infielders", "outfielders", "catchers", "designated-hitters",
+  "defensemen", "goalies",
+  "defenders", "midfielders", "goalkeepers",
+]);
 
 const LEAGUE_LABELS: Record<string, string> = {
   nba: "NBA",
@@ -211,6 +224,15 @@ export default function LeagueInjuryTypePerformancePage() {
     injuryPerf: string;
     position?: string;
   }>();
+
+  // Delegate to PositionInjuryRecoveryPage when URL is /:league/:posPlural/:injury-recovery
+  if (position?.endsWith("-recovery") && KNOWN_POSITION_PLURALS.has(injuryPerf)) {
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-[#0a0f1a] flex items-center justify-center"><div className="animate-pulse text-white/40 text-sm">Loading...</div></div>}>
+        <PositionInjuryRecoveryPage />
+      </Suspense>
+    );
+  }
 
   const injuryTypeSlug = injuryPerf.replace("-injury-performance", "");
   const injuryLabel = titleCase(injuryTypeSlug);

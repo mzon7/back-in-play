@@ -76,9 +76,70 @@ function StatFilterBar({ curve, selectedStat, onSelect }: { curve: PerformanceCu
   );
 }
 
-function CurveCard({ curve, forceExpand }: { curve: PerformanceCurve; forceExpand?: boolean }) {
+function MinutesBreakdown({ curve }: { curve: PerformanceCurve }) {
+  const hasMinutes = curve.avg_minutes_pct.some((v) => v != null);
+  if (!hasMinutes) return null;
+  return (
+    <div className="bg-white/[0.03] rounded-lg p-3 border border-white/5 mb-3">
+      <p className="text-xs text-white/50 mb-2">
+        Minutes — % of pre-injury playing time over 10 games
+        <span className="text-white/25 ml-2">(n={curve.sample_size})</span>
+      </p>
+      <div className="grid grid-cols-10 gap-1">
+        {curve.avg_minutes_pct.slice(0, 10).map((val, i) => {
+          const pct = val != null ? Math.round(val * 100) : null;
+          const color = pct == null ? "text-white/20"
+            : pct >= 100 ? "text-green-400"
+            : pct >= 85 ? "text-amber-400"
+            : "text-red-400";
+          return (
+            <div key={i} className="text-center">
+              <p className="text-[9px] text-white/30">G{i + 1}</p>
+              <p className={`text-xs font-bold ${color}`}>{pct != null ? `${pct}%` : "—"}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PositionDrillDown({ curve, currentPosition, onSelectPosition }: {
+  curve: PerformanceCurve;
+  currentPosition: string;
+  onSelectPosition: (pos: string) => void;
+}) {
+  // Only show when viewing all positions (no specific position filter)
+  if (currentPosition !== "all") return null;
+  const positions = LEAGUE_POSITIONS[curve.league_slug];
+  if (!positions) return null;
+  return (
+    <div className="mb-3">
+      <p className="text-[10px] text-white/35 mb-1.5">Filter by position</p>
+      <div className="flex flex-wrap gap-1">
+        {positions.map((pos) => (
+          <button
+            key={pos}
+            onClick={() => onSelectPosition(pos)}
+            className="px-2.5 py-1 rounded-lg text-xs font-medium bg-white/5 text-white/50 hover:text-white/70 border border-transparent hover:border-cyan-500/30 transition-colors"
+          >
+            {pos}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CurveCard({ curve, forceExpand, currentPosition, onSelectPosition }: {
+  curve: PerformanceCurve;
+  forceExpand?: boolean;
+  currentPosition: string;
+  onSelectPosition: (pos: string) => void;
+}) {
   const [expanded, setExpanded] = useState(forceExpand ?? false);
   const [selectedStat, setSelectedStat] = useState<string | null>(null);
+  const [showMinutes, setShowMinutes] = useState(false);
 
   const median10 = curve.median_pct_recent[9];
   const reachedFull = median10 != null && median10 >= 1.0;
@@ -89,6 +150,8 @@ function CurveCard({ curve, forceExpand }: { curve: PerformanceCurve; forceExpan
   const minuteG10 = curve.avg_minutes_pct[9];
   const minuteChange = minuteG10 != null ? Math.round(minuteG10 * 100) : null;
 
+  const nextSeasonPct = curve.next_season_pct;
+
   return (
     <div id={`curve-${curve.injury_type_slug}-${curve.league_slug}`} className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
       <button
@@ -96,7 +159,7 @@ function CurveCard({ curve, forceExpand }: { curve: PerformanceCurve; forceExpan
         className="w-full text-left px-5 py-4 flex items-center gap-3 hover:bg-white/[0.03] transition-colors"
       >
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <h3 className="font-semibold text-sm text-white truncate">{curve.injury_type}</h3>
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/40 shrink-0">{leagueLabel}</span>
             {curve.position && (
@@ -104,6 +167,11 @@ function CurveCard({ curve, forceExpand }: { curve: PerformanceCurve; forceExpan
             )}
             {curve.sample_size < 30 && (
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400/80 shrink-0" title="Small sample size — interpret with caution">Low n</span>
+            )}
+            {nextSeasonPct != null && nextSeasonPct > 0 && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-400/70 shrink-0" title={`${nextSeasonPct}% of cases returned the following season`}>
+                {Math.round(nextSeasonPct)}% next season
+              </span>
             )}
           </div>
           <div className="flex items-center gap-4 mt-1 text-xs text-white/40">
@@ -145,14 +213,37 @@ function CurveCard({ curve, forceExpand }: { curve: PerformanceCurve; forceExpan
 
       {expanded && (
         <div className="px-5 pb-5 border-t border-white/5">
-          {/* Stat filter pills ABOVE chart */}
+          {/* Position drill-down (when viewing all positions) */}
           <div className="mt-4">
-            <StatFilterBar curve={curve} selectedStat={selectedStat} onSelect={setSelectedStat} />
+            <PositionDrillDown curve={curve} currentPosition={currentPosition} onSelectPosition={onSelectPosition} />
           </div>
 
-          {/* Selected stat detail (if a specific stat is chosen) */}
+          {/* Stat filter pills + Minutes toggle */}
+          <div className="mt-2">
+            <StatFilterBar curve={curve} selectedStat={selectedStat} onSelect={(s) => { setSelectedStat(s); setShowMinutes(false); }} />
+            {/* Minutes toggle button */}
+            {curve.avg_minutes_pct.some((v) => v != null) && (
+              <div className="flex gap-1 mt-1">
+                <button
+                  onClick={() => { setShowMinutes(!showMinutes); setSelectedStat(null); }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                    showMinutes
+                      ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                      : "bg-white/5 text-white/50 hover:text-white/70 border border-transparent"
+                  }`}
+                >
+                  Minutes
+                  {minuteChange != null && (
+                    <span className={`ml-1 ${minuteChange >= 95 ? "text-green-400" : "text-amber-400"}`}>{minuteChange}%</span>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Selected stat detail */}
           {selectedStat && curve.stat_avg_pct?.[selectedStat] && (
-            <div className="bg-white/[0.03] rounded-lg p-3 border border-white/5 mb-3">
+            <div className="bg-white/[0.03] rounded-lg p-3 border border-white/5 mb-3 mt-3">
               <p className="text-xs text-white/50 mb-2">
                 {STAT_LABELS[selectedStat]} — % of pre-injury average over 10 games
                 <span className="text-white/25 ml-2">(n={curve.sample_size})</span>
@@ -175,8 +266,11 @@ function CurveCard({ curve, forceExpand }: { curve: PerformanceCurve; forceExpan
             </div>
           )}
 
+          {/* Minutes G1-G10 breakdown */}
+          {showMinutes && <div className="mt-3"><MinutesBreakdown curve={curve} /></div>}
+
           {/* Chart */}
-          <div>
+          <div className="mt-3">
             <PerformanceCurveChart curve={curve} />
             <p className="text-[10px] text-white/25 text-center mt-1">Typical recovery range based on historical outcomes</p>
           </div>
@@ -219,13 +313,21 @@ function CurveCard({ curve, forceExpand }: { curve: PerformanceCurve; forceExpan
   );
 }
 
+const RETURN_TYPE_OPTIONS = [
+  { value: "", label: "All Returns" },
+  { value: "same_season", label: "Same Season" },
+  { value: "next_season", label: "Next Season" },
+] as const;
+
 export default function PerformanceCurvesPage() {
   const [league, setLeague] = useState<LeagueFilter>("all");
   const [position, setPosition] = useState<string>("all");
+  const [returnType, setReturnType] = useState<string>("");
   const { data: curves = [], isLoading } = usePerformanceCurves(
     league === "all" ? undefined : league,
     undefined,
-    position
+    position,
+    returnType
   );
   const { data: positions = [] } = usePositionsWithCurves(league === "all" ? undefined : league);
 
@@ -484,6 +586,24 @@ export default function PerformanceCurvesPage() {
           </div>
         )}
 
+        {/* Return type filter: all / same season / next season */}
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-[10px] text-white/30 font-medium shrink-0">Return window</span>
+          {RETURN_TYPE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setReturnType(opt.value)}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                returnType === opt.value
+                  ? "bg-purple-500/15 text-purple-400 border border-purple-500/30"
+                  : "bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
         {/* Most Performance Impacting Injuries (local only until audited) */}
         {typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && !isLoading && mostImpactful.length > 0 && (
           <section className="mb-8 rounded-xl border border-red-500/20 bg-gradient-to-br from-red-500/5 to-transparent p-5">
@@ -592,7 +712,7 @@ export default function PerformanceCurvesPage() {
         ) : (
           <div className="space-y-3">
             {filteredCurves.map((curve) => (
-              <CurveCard key={curve.curve_id} curve={curve} />
+              <CurveCard key={curve.curve_id} curve={curve} currentPosition={position} onSelectPosition={(pos) => { setPosition(pos); if (league === "all") setLeague(curve.league_slug as LeagueFilter); }} />
             ))}
           </div>
         )}
@@ -725,6 +845,15 @@ export default function PerformanceCurvesPage() {
                 className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-white/60 hover:text-white hover:bg-white/[0.08] transition-colors"
               >
                 {LEAGUE_LABELS[slug]} Injury Performance Analysis
+              </Link>
+            ))}
+            {(["nba", "nfl", "mlb", "nhl", "premier-league"] as const).map((slug) => (
+              <Link
+                key={`recovery-${slug}`}
+                to={`/${slug}/recovery-stats`}
+                className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-white/60 hover:text-white hover:bg-white/[0.08] transition-colors"
+              >
+                {LEAGUE_LABELS[slug]} Recovery Statistics
               </Link>
             ))}
             {(["nba", "nfl", "mlb", "nhl", "premier-league"] as const).map((slug) => (

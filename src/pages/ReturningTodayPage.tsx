@@ -67,28 +67,38 @@ function useReturningPlayers(leagueSlug?: string) {
       const teamMap = new Map<string, { name: string; leagueId: string }>();
       (teams ?? []).forEach((t) => teamMap.set(t.team_id, { name: t.team_name, leagueId: t.league_id }));
 
-      // 2. Find players who are questionable, day-to-day, probable, or recently returned (last 7 days)
+      // 2. Find players nearing return OR recently returned
       const cutoff7d = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
       const cutoff90d = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
 
-      // Get injuries: either returning-status or recently returned
+      // Nearing return: questionable/day-to-day/probable/doubtful
       const { data: returningInjuries } = await supabase
         .from(dbTable("injuries"))
         .select("*")
         .gte("date_injured", cutoff90d)
-        .in("status", ["questionable", "day-to-day", "probable", "game_time_decision"])
+        .in("status", ["questionable", "day-to-day", "probable", "doubtful"])
         .order("date_injured", { ascending: false })
         .limit(200);
 
+      // Recently returned: any status indicating the player is back, with return_date in last 7 days
       const { data: recentlyReturned } = await supabase
         .from(dbTable("injuries"))
         .select("*")
         .gte("return_date", cutoff7d)
-        .eq("status", "returned")
+        .in("status", ["returned", "active", "active_today", "back_in_play"])
         .order("return_date", { ascending: false })
         .limit(100);
 
-      const allInjs = [...(returningInjuries ?? []), ...(recentlyReturned ?? [])];
+      // Also catch recently returned via reduced_load (playing but limited)
+      const { data: reducedLoad } = await supabase
+        .from(dbTable("injuries"))
+        .select("*")
+        .gte("return_date", cutoff7d)
+        .eq("status", "reduced_load")
+        .order("return_date", { ascending: false })
+        .limit(50);
+
+      const allInjs = [...(returningInjuries ?? []), ...(recentlyReturned ?? []), ...(reducedLoad ?? [])];
       // Dedupe by player_id (keep most recent)
       const byPlayer = new Map<string, (typeof allInjs)[0]>();
       for (const inj of allInjs) {

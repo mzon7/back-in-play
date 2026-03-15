@@ -86,7 +86,7 @@ function InjuryCard({ inj }: { inj: PlayerInjury }) {
         </div>
         <p className="text-xs text-white/45">{dateRange}, {year}</p>
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-xs text-white/40">
-          {inj.recovery_days != null && inj.recovery_days > 0 && (
+          {inj.recovery_days != null && inj.recovery_days > 0 && inj.recovery_days < 730 && (
             <span>{inj.recovery_days}d recovery</span>
           )}
           {inj.games_missed != null && inj.games_missed > 0 && (
@@ -317,10 +317,12 @@ export default function PlayerInjuryPage() {
   // Group injuries by season for compact display
   const seasonGroups = groupInjuriesBySeason(player.injuries, player.league_slug);
   const totalInjuries = player.injuries.length;
-  const totalGamesMissed = player.injuries.reduce((sum, i) => sum + (i.games_missed ?? 0), 0);
-  const recoveries = player.injuries.filter(i => i.recovery_days && i.recovery_days > 0);
-  const avgRecovery = recoveries.length > 0
-    ? Math.round(recoveries.reduce((sum, i) => sum + (i.recovery_days ?? 0), 0) / recoveries.length)
+  const gamesMissedValues = player.injuries.map(i => i.games_missed).filter((v): v is number => v != null && v > 0);
+  const totalGamesMissed = gamesMissedValues.reduce((sum, v) => sum + v, 0);
+  const hasGamesMissed = gamesMissedValues.length > 0;
+  const recoveries = player.injuries.filter(i => i.recovery_days && i.recovery_days > 0 && i.recovery_days < 365);
+  const medianRecovery = recoveries.length > 0
+    ? Math.round(recoveries.map(i => i.recovery_days!).sort((a, b) => a - b)[Math.floor(recoveries.length / 2)])
     : null;
   const mostCommonInjury = getMostCommonInjury(player.injuries);
 
@@ -485,7 +487,7 @@ export default function PlayerInjuryPage() {
                   <dd className="text-red-400">{currentInjury.games_missed}</dd>
                 </div>
               )}
-              {currentInjury.recovery_days != null && currentInjury.recovery_days > 0 ? (
+              {currentInjury.recovery_days != null && currentInjury.recovery_days > 0 && currentInjury.recovery_days < 730 ? (
                 <div>
                   <dt className="text-white/50 text-xs">Total Recovery</dt>
                   <dd>{currentInjury.recovery_days} days</dd>
@@ -513,7 +515,7 @@ export default function PlayerInjuryPage() {
             <ul className="space-y-2 text-sm text-white/60">
               <li className="flex items-start gap-2">
                 <span className="text-indigo-400 mt-0.5 shrink-0">&#8226;</span>
-                <span>{player.player_name} has sustained <strong className="text-white/80">{totalInjuries}</strong> recorded {totalInjuries === 1 ? "injury" : "injuries"}, missing a total of <strong className="text-white/80">{totalGamesMissed}</strong> {totalGamesMissed === 1 ? "game" : "games"}.</span>
+                <span>{player.player_name} has sustained <strong className="text-white/80">{totalInjuries}</strong> recorded {totalInjuries === 1 ? "injury" : "injuries"}{hasGamesMissed ? <>, missing a total of <strong className="text-white/80">{totalGamesMissed}</strong> {totalGamesMissed === 1 ? "game" : "games"}</> : ""}.</span>
               </li>
               {mostCommonInjury && (
                 <li className="flex items-start gap-2">
@@ -521,22 +523,22 @@ export default function PlayerInjuryPage() {
                   <span>Most common injury type: <strong className="text-white/80 capitalize">{mostCommonInjury}</strong>.</span>
                 </li>
               )}
-              {avgRecovery && (
+              {medianRecovery && (
                 <li className="flex items-start gap-2">
                   <span className="text-indigo-400 mt-0.5 shrink-0">&#8226;</span>
-                  <span>Average recovery time: <strong className="text-white/80">{avgRecovery} days</strong> across {recoveries.length} {recoveries.length === 1 ? "recovery" : "recoveries"}.</span>
+                  <span>Median recovery time: <strong className="text-white/80">{medianRecovery} days</strong> across {recoveries.length} {recoveries.length === 1 ? "recovery" : "recoveries"}.</span>
                 </li>
               )}
-              {perfCurve && perfCurve.avg_pct_recent && perfCurve.avg_pct_recent.length >= 10 && (
+              {perfCurve && perfCurve.median_pct_recent && perfCurve.median_pct_recent.length >= 10 && (
                 <li className="flex items-start gap-2">
                   <span className="text-indigo-400 mt-0.5 shrink-0">&#8226;</span>
-                  <span>Expected performance after {perfCurve.injury_type}: Game 1 back at <strong className="text-white/80">{Math.round(perfCurve.avg_pct_recent[0])}%</strong> of baseline, Game 10 at <strong className="text-white/80">{Math.round(perfCurve.avg_pct_recent[9])}%</strong> (based on {perfCurve.sample_size} historical cases).</span>
+                  <span>Expected performance after {perfCurve.injury_type}: Game 1 back at <strong className="text-white/80">{Math.round(perfCurve.median_pct_recent[0] * 100)}%</strong> of baseline, Game 10 at <strong className="text-white/80">{Math.round(perfCurve.median_pct_recent[9] * 100)}%</strong> (based on {perfCurve.sample_size} historical cases).</span>
                 </li>
               )}
-              {perfCurve && perfCurve.avg_pct_recent && perfCurve.avg_pct_recent.length > 0 && perfCurve.avg_pct_recent.length < 10 && (
+              {perfCurve && perfCurve.median_pct_recent && perfCurve.median_pct_recent.length > 0 && perfCurve.median_pct_recent.length < 10 && (
                 <li className="flex items-start gap-2">
                   <span className="text-indigo-400 mt-0.5 shrink-0">&#8226;</span>
-                  <span>Expected Game 1 performance after {perfCurve.injury_type}: <strong className="text-white/80">{Math.round(perfCurve.avg_pct_recent[0])}%</strong> of baseline ({perfCurve.sample_size} historical cases).</span>
+                  <span>Expected Game 1 performance after {perfCurve.injury_type}: <strong className="text-white/80">{Math.round(perfCurve.median_pct_recent[0] * 100)}%</strong> of baseline ({perfCurve.sample_size} historical cases).</span>
                 </li>
               )}
               {returnCase && returnCase.rest_of_season_avg != null && (
@@ -552,7 +554,7 @@ export default function PlayerInjuryPage() {
         {/* Days Since Injury */}
         {currentInjury && (
           <div className="flex items-stretch gap-3 mb-6">
-            {currentInjury.return_date ? (
+            {currentInjury.return_date && new Date(currentInjury.return_date).getFullYear() < new Date().getFullYear() + 2 ? (
               <>
                 <div className="flex-1 bg-white/5 border border-white/10 rounded-xl p-4 text-center">
                   <p className="text-xs text-white/40 mb-1">Injured</p>
@@ -562,12 +564,17 @@ export default function PlayerInjuryPage() {
                   <p className="text-xs text-green-400/60 mb-1">Returned</p>
                   <p className="text-sm font-semibold text-green-400">{formatDate(currentInjury.return_date)}</p>
                 </div>
-                <div className="flex-1 bg-white/5 border border-white/10 rounded-xl p-4 text-center">
-                  <p className="text-xs text-white/40 mb-1">Total Recovery</p>
-                  <p className="text-lg font-bold text-white">
-                    {currentInjury.recovery_days ?? Math.max(0, Math.floor((new Date(currentInjury.return_date).getTime() - new Date(currentInjury.date_injured).getTime()) / 86400000))} <span className="text-sm font-normal text-white/50">days</span>
-                  </p>
-                </div>
+                {(() => {
+                  const days = currentInjury.recovery_days ?? Math.max(0, Math.floor((new Date(currentInjury.return_date!).getTime() - new Date(currentInjury.date_injured).getTime()) / 86400000));
+                  return days > 0 && days < 730 ? (
+                    <div className="flex-1 bg-white/5 border border-white/10 rounded-xl p-4 text-center">
+                      <p className="text-xs text-white/40 mb-1">Total Recovery</p>
+                      <p className="text-lg font-bold text-white">
+                        {days} <span className="text-sm font-normal text-white/50">days</span>
+                      </p>
+                    </div>
+                  ) : null;
+                })()}
               </>
             ) : currentInjury.status !== "returned" && currentInjury.status !== "active" ? (
               <>
@@ -641,7 +648,7 @@ export default function PlayerInjuryPage() {
               <div className="flex gap-4 text-xs text-white/40">
                 <span>{totalInjuries} {totalInjuries === 1 ? "injury" : "injuries"}</span>
                 {totalGamesMissed > 0 && <span className="text-red-400/60">{totalGamesMissed} games missed</span>}
-                {avgRecovery && <span>{avgRecovery}d avg recovery</span>}
+                {medianRecovery && <span>{medianRecovery}d median recovery</span>}
               </div>
             </div>
             <div className="space-y-3">

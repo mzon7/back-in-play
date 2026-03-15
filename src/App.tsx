@@ -36,6 +36,7 @@ const ReturningThisWeekPage = lazyWithReload(() => import("./pages/ReturningThis
 const MinutesRestrictionPage = lazyWithReload(() => import("./pages/MinutesRestrictionPage"));
 const TrackedPlayersPage = lazyWithReload(() => import("./pages/TrackedPlayersPage"));
 const LeagueInjuryTypePerformancePage = lazyWithReload(() => import("./pages/league/LeagueInjuryTypePerformancePage"));
+const CrossLeagueComparePage = lazyWithReload(() => import("./pages/injury/CrossLeagueComparePage"));
 
 function Loading() {
   return (
@@ -57,6 +58,7 @@ function routeKey(pathname: string): string {
   if (segments[0] === "signup") return "signup";
   if (segments[0] === "auth") return "auth";
   if (segments[0] === "recovery-stats") return "recovery-stats";
+  if (segments[0] === "injuries" && segments[2] === "compare") return `injuries-compare-${segments[1] ?? ""}`;
   if (segments[0] === "injuries") return `injuries-${segments[1] ?? ""}`;
   if (segments[0] === "performance-curves") return "performance-curves";
   if (segments[0] === "props") return "props";
@@ -67,7 +69,9 @@ function routeKey(pathname: string): string {
   if (segments.length === 2 && segments[1] === "returning-today") return `returning-today-${segments[0]}`;
   if (segments.length === 2 && segments[1] === "players-returning-from-injury-this-week") return `returning-week-${segments[0]}`;
   if (segments.length === 2 && segments[1] === "minutes-restriction-after-injury") return `minutes-restriction-${segments[0]}`;
+  if (segments.length === 3 && segments[2].endsWith("-recovery")) return `pos-recovery-${segments[0]}-${segments[1]}-${segments[2]}`;
   if (segments.length >= 2 && segments[1].endsWith("-injury-performance")) return `injury-perf-${segments[0]}-${segments[1]}`;
+  if (segments.length === 2 && /^\d{4}-season-injuries$/.test(segments[1])) return `seasonal-${segments[0]}-${segments[1]}`;
   if (segments.length === 2) return `team-${segments[0]}-${segments[1]}`;
   // top-level slug (league hub, injury performance, or player return date)
   if (segments[0].endsWith("-injury-performance")) return `perf-${segments[0]}`;
@@ -91,11 +95,11 @@ function AppRoutes() {
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/auth/callback" element={<AuthCallback supabase={supabase} redirectTo="/" />} />
 
-          {IS_LOCAL && <Route path="/recovery-stats" element={<RecoveryStatsPage />} />}
+          <Route path="/recovery-stats" element={<RecoveryStatsPage />} />
           <Route path="/performance-curves" element={<PerformanceCurvesPage />} />
           <Route path="/props" element={<PropsPage />} />
-          {IS_LOCAL && <Route path="/returning-today" element={<ReturningTodayPage />} />}
-          {IS_LOCAL && <Route path="/players-returning-from-injury-this-week" element={<ReturningThisWeekPage />} />}
+          <Route path="/returning-today" element={<ReturningTodayPage />} />
+          <Route path="/players-returning-from-injury-this-week" element={<ReturningThisWeekPage />} />
           <Route path="/minutes-restriction-after-injury" element={<MinutesRestrictionPage />} />
           <Route path="/tracked-players" element={<TrackedPlayersPage />} />
 
@@ -108,11 +112,15 @@ function AppRoutes() {
           <Route path="/player/:playerSlug/return" element={<PlayerReturnPage />} />
 
           {/* SEO: Injury type pages */}
-          {IS_LOCAL && <Route path="/injuries/:injurySlug" element={<RecoveryStatsPage />} />}
+          <Route path="/injuries/:injurySlug/compare" element={<CrossLeagueComparePage />} />
+          <Route path="/injuries/:injurySlug" element={<RecoveryStatsPage />} />
 
           {/* SEO: League-specific returning today/this week */}
-          {IS_LOCAL && <Route path="/:leagueSlug/returning-today" element={<ReturningTodayPage />} />}
-          {IS_LOCAL && <Route path="/:leagueSlug/players-returning-from-injury-this-week" element={<ReturningThisWeekPage />} />}
+          <Route path="/:leagueSlug/returning-today" element={<ReturningTodayPage />} />
+          <Route path="/:leagueSlug/players-returning-from-injury-this-week" element={<ReturningThisWeekPage />} />
+
+          {/* SEO: League-specific recovery stats */}
+          <Route path="/:leagueSlug/recovery-stats" element={<RecoveryStatsPage />} />
           <Route path="/:leagueSlug/minutes-restriction-after-injury" element={<MinutesRestrictionPage />} />
 
           {/* SEO: League + injury type performance with position (e.g., /nba/hamstring-injury-performance/guards) */}

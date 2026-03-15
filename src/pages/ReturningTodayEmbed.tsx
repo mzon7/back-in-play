@@ -63,15 +63,21 @@ function useReturningPlayers(leagueSlug?: string) {
       const { data: returningInjuries } = await supabase
         .from(dbTable("injuries")).select("*")
         .gte("date_injured", cutoff90d)
-        .in("status", ["questionable", "day-to-day", "probable", "game_time_decision"])
+        .in("status", ["questionable", "day-to-day", "probable", "doubtful"])
         .order("date_injured", { ascending: false }).limit(200);
 
       const { data: recentlyReturned } = await supabase
         .from(dbTable("injuries")).select("*")
-        .gte("return_date", cutoff7d).eq("status", "returned")
+        .gte("return_date", cutoff7d)
+        .in("status", ["returned", "active", "active_today", "back_in_play"])
         .order("return_date", { ascending: false }).limit(100);
 
-      const allInjs = [...(returningInjuries ?? []), ...(recentlyReturned ?? [])];
+      const { data: reducedLoad } = await supabase
+        .from(dbTable("injuries")).select("*")
+        .gte("return_date", cutoff7d).eq("status", "reduced_load")
+        .order("return_date", { ascending: false }).limit(50);
+
+      const allInjs = [...(returningInjuries ?? []), ...(recentlyReturned ?? []), ...(reducedLoad ?? [])];
       const byPlayer = new Map<string, (typeof allInjs)[0]>();
       for (const inj of allInjs) {
         if (!byPlayer.has(inj.player_id)) byPlayer.set(inj.player_id, inj);

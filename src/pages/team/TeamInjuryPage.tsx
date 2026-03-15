@@ -3,12 +3,16 @@ import { lazy } from "react";
 import { useParams, Link, Navigate } from "react-router-dom";
 import { SiteHeader } from "../../components/SiteHeader";
 import { useTeamPage } from "../../hooks/useTeamPage";
+import { isKnownPositionSlug } from "../position/PositionInjuryHubPage";
 import { SEO } from "../../components/seo/SEO";
 import { teamJsonLd } from "../../components/seo/seoHelpers";
 import { StatusBadge } from "../../components/StatusBadge";
 import { PlayerAvatar } from "../../components/PlayerAvatar";
 
 const LeagueInjuryTypePerformancePage = lazy(() => import("../league/LeagueInjuryTypePerformancePage"));
+const RecoveryStatsPage = lazy(() => import("../../features/historical-injury-data-system/components/RecoveryStatsPage").then(m => ({ default: m.RecoveryStatsPage })));
+const PositionInjuryHubPage = lazy(() => import("../position/PositionInjuryHubPage"));
+const SeasonalInjuryAnalysisPage = lazy(() => import("../league/SeasonalInjuryAnalysisPage"));
 
 const LEAGUE_LABELS: Record<string, string> = {
   nba: "NBA", nfl: "NFL", mlb: "MLB", nhl: "NHL", "premier-league": "EPL",
@@ -21,15 +25,33 @@ function daysAgo(d: string): number {
 export default function TeamInjuryPage() {
   const { leagueSlug, teamSlug } = useParams<{ leagueSlug: string; teamSlug: string }>();
 
+  // Delegate to seasonal injury analysis page (e.g., /nba/2025-season-injuries)
+  if (teamSlug && /^\d{4}-season-injuries$/.test(teamSlug)) {
+    return <SeasonalInjuryAnalysisPage />;
+  }
+
   // Delegate to injury-type performance page if slug matches pattern
   if (teamSlug?.endsWith("-injury-performance")) {
     return <LeagueInjuryTypePerformancePage />;
+  }
+
+  // Delegate to league + injury type recovery page (e.g., /nba/acl-recovery)
+  if (teamSlug?.endsWith("-recovery")) {
+    return <RecoveryStatsPage />;
   }
 
   // Redirect /{league}-injury-performance/{injuryType} → /{league}/{injuryType}-injury-performance
   if (leagueSlug?.endsWith("-injury-performance") && teamSlug) {
     const actualLeague = leagueSlug.replace("-injury-performance", "");
     return <Navigate to={`/${actualLeague}/${teamSlug}-injury-performance`} replace />;
+  }
+
+  // Delegate to position injury hub (e.g., /nba/guard-injuries)
+  if (teamSlug?.endsWith("-injuries") && leagueSlug) {
+    const posSlug = teamSlug.replace(/-injuries$/, "");
+    if (isKnownPositionSlug(leagueSlug, posSlug)) {
+      return <PositionInjuryHubPage />;
+    }
   }
 
   // teamSlug comes as "buffalo-bills-injuries" — strip the "-injuries" suffix

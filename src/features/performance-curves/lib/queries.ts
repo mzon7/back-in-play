@@ -37,14 +37,15 @@ function mapCurve(raw: Record<string, unknown>): PerformanceCurve {
   } as PerformanceCurve;
 }
 
-export function usePerformanceCurves(leagueSlug?: string, injuryTypeSlug?: string, position?: string) {
+export function usePerformanceCurves(leagueSlug?: string, injuryTypeSlug?: string, position?: string, returnType?: string) {
   return useQuery<PerformanceCurve[]>({
-    queryKey: ["performance-curves", leagueSlug ?? "all", injuryTypeSlug ?? "all", position ?? "all"],
+    queryKey: ["performance-curves", leagueSlug ?? "all", injuryTypeSlug ?? "all", position ?? "all", returnType ?? ""],
     queryFn: async () => {
       let q = supabase
         .from(dbTable("performance_curves"))
         .select("*")
         .gte("sample_size", 3)
+        .eq("return_type", returnType ?? "")
         .order("sample_size", { ascending: false });
 
       if (leagueSlug && leagueSlug !== "all") {

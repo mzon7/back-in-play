@@ -19,6 +19,8 @@ export interface PerformanceCurve {
   rest_of_season_pct_season: number | null;
   rest_of_season_sample: number | null;
   games_to_full: number | null;
+  next_season_pct: number | null;
+  return_type: string; // "" = all, "same_season", "next_season"
   computed_at: string;
   // Per-stat breakdowns
   stat_avg_pct: Record<string, (number | null)[]> | null;

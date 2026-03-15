@@ -1800,6 +1800,10 @@ def audit_returns(league=None):
 
         season = _season_for_date(d_injured, ls)
         combos.add((pid, ref_id, espn_id, ls, season, inj.get("position", ""), pname))
+        # Also scrape next season — player may return next year (e.g. ACL)
+        next_season = season + 1 if isinstance(season, int) else None
+        if next_season:
+            combos.add((pid, ref_id, espn_id, ls, next_season, inj.get("position", ""), pname))
 
     # Check which we already have
     already_scraped = set()
@@ -1891,10 +1895,12 @@ def audit_returns(league=None):
         except (ValueError, TypeError):
             continue
 
-        # Get game logs after injury date
+        # Get game logs after injury date (check same season AND next season)
         season = _season_for_date(d_injured, ls)
+        next_season = season + 1 if isinstance(season, int) else None
+        season_filter = f"season=in.({season},{next_season})" if next_season else f"season=eq.{season}"
         logs = sb_get("back_in_play_player_game_logs",
-                      f"select=game_date&player_id=eq.{pid}&game_date=gt.{d_injured.isoformat()}&season=eq.{season}&order=game_date.asc&limit=1")
+                      f"select=game_date&player_id=eq.{pid}&game_date=gt.{d_injured.isoformat()}&{season_filter}&order=game_date.asc&limit=1")
 
         if logs:
             # Player played after injury → they returned!
@@ -1910,7 +1916,7 @@ def audit_returns(league=None):
             # Game logs only contain games the player APPEARED in, so we can't
             # count team games directly. Estimate using pre-injury game frequency.
             all_season = sb_get("back_in_play_player_game_logs",
-                                f"select=game_date&player_id=eq.{pid}&season=eq.{season}&order=game_date.asc&limit=200")
+                                f"select=game_date&player_id=eq.{pid}&{season_filter}&order=game_date.asc&limit=200")
             games_before = [g for g in all_season if g["game_date"] <= inj["date_injured"]]
             injury_gap_days = (d_return - d_injured).days
             if len(games_before) >= 2:
@@ -2533,7 +2539,7 @@ def phase_5_aggregate(league=None):
             return NHL_GOALIE_STATS
         return LEAGUE_STATS_SKATER.get(ls, ["stat_goals", "stat_assists"])
 
-    def _build_curve(ls, its, group_cases, position=""):
+    def _build_curve(ls, its, group_cases, position="", return_type=""):
         """Build a single curve row from a group of return cases."""
         game_data = {i: [] for i in range(1, 11)}
         game_min_data = {i: [] for i in range(1, 11)}
@@ -2682,6 +2688,7 @@ def phase_5_aggregate(league=None):
 
         # Count only cases that actually contributed composite data (valid baseline + post games)
         cases_with_data = 0
+        next_season_count = 0
         for c in group_cases:
             baseline_5g = c.get("pre_baseline_5g")
             if not baseline_5g or baseline_5g == 0:
@@ -2690,6 +2697,14 @@ def phase_5_aggregate(league=None):
             composites = raw.get("games", []) if isinstance(raw, dict) else raw
             if composites:
                 cases_with_data += 1
+                # Track next-season returns
+                try:
+                    d_inj = datetime.strptime(c["date_injured"], "%Y-%m-%d").date()
+                    d_ret = datetime.strptime(c["return_date"], "%Y-%m-%d").date()
+                    if _season_for_date(d_inj, ls) != _season_for_date(d_ret, ls):
+                        next_season_count += 1
+                except (ValueError, TypeError):
+                    pass
 
         # Prefer games_missed_actual (computed from game logs) over scraped games_missed
         games_missed_values = [c["games_missed_actual"] for c in group_cases if c.get("games_missed_actual")]
@@ -2702,6 +2717,7 @@ def phase_5_aggregate(league=None):
             "injury_type_slug": its,
             "injury_type": group_cases[0]["injury_type"],
             "position": position,
+            "return_type": return_type,
             "sample_size": cases_with_data,
             "games_missed_avg": round(statistics.median(games_missed_values), 1) if games_missed_values else None,
             "recovery_days_avg": round(statistics.median(recovery_values), 1) if recovery_values else None,
@@ -2721,7 +2737,35 @@ def phase_5_aggregate(league=None):
             "rest_of_season_pct_season": round(statistics.mean(ros_season), 4) if ros_season else None,
             "rest_of_season_sample": len(ros_recent),
             "games_to_full": games_to_full,
+            "next_season_pct": round(next_season_count / cases_with_data * 100, 1) if cases_with_data > 0 else 0,
         }
+
+    def _split_by_return_type(case_list, league_slug):
+        """Split cases into same_season and next_season lists."""
+        same, nxt = [], []
+        for c in case_list:
+            try:
+                d_inj = datetime.strptime(c["date_injured"], "%Y-%m-%d").date()
+                d_ret = datetime.strptime(c["return_date"], "%Y-%m-%d").date()
+                if _season_for_date(d_inj, league_slug) == _season_for_date(d_ret, league_slug):
+                    same.append(c)
+                else:
+                    nxt.append(c)
+            except (ValueError, TypeError, KeyError):
+                same.append(c)  # default to same_season if dates are missing/bad
+        return same, nxt
+
+    def _emit_curves_for_cases(case_list, ls, its, position, curves):
+        """Emit up to 3 curve variants (all, same_season, next_season) for a case list."""
+        # All cases (return_type="")
+        curves.append(_build_curve(ls, its, case_list, position=position, return_type=""))
+
+        # Split by return type
+        same_cases, next_cases = _split_by_return_type(case_list, ls)
+        if len(same_cases) >= 10:
+            curves.append(_build_curve(ls, its, same_cases, position=position, return_type="same_season"))
+        if len(next_cases) >= 10:
+            curves.append(_build_curve(ls, its, next_cases, position=position, return_type="next_season"))
 
     # Group by (league_slug, injury_type_slug)
     groups = {}
@@ -2735,7 +2779,7 @@ def phase_5_aggregate(league=None):
             continue
 
         # All-positions combined curve (position="")
-        curves.append(_build_curve(ls, its, group_cases, position=""))
+        _emit_curves_for_cases(group_cases, ls, its, position="", curves=curves)
 
         # Per-position curves
         pos_groups = {}
@@ -2746,10 +2790,10 @@ def phase_5_aggregate(league=None):
 
         for pos, pos_cases in pos_groups.items():
             if len(pos_cases) >= 3:
-                curves.append(_build_curve(ls, its, pos_cases, position=pos))
+                _emit_curves_for_cases(pos_cases, ls, its, position=pos, curves=curves)
 
-    # Upsert with position in conflict key
-    n = sb_upsert("back_in_play_performance_curves", curves, conflict="league_slug,injury_type_slug,position")
+    # Upsert with position and return_type in conflict key
+    n = sb_upsert("back_in_play_performance_curves", curves, conflict="league_slug,injury_type_slug,position,return_type")
     print(f"  Aggregated {n} performance curves ({len([c for c in curves if c['position']])} per-position) from {len(cases)} cases", flush=True)
 
 

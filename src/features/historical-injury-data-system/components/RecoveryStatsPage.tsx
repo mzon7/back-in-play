@@ -10,6 +10,8 @@ import {
   jsonLdGraph,
 } from "../../../components/seo/seoHelpers";
 import { useRecoveryStats, useReturnCaseAggregates } from "../lib/queries";
+import { usePerformanceCurves } from "../../performance-curves/lib/queries";
+import type { PerformanceCurve } from "../../performance-curves/lib/types";
 import { LeagueFilterBar } from "./LeagueFilterBar";
 import type { LeagueFilter, RecoveryStat } from "../lib/types";
 import {
@@ -86,7 +88,7 @@ function computeReinjuryStats(rows: { total_prior_injuries: number | null; same_
   };
 }
 
-function SeverityTierSection({ tier, stats, showLeague }: { tier: string; stats: RecoveryStat[]; showLeague: boolean }) {
+function SeverityTierSection({ tier, stats, showLeague, curveMap }: { tier: string; stats: RecoveryStat[]; showLeague: boolean; curveMap: Map<string, PerformanceCurve> }) {
   const label = SEVERITY_LABEL[tier] ?? tier;
   const color = {
     critical: "#FF4D4D",
@@ -106,14 +108,24 @@ function SeverityTierSection({ tier, stats, showLeague }: { tier: string; stats:
         <div className="flex-1 h-px bg-white/10" />
         <span className="text-xs text-white/30">{stats.length} types</span>
       </div>
+      <div className="flex items-center gap-2 px-3 mb-1">
+        <span className="text-[10px] text-white/25 uppercase tracking-wider w-36 sm:w-48 shrink-0">Injury</span>
+        <span className="flex-1 text-[10px] text-white/25 uppercase tracking-wider">Distribution</span>
+        <span className="text-[10px] text-white/25 uppercase tracking-wider w-10 text-right hidden sm:block">Games</span>
+        <span className="text-[10px] text-white/25 uppercase tracking-wider w-10 text-right">Days</span>
+        <span className="text-[10px] text-white/25 uppercase tracking-wider w-10 text-right hidden sm:block">G10</span>
+      </div>
       <div className="space-y-1.5">
         {sorted.map((stat) => {
           const pct = maxDays > 0 ? ((stat.median_recovery_days ?? 0) / maxDays) * 100 : 0;
+          const curve = curveMap.get(`${stat.injury_type_slug}|${stat.league_slug}`);
+          const gamesMissed = curve?.games_missed_avg;
+          const g10 = curve?.median_pct_recent[9] != null ? Math.round(curve.median_pct_recent[9] * 100) : null;
           return (
             <Link
               key={stat.stat_id}
               to={`/injuries/${stat.injury_type_slug}`}
-              className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-white/[0.04] transition-colors group"
+              className="flex items-center gap-2 py-2 px-3 rounded-lg hover:bg-white/[0.04] transition-colors group"
             >
               <span className="text-sm text-white/80 w-36 sm:w-48 shrink-0 truncate group-hover:text-white">
                 {stat.injury_type}
@@ -130,8 +142,14 @@ function SeverityTierSection({ tier, stats, showLeague }: { tier: string; stats:
                   {stat.sample_size} cases
                 </span>
               </div>
-              <span className="text-sm font-semibold tabular-nums w-12 text-right" style={{ color }}>
+              <span className="text-xs tabular-nums w-10 text-right text-white/40 hidden sm:block">
+                {gamesMissed != null ? Math.round(gamesMissed) : "—"}
+              </span>
+              <span className="text-sm font-semibold tabular-nums w-10 text-right" style={{ color }}>
                 {stat.median_recovery_days != null ? `${Math.round(stat.median_recovery_days)}d` : "—"}
+              </span>
+              <span className={`text-xs tabular-nums w-10 text-right hidden sm:block ${g10 != null ? (g10 >= 95 ? "text-green-400/70" : g10 >= 80 ? "text-amber-400/70" : "text-red-400/70") : "text-white/30"}`}>
+                {g10 != null ? `${g10}%` : "—"}
               </span>
             </Link>
           );
@@ -164,31 +182,45 @@ function AgeBucketChart({ buckets }: { buckets: ReturnType<typeof computeAgeBuck
   );
 }
 
-function RecoveryOverviewTable({ stats, leagueFilter }: { stats: RecoveryStat[]; leagueFilter: string }) {
-  const [sortKey, setSortKey] = useState<"median" | "avg" | "samples" | "name">("median");
+type SortKey = "median" | "avg" | "samples" | "name" | "games_missed" | "same_season_pct" | "g10";
+
+function RecoveryOverviewTable({ stats, leagueFilter, curveMap }: { stats: RecoveryStat[]; leagueFilter: string; curveMap: Map<string, PerformanceCurve> }) {
+  const [sortKey, setSortKey] = useState<SortKey>("median");
   const [sortAsc, setSortAsc] = useState(false);
+
+  const getCurve = (s: RecoveryStat) => curveMap.get(`${s.injury_type_slug}|${s.league_slug}`);
 
   const sorted = useMemo(() => {
     const s = [...stats];
     s.sort((a, b) => {
       let cmp = 0;
+      const ca = getCurve(a);
+      const cb = getCurve(b);
       switch (sortKey) {
         case "median": cmp = (a.median_recovery_days ?? 0) - (b.median_recovery_days ?? 0); break;
         case "avg": cmp = (a.average_recovery_days ?? 0) - (b.average_recovery_days ?? 0); break;
         case "samples": cmp = a.sample_size - b.sample_size; break;
         case "name": cmp = a.injury_type.localeCompare(b.injury_type); break;
+        case "games_missed": cmp = (ca?.games_missed_avg ?? 0) - (cb?.games_missed_avg ?? 0); break;
+        case "same_season_pct": cmp = (100 - (ca?.next_season_pct ?? 0)) - (100 - (cb?.next_season_pct ?? 0)); break;
+        case "g10": {
+          const g10a = ca?.median_pct_recent[9] ?? 0;
+          const g10b = cb?.median_pct_recent[9] ?? 0;
+          cmp = g10a - g10b;
+          break;
+        }
       }
       return sortAsc ? cmp : -cmp;
     });
     return s;
-  }, [stats, sortKey, sortAsc]);
+  }, [stats, sortKey, sortAsc, curveMap]);
 
-  function toggleSort(key: typeof sortKey) {
+  function toggleSort(key: SortKey) {
     if (sortKey === key) setSortAsc(!sortAsc);
     else { setSortKey(key); setSortAsc(false); }
   }
 
-  const arrow = (key: typeof sortKey) => sortKey === key ? (sortAsc ? " \u2191" : " \u2193") : "";
+  const arrow = (key: SortKey) => sortKey === key ? (sortAsc ? " \u2191" : " \u2193") : "";
 
   return (
     <div className="overflow-x-auto">
@@ -198,24 +230,33 @@ function RecoveryOverviewTable({ stats, leagueFilter }: { stats: RecoveryStat[];
             <th className="pb-2 pr-4 cursor-pointer select-none" onClick={() => toggleSort("name")}>
               Injury Type{arrow("name")}
             </th>
-            {leagueFilter === "all" && <th className="pb-2 px-3 text-center">League</th>}
-            <th className="pb-2 px-3 text-center cursor-pointer select-none" onClick={() => toggleSort("median")}>
-              Median Days{arrow("median")}
+            {leagueFilter === "all" && <th className="pb-2 px-2 text-center">League</th>}
+            <th className="pb-2 px-2 text-center cursor-pointer select-none" onClick={() => toggleSort("games_missed")}>
+              Games{arrow("games_missed")}
             </th>
-            <th className="pb-2 px-3 text-center cursor-pointer select-none" onClick={() => toggleSort("avg")}>
-              Avg Days{arrow("avg")}
+            <th className="pb-2 px-2 text-center cursor-pointer select-none" onClick={() => toggleSort("median")}>
+              Days{arrow("median")}
             </th>
-            <th className="pb-2 px-3 text-center">Typical Range</th>
-            <th className="pb-2 px-3 text-center cursor-pointer select-none" onClick={() => toggleSort("samples")}>
+            <th className="pb-2 px-2 text-center cursor-pointer select-none" onClick={() => toggleSort("same_season_pct")}>
+              Same Szn{arrow("same_season_pct")}
+            </th>
+            <th className="pb-2 px-2 text-center cursor-pointer select-none" onClick={() => toggleSort("g10")}>
+              G10{arrow("g10")}
+            </th>
+            <th className="pb-2 px-2 text-center cursor-pointer select-none" onClick={() => toggleSort("samples")}>
               Cases{arrow("samples")}
             </th>
-            <th className="pb-2 pl-3 text-center">Severity</th>
+            <th className="pb-2 pl-2 text-center">Severity</th>
           </tr>
         </thead>
         <tbody>
           {sorted.map((stat) => {
             const severity = INJURY_SEVERITY[stat.injury_type] ?? "moderate";
             const color = getSeverityColor(stat.injury_type);
+            const curve = getCurve(stat);
+            const gamesMissed = curve?.games_missed_avg;
+            const sameSeasonPct = curve?.next_season_pct != null ? Math.round(100 - curve.next_season_pct) : null;
+            const g10 = curve?.median_pct_recent[9] != null ? Math.round(curve.median_pct_recent[9] * 100) : null;
             return (
               <tr key={stat.stat_id} className="border-b border-white/5 hover:bg-white/[0.02]">
                 <td className="py-2.5 pr-4">
@@ -227,26 +268,34 @@ function RecoveryOverviewTable({ stats, leagueFilter }: { stats: RecoveryStat[];
                   </Link>
                 </td>
                 {leagueFilter === "all" && (
-                  <td className="py-2.5 px-3 text-center text-xs text-white/40">
+                  <td className="py-2.5 px-2 text-center text-xs text-white/40">
                     {LEAGUE_LABELS[stat.league_slug] ?? stat.league_slug}
                   </td>
                 )}
-                <td className="py-2.5 px-3 text-center text-sm font-semibold tabular-nums" style={{ color }}>
-                  {stat.median_recovery_days != null ? `${Math.round(stat.median_recovery_days)}` : "—"}
+                <td className="py-2.5 px-2 text-center text-sm text-white/50 tabular-nums">
+                  {gamesMissed != null ? Math.round(gamesMissed) : "—"}
                 </td>
-                <td className="py-2.5 px-3 text-center text-sm text-white/50 tabular-nums">
-                  {stat.average_recovery_days != null ? `${Math.round(stat.average_recovery_days)}` : "—"}
+                <td className="py-2.5 px-2 text-center text-sm font-semibold tabular-nums" style={{ color }}>
+                  {stat.median_recovery_days != null ? Math.round(stat.median_recovery_days) : "—"}
                 </td>
-                <td className="py-2.5 px-3 text-center text-xs text-white/30 tabular-nums">
-                  {stat.median_recovery_days != null && stat.stddev_recovery_days != null
-                    ? `${Math.max(0, Math.round(stat.median_recovery_days - 2 * stat.stddev_recovery_days))}–${Math.round(stat.median_recovery_days + 2 * stat.stddev_recovery_days)}d`
-                    : `${stat.min_recovery_days ?? "?"}–${stat.max_recovery_days ?? "?"}d`
-                  }
+                <td className="py-2.5 px-2 text-center text-sm tabular-nums">
+                  {sameSeasonPct != null ? (
+                    <span className={sameSeasonPct >= 80 ? "text-green-400/70" : sameSeasonPct >= 50 ? "text-amber-400/70" : "text-red-400/70"}>
+                      {sameSeasonPct}%
+                    </span>
+                  ) : "—"}
                 </td>
-                <td className="py-2.5 px-3 text-center text-sm text-white/50 tabular-nums">
+                <td className="py-2.5 px-2 text-center text-sm tabular-nums">
+                  {g10 != null ? (
+                    <span className={g10 >= 95 ? "text-green-400/70" : g10 >= 80 ? "text-amber-400/70" : "text-red-400/70"}>
+                      {g10}%
+                    </span>
+                  ) : "—"}
+                </td>
+                <td className="py-2.5 px-2 text-center text-sm text-white/50 tabular-nums">
                   {stat.sample_size.toLocaleString()}
                 </td>
-                <td className="py-2.5 pl-3 text-center">
+                <td className="py-2.5 pl-2 text-center">
                   <span
                     className="inline-block text-[10px] font-medium px-2 py-0.5 rounded-full"
                     style={{ backgroundColor: `${color}22`, color }}
@@ -268,13 +317,16 @@ function RecoveryOverviewTable({ stats, leagueFilter }: { stats: RecoveryStat[];
  * Route: /recovery-stats and /injuries/:injurySlug
  */
 export function RecoveryStatsPage() {
-  const { injurySlug } = useParams<{ injurySlug?: string }>();
+  const { injurySlug: rawInjurySlug, leagueSlug: urlLeagueSlug, teamSlug } = useParams<{ injurySlug?: string; leagueSlug?: string; teamSlug?: string }>();
+  // Support /:leagueSlug/:injurySlug-recovery route (teamSlug param from catch-all)
+  const injurySlug = rawInjurySlug ?? (teamSlug?.endsWith("-recovery") ? teamSlug.replace(/-recovery$/, "") : undefined);
   const [searchParams, setSearchParams] = useSearchParams();
-  const urlLeague = searchParams.get("league") as LeagueFilter | null;
+  const urlLeague = (urlLeagueSlug as LeagueFilter) ?? (searchParams.get("league") as LeagueFilter | null);
   const [leagueFilter, setLeagueFilter] = useState<LeagueFilter>(
     urlLeague ?? "all"
   );
   const [viewMode, setViewMode] = useState<"severity" | "table">("severity");
+  const [returnWindow, setReturnWindow] = useState<"" | "same_season" | "next_season">("");
 
   const { data: stats = [], isLoading, error } = useRecoveryStats(
     leagueFilter === "all" ? undefined : leagueFilter
@@ -283,6 +335,26 @@ export function RecoveryStatsPage() {
   const { data: returnCases = [] } = useReturnCaseAggregates(
     leagueFilter === "all" ? undefined : leagueFilter
   );
+
+  // Fetch performance curves to enrich recovery stats with games missed, G10 performance, next_season_pct
+  const { data: perfCurves = [] } = usePerformanceCurves(
+    leagueFilter === "all" ? undefined : leagueFilter,
+    undefined,
+    "all",
+    returnWindow
+  );
+
+  // Build lookup: injury_type_slug|league_slug → PerformanceCurve
+  const curveMap = useMemo(() => {
+    const m = new Map<string, PerformanceCurve>();
+    for (const c of perfCurves) {
+      // All-positions curves (position === "") are the ones we want
+      if (c.position === "") {
+        m.set(`${c.injury_type_slug}|${c.league_slug}`, c);
+      }
+    }
+    return m;
+  }, [perfCurves]);
 
   // If we're on /injuries/:injurySlug, filter to that injury
   const filteredStats = useMemo(() => {
@@ -535,6 +607,28 @@ export function RecoveryStatsPage() {
           )}
         </div>
 
+        {/* Return window filter */}
+        <div className="flex items-center gap-2 mb-6">
+          <span className="text-[10px] text-white/30 font-medium shrink-0">Return window</span>
+          {([
+            { value: "" as const, label: "All Returns" },
+            { value: "same_season" as const, label: "Same Season" },
+            { value: "next_season" as const, label: "Next Season" },
+          ]).map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setReturnWindow(opt.value)}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                returnWindow === opt.value
+                  ? "bg-purple-500/15 text-purple-400 border border-purple-500/30"
+                  : "bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
         {/* Error state */}
         {error && (
           <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
@@ -558,13 +652,13 @@ export function RecoveryStatsPage() {
                 <h2 className="text-lg font-bold mb-4">
                   {injurySlug ? `${injuryName} Recovery Data by League` : "All Injury Types"}
                 </h2>
-                <RecoveryOverviewTable stats={filteredStats} leagueFilter={leagueFilter} />
+                <RecoveryOverviewTable stats={filteredStats} leagueFilter={leagueFilter} curveMap={curveMap} />
               </section>
             ) : (
               <section className="mb-8">
                 {SEVERITY_ORDER.map((tier) =>
                   severityGroups[tier]?.length ? (
-                    <SeverityTierSection key={tier} tier={tier} stats={severityGroups[tier]} showLeague={leagueFilter === "all"} />
+                    <SeverityTierSection key={tier} tier={tier} stats={severityGroups[tier]} showLeague={leagueFilter === "all"} curveMap={curveMap} />
                   ) : null
                 )}
               </section>
@@ -781,7 +875,12 @@ export function RecoveryStatsPage() {
               Ankle Sprain Recovery Data
             </Link>
             {(["nba", "nfl", "mlb", "nhl", "premier-league"] as const).map((slug) => (
-              <Link key={slug} to={`/${slug}-injury-performance`} className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-white/60 hover:text-white hover:bg-white/[0.08] transition-colors">
+              <Link key={`recovery-${slug}`} to={`/${slug}/recovery-stats`} className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-white/60 hover:text-white hover:bg-white/[0.08] transition-colors">
+                {LEAGUE_LABELS[slug]} Recovery Statistics
+              </Link>
+            ))}
+            {(["nba", "nfl", "mlb", "nhl", "premier-league"] as const).map((slug) => (
+              <Link key={`perf-${slug}`} to={`/${slug}-injury-performance`} className="rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-white/60 hover:text-white hover:bg-white/[0.08] transition-colors">
                 {LEAGUE_LABELS[slug]} Injury Performance
               </Link>
             ))}
