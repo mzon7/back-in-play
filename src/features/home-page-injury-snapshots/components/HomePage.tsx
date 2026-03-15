@@ -19,7 +19,7 @@ import { trackHeadlineClick } from "../../../lib/analytics";
 import { isTrackedPlayer, toggleTrackedPlayer } from "../../../lib/trackedPlayers";
 import { usePerformanceCurves } from "../../performance-curves/lib/queries";
 import type { PerformanceCurve } from "../../performance-curves/lib/types";
-import { STAT_LABELS, LEAGUE_STATS } from "../../performance-curves/lib/types";
+import { STAT_LABELS } from "../../performance-curves/lib/types";
 import { isRealInjury } from "../../../lib/injuryFilters";
 import { computeEV, formatEV, parseOdds, type EVResult } from "../../../lib/evModel";
 import { useQuery } from "@tanstack/react-query";
@@ -1525,7 +1525,7 @@ function useReturningPlayerProps() {
               const rates: number[] = [];
               const mins: number[] = [];
               for (const g of preReal) {
-                if (g[statKey] != null) rates.push(g[statKey] / g.minutes);
+                if ((g as any)[statKey] != null) rates.push((g as any)[statKey] / g.minutes);
                 mins.push(g.minutes);
               }
               if (rates.length > 0) {
@@ -1540,7 +1540,7 @@ function useReturningPlayerProps() {
               const rates: number[] = [];
               const mins: number[] = [];
               for (const g of postReal) {
-                if (g[statKey] != null) rates.push(g[statKey] / g.minutes);
+                if ((g as any)[statKey] != null) rates.push((g as any)[statKey] / g.minutes);
                 mins.push(g.minutes);
               }
               if (rates.length > 0) {

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { SiteHeader } from "../../../components/SiteHeader";
 import { SEO } from "../../../components/seo/SEO";
@@ -677,15 +677,14 @@ export default function PerformanceCurvesPage() {
   );
 
   // Most impactful injuries: 1 per league when "All", top 5 when specific league selected
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const mostImpactful = useMemo(() => {
     const candidates = reliableCurves.filter((c) => c.median_pct_recent[0] != null);
     if (league !== "all") {
-      // Specific league: show top 5
       return [...candidates]
         .sort((a, b) => (a.median_pct_recent[0] ?? 1) - (b.median_pct_recent[0] ?? 1))
         .slice(0, 5);
     }
-    // All leagues: 1 per league
     const byLeague = new Map<string, PerformanceCurve>();
     for (const c of candidates) {
       const existing = byLeague.get(c.league_slug);
@@ -695,6 +694,7 @@ export default function PerformanceCurvesPage() {
     }
     return [...byLeague.values()].sort((a, b) => (a.median_pct_recent[0] ?? 1) - (b.median_pct_recent[0] ?? 1));
   }, [reliableCurves, league]);
+  void mostImpactful; // used in a future section
 
   // Latest computed_at date across all curves
   const latestComputedAt = useMemo(() => {

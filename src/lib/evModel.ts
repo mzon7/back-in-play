@@ -88,7 +88,7 @@ export function oddsToProfit(americanOdds: number): number {
 export function computeEV(input: EVInput): EVResult | null {
   const {
     baseline, propLine, overOdds, underOdds,
-    gamesSinceReturn, recentAvg, curve, leagueSlug,
+    gamesSinceReturn, recentAvg, curve, leagueSlug: _leagueSlug,
     statKey, preInjuryMinutes, currentMinutes, stddev,
   } = input;
 

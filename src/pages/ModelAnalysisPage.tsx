@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { SiteHeader } from "../components/SiteHeader";
 import { supabase } from "../lib/supabase";
 import { usePerformanceCurves } from "../features/performance-curves/lib/queries";
-import { computeEV, formatEV, parseOdds, oddsToImpliedProb, oddsToProfit, type EVResult } from "../lib/evModel";
+import { computeEV, formatEV, parseOdds, oddsToProfit, type EVResult } from "../lib/evModel";
 import type { PerformanceCurve } from "../features/performance-curves/lib/types";
 
 const MARKET_TO_STAT: Record<string, string> = {
@@ -273,6 +273,238 @@ function StatsCard({ label, value, sub, color }: { label: string; value: string;
   );
 }
 
+interface BacktestBet {
+  player: string;
+  date: string;
+  market: string;
+  line: number;
+  ev: number; // percentage
+  rec: "OVER" | "UNDER";
+  actual: number;
+  correct: boolean;
+  pnl: number;
+  gn: number; // game number (1-10)
+  conf: "High" | "Medium" | "Low";
+  injury: string;
+}
+
+function useBacktestBets() {
+  return useQuery<BacktestBet[]>({
+    queryKey: ["backtest-bets"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("back_in_play_backtest_results")
+        .select("results")
+        .eq("league", "nba")
+        .single();
+      if (error || !data) return [];
+      const parsed = typeof data.results === "string" ? JSON.parse(data.results) : data.results;
+      return parsed.bets ?? [];
+    },
+    staleTime: 60 * 60 * 1000,
+  });
+}
+
+function HistoricalBacktest() {
+  const { data: allBets = [], isLoading: betsLoading } = useBacktestBets();
+  const [minEv, setMinEv] = useState(0);
+  const [maxGamesBack, setMaxGamesBack] = useState(10);
+
+  const filtered = useMemo(() => {
+    return allBets.filter((b) => b.ev >= minEv && b.gn <= maxGamesBack);
+  }, [allBets, minEv, maxGamesBack]);
+
+  const stats = useMemo(() => {
+    if (filtered.length === 0) return null;
+    const wins = filtered.filter((b) => b.correct).length;
+    const total = filtered.length;
+    const profit = filtered.reduce((s, b) => s + b.pnl, 0);
+
+    // By game number
+    const byGn: Record<number, { total: number; correct: number; profit: number }> = {};
+    for (let g = 1; g <= 10; g++) byGn[g] = { total: 0, correct: 0, profit: 0 };
+    for (const b of filtered) {
+      byGn[b.gn].total++;
+      if (b.correct) byGn[b.gn].correct++;
+      byGn[b.gn].profit += b.pnl;
+    }
+
+    // By EV tier
+    const tiers = ["<5%", "5-10%", "10-20%", "20-30%", "30-50%", "≥50%"] as const;
+    const byEv: Record<string, { total: number; correct: number; profit: number }> = {};
+    for (const t of tiers) byEv[t] = { total: 0, correct: 0, profit: 0 };
+    for (const b of filtered) {
+      const tier = b.ev >= 50 ? "≥50%" : b.ev >= 30 ? "30-50%" : b.ev >= 20 ? "20-30%" : b.ev >= 10 ? "10-20%" : b.ev >= 5 ? "5-10%" : "<5%";
+      byEv[tier].total++;
+      if (b.correct) byEv[tier].correct++;
+      byEv[tier].profit += b.pnl;
+    }
+
+    // By confidence
+    const byConf: Record<string, { total: number; correct: number; profit: number }> = { High: { total: 0, correct: 0, profit: 0 }, Medium: { total: 0, correct: 0, profit: 0 }, Low: { total: 0, correct: 0, profit: 0 } };
+    for (const b of filtered) {
+      byConf[b.conf].total++;
+      if (b.correct) byConf[b.conf].correct++;
+      byConf[b.conf].profit += b.pnl;
+    }
+
+    // By market
+    const byMarket: Record<string, { total: number; correct: number; profit: number }> = {};
+    for (const b of filtered) {
+      if (!byMarket[b.market]) byMarket[b.market] = { total: 0, correct: 0, profit: 0 };
+      byMarket[b.market].total++;
+      if (b.correct) byMarket[b.market].correct++;
+      byMarket[b.market].profit += b.pnl;
+    }
+
+    return { wins, total, profit, byGn, byEv, byConf, byMarket };
+  }, [filtered]);
+
+  const evThresholds = [0, 5, 10, 15, 20, 30, 50];
+  const gamesBackOptions = [1, 2, 3, 5, 7, 10];
+
+  if (betsLoading) return <div className="text-white/30 text-center py-10">Loading backtest data...</div>;
+  if (allBets.length === 0) return <div className="text-white/30 text-center py-10">No backtest data. Run the simulation on the droplet first.</div>;
+
+  return (
+    <div className="mb-8">
+      <div className="flex items-center gap-3 mb-4">
+        <h2 className="text-lg font-bold">Historical Backtest</h2>
+        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400/80 font-semibold">
+          {allBets.length.toLocaleString()} total bets · NBA 2023-25
+        </span>
+      </div>
+
+      {/* Parameter controls */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+        <div>
+          <p className="text-[11px] text-white/40 mb-2">Min EV % to bet</p>
+          <div className="flex flex-wrap gap-1.5">
+            {evThresholds.map((t) => (
+              <button key={t} onClick={() => setMinEv(t)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  minEv === t ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border border-[#1C7CFF]/30" : "bg-white/5 text-white/50 hover:text-white/70 border border-transparent"
+                }`}>
+                {t === 0 ? "All" : `≥${t}%`}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="text-[11px] text-white/40 mb-2">Max games back to bet</p>
+          <div className="flex flex-wrap gap-1.5">
+            {gamesBackOptions.map((g) => (
+              <button key={g} onClick={() => setMaxGamesBack(g)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  maxGamesBack === g ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border border-[#1C7CFF]/30" : "bg-white/5 text-white/50 hover:text-white/70 border border-transparent"
+                }`}>
+                G1{g > 1 ? `-G${g}` : ""}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {stats && (
+        <>
+          {/* Overall */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+            <StatsCard label="Win Rate" value={`${(stats.wins / stats.total * 100).toFixed(1)}%`}
+              sub={`${stats.wins.toLocaleString()}/${stats.total.toLocaleString()}`}
+              color={stats.wins / stats.total > 0.524 ? "text-green-400" : "text-red-400"} />
+            <StatsCard label="ROI" value={`${(stats.profit / stats.total * 100).toFixed(1)}%`}
+              sub={`${stats.profit >= 0 ? "+" : ""}${stats.profit.toFixed(0)}u`}
+              color={stats.profit > 0 ? "text-green-400" : "text-red-400"} />
+            <StatsCard label="Total Bets" value={stats.total.toLocaleString()}
+              sub={`of ${allBets.length.toLocaleString()}`} />
+            <StatsCard label="Break-Even" value="52.4%" sub="at -110 juice" color="text-white/60" />
+          </div>
+
+          {/* By Game Number */}
+          <h3 className="text-xs font-bold text-white/40 uppercase tracking-widest mb-3">Win Rate by Game # After Return</h3>
+          <div className="bg-white/5 rounded-xl p-4 mb-6">
+            <div className="space-y-2">
+              {Object.entries(stats.byGn).filter(([, d]) => d.total > 0).sort((a, b) => Number(a[0]) - Number(b[0])).map(([gn, d]) => {
+                const wr = d.correct / d.total;
+                const roi = d.profit / d.total * 100;
+                return (
+                  <div key={gn} className="flex items-center gap-3 text-xs">
+                    <span className="w-8 text-white/40 shrink-0 text-right tabular-nums">G{gn}</span>
+                    <div className="flex-1 h-5 bg-white/5 rounded overflow-hidden relative">
+                      <div className={`h-full rounded ${wr > 0.524 ? "bg-green-500/40" : "bg-red-500/30"}`}
+                        style={{ width: `${Math.max(wr * 100, 2)}%` }} />
+                      <span className="absolute inset-0 flex items-center justify-center text-[10px] text-white/60 font-medium tabular-nums">
+                        {(wr * 100).toFixed(1)}% ({d.correct}/{d.total}) · ROI {roi >= 0 ? "+" : ""}{roi.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* By EV Tier */}
+          <h3 className="text-xs font-bold text-white/40 uppercase tracking-widest mb-3">Win Rate by EV Tier</h3>
+          <div className="bg-white/5 rounded-xl p-4 mb-6">
+            <div className="space-y-2">
+              {["<5%", "5-10%", "10-20%", "20-30%", "30-50%", "≥50%"].map((tier) => {
+                const d = stats.byEv[tier];
+                if (!d || d.total === 0) return null;
+                const wr = d.correct / d.total;
+                const roi = d.profit / d.total * 100;
+                return (
+                  <div key={tier} className="flex items-center gap-3 text-xs">
+                    <span className="w-14 text-white/40 shrink-0 text-right tabular-nums">{tier}</span>
+                    <div className="flex-1 h-5 bg-white/5 rounded overflow-hidden relative">
+                      <div className={`h-full rounded ${wr > 0.524 ? "bg-green-500/40" : "bg-red-500/30"}`}
+                        style={{ width: `${Math.max(wr * 100, 2)}%` }} />
+                      <span className="absolute inset-0 flex items-center justify-center text-[10px] text-white/60 font-medium tabular-nums">
+                        {(wr * 100).toFixed(1)}% ({d.correct}/{d.total}) · ROI {roi >= 0 ? "+" : ""}{roi.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* By Confidence + Market */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
+            <div>
+              <h3 className="text-xs font-bold text-white/40 uppercase tracking-widest mb-3">By Confidence</h3>
+              <div className="space-y-2">
+                {(["High", "Medium", "Low"] as const).map((conf) => {
+                  const d = stats.byConf[conf];
+                  if (d.total === 0) return null;
+                  return (
+                    <div key={conf} className="bg-white/5 rounded-xl p-3 text-center">
+                      <p className="text-[10px] text-white/40 mb-1">{conf}</p>
+                      <p className="text-lg font-bold">{(d.correct / d.total * 100).toFixed(1)}%</p>
+                      <p className="text-[10px] text-white/30">{d.correct}/{d.total} · ROI {(d.profit / d.total * 100).toFixed(1)}%</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-white/40 uppercase tracking-widest mb-3">By Market</h3>
+              <div className="space-y-2">
+                {Object.entries(stats.byMarket).sort((a, b) => b[1].total - a[1].total).map(([market, d]) => (
+                  <div key={market} className="bg-white/5 rounded-xl p-3 text-center">
+                    <p className="text-[10px] text-white/40 mb-1">{MARKET_LABELS[market] ?? market}</p>
+                    <p className="text-lg font-bold">{(d.correct / d.total * 100).toFixed(1)}%</p>
+                    <p className="text-[10px] text-white/30">{d.correct}/{d.total} · ROI {(d.profit / d.total * 100).toFixed(1)}%</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function ModelAnalysisPage() {
   const { data: settled, isLoading } = useModelAnalysis();
   const [minEv, setMinEv] = useState(0);
@@ -320,8 +552,13 @@ export default function ModelAnalysisPage() {
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400/80 font-semibold">Local Only</span>
         </div>
         <p className="text-sm text-white/40 mb-6">
-          Backtesting the EV model against settled props from the last 30 days.
+          Historical backtest + live model tracking for injury-adjusted player props.
         </p>
+
+        {/* Historical backtest results */}
+        <HistoricalBacktest />
+
+        <h2 className="text-lg font-bold mb-4">Live Model Tracking</h2>
 
         {isLoading && (
           <div className="text-center py-20 text-white/30">Loading settled props...</div>

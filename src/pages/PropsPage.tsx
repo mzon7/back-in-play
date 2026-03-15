@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
 import { SiteHeader } from "../components/SiteHeader";
 import { SEO } from "../components/seo/SEO";
-import { StatusBadge } from "../components/StatusBadge";
 import { PlayerAvatar } from "../components/PlayerAvatar";
 import { InjuryPlayerCard } from "../components/InjuryPlayerCard";
 import { trackLeagueFilter } from "../lib/analytics";
@@ -682,7 +681,7 @@ export default function PropsPage() {
     let rafId: number;
 
     function scrollToTarget() {
-      const el = document.getElementById(`prop-player-${match.player_id}`);
+      const el = document.getElementById(`prop-player-${match!.player_id}`);
       if (!el) {
         if (attempts < 10) { attempts++; rafId = requestAnimationFrame(scrollToTarget); }
         return;

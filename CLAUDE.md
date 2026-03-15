@@ -86,6 +86,15 @@
 - **TanStack Query** for server-state caching/pagination/deduping.
 - UI filters/sorts in component state; **sync to URL query params** for shareable links.
 
+### Data Availability (Phase 4)
+- All 5 leagues (NBA, NFL, NHL, MLB, Premier League) have game log data already loaded in Supabase from CSV/GitHub imports
+- **3.45M** total game log rows in `back_in_play_player_game_logs`
+- **34,168** players in `back_in_play_players`
+- **115,036** injury return cases across **27,903** unique players
+- Phase 4 (compute baselines/post-return metrics) uses this existing data — no external scraping needed
+- Pro-football-reference is blocked (403) but NOT needed since all data is already loaded
+- The `injuries` table has no `league_slug` column — join through `players` table via `league_id` to filter by league
+
 ### Integrations / Server-side
 - **Supabase Edge Function** via `callEdgeFunction` for ingestion (admin-key protected):
   - transactional upserts (leagues/teams/players) + inserts (injuries)
