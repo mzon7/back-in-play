@@ -472,9 +472,7 @@ export default function PerformanceCurvesPage() {
                       <button
                         key={`${ls}-${pos}`}
                         onClick={() => { setLeague(ls as LeagueFilter); setPosition(pos); }}
-                        className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
-                          league === ls && position === pos ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" : "bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
-                        }`}
+                        className="shrink-0 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors bg-white/5 text-white/40 hover:text-white/60 border border-transparent"
                       >
                         {pos}
                       </button>

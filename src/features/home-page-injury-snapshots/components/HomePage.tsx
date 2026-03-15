@@ -933,11 +933,6 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
     (s) => leagues.length === 0 || leagues.some((l) => l.slug === s),
   );
 
-  const allTabs: { key: Tab; label: string }[] = [
-    { key: "top", label: "Top Players" },
-    ...orderedSlugs.map((s) => ({ key: s, label: LEAGUE_LABELS[s] ?? s.toUpperCase() })),
-  ];
-
   const year = new Date().getFullYear();
   const seoTitle = activeTab === "top"
     ? `Sports Injury Tracker (${year}) - Live Updates & Return Dates`

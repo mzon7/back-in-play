@@ -52,6 +52,7 @@ function makeStat(overrides: Partial<RecoveryStat> = {}): RecoveryStat {
     league_name: "NFL",
     average_recovery_days: 22,
     median_recovery_days: 21,
+    stddev_recovery_days: 7.5,
     min_recovery_days: 14,
     max_recovery_days: 42,
     sample_size: 8,
