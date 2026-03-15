@@ -36,20 +36,36 @@ export default function TrackedPlayersPage() {
 
     (async () => {
       setLoading(true);
-      // Fetch player info + latest injury for each tracked slug
+      // First get player_ids from the players table by slug
+      const { data: playerRows } = await supabase
+        .from(dbTable("players"))
+        .select("player_id, slug, player_name")
+        .in("slug", slugs);
+
+      if (!playerRows || playerRows.length === 0) {
+        setPlayers([]);
+        setLoading(false);
+        return;
+      }
+
+      const playerIds = playerRows.map((p) => p.player_id);
+      const slugById = Object.fromEntries(playerRows.map((p) => [p.player_id, p.slug]));
+
+      // Now fetch injuries for those player_ids
       const { data } = await supabase
         .from(dbTable("injuries"))
-        .select("player_name, player_slug, position, team_name, league_slug, headshot_url, status, injury_type, date_injured, expected_return, is_star, is_starter, games_missed")
-        .in("player_slug", slugs)
+        .select("player_id, player_name, position, team_name, league_slug, headshot_url, status, injury_type, date_injured, expected_return, is_star, is_starter, games_missed")
+        .in("player_id", playerIds)
         .order("date_injured", { ascending: false });
 
       // Deduplicate — keep the most recent injury per player
       const seen = new Set<string>();
       const deduped: TrackedPlayerData[] = [];
       for (const row of data ?? []) {
-        if (!seen.has(row.player_slug)) {
-          seen.add(row.player_slug);
-          deduped.push(row as TrackedPlayerData);
+        const slug = slugById[row.player_id];
+        if (slug && !seen.has(slug)) {
+          seen.add(slug);
+          deduped.push({ ...row, player_slug: slug } as TrackedPlayerData);
         }
       }
       setPlayers(deduped);
