@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
@@ -12,6 +13,7 @@ interface SiteHeaderProps {
 }
 
 export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHeaderProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
   const allTabs: { key: string; label: string }[] = [
     { key: "top", label: "Top Players" },
     ...LEAGUE_ORDER.map((s) => ({ key: s, label: LEAGUE_LABELS[s] ?? s.toUpperCase() })),
@@ -30,6 +32,7 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
           <span className="text-[9px] font-semibold tracking-wide rounded-full px-2 py-0.5 bg-[#1C7CFF]/10 text-[#1C7CFF]/60 border border-[#1C7CFF]/15">Early Access</span>
         </Link>
 
+        {/* Desktop nav */}
         <div className="hidden md:flex items-center gap-1 sm:gap-3 text-sm font-medium">
           <Link to="/" className="px-2 py-1 text-[#1C7CFF] shrink-0">Home</Link>
           {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (
@@ -42,7 +45,36 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
             <Link to="/returning-today" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Returning Today</Link>
           )}
         </div>
+
+        {/* Mobile hamburger */}
+        <button
+          onClick={() => setMenuOpen(!menuOpen)}
+          className="md:hidden flex flex-col gap-1 p-2 -mr-2"
+          aria-label="Menu"
+        >
+          <span className={`block w-5 h-0.5 bg-white/60 transition-transform ${menuOpen ? "rotate-45 translate-y-1.5" : ""}`} />
+          <span className={`block w-5 h-0.5 bg-white/60 transition-opacity ${menuOpen ? "opacity-0" : ""}`} />
+          <span className={`block w-5 h-0.5 bg-white/60 transition-transform ${menuOpen ? "-rotate-45 -translate-y-1.5" : ""}`} />
+        </button>
       </div>
+
+      {/* Mobile dropdown menu */}
+      {menuOpen && (
+        <div className="md:hidden border-t border-white/10 bg-[#0A0E1A]/95 backdrop-blur-md">
+          <div className="flex flex-col px-4 py-2 text-sm font-medium">
+            <Link to="/" onClick={() => setMenuOpen(false)} className="py-2.5 text-[#1C7CFF]">Home</Link>
+            <Link to="/performance-curves" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Performance Curves</Link>
+            <Link to="/props" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Props</Link>
+            <Link to="/tracked-players" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Tracked Players</Link>
+            {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (
+              <>
+                <Link to="/recovery-stats" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Recovery Stats</Link>
+                <Link to="/returning-today" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Returning Today</Link>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {showTabs && onTabChange && (
         <div className="max-w-5xl mx-auto px-4">
