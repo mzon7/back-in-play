@@ -98,6 +98,38 @@ const SOURCE_LABELS: Record<string, string> = {
   bovada: "Bovada",
 };
 
+/** Format game status from commence_time */
+function gameStatus(commenceTime: string | null | undefined, gameDate: string | undefined): { label: string; started: boolean; tomorrow: boolean } {
+  const today = new Date().toISOString().slice(0, 10);
+  const isTomorrow = gameDate != null && gameDate > today;
+
+  if (!commenceTime) {
+    return { label: isTomorrow ? "Tomorrow" : "Today", started: false, tomorrow: isTomorrow };
+  }
+  const ct = new Date(commenceTime);
+  const now = new Date();
+  if (now >= ct) {
+    return { label: "Live", started: true, tomorrow: false };
+  }
+  // Format time in user's locale
+  const timeStr = ct.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return { label: isTomorrow ? `Tomorrow ${timeStr}` : timeStr, started: false, tomorrow: isTomorrow };
+}
+
+function GameTimeBadge({ commenceTime, gameDate }: { commenceTime?: string | null; gameDate?: string }) {
+  const { label, started, tomorrow } = gameStatus(commenceTime, gameDate);
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold ${
+      started ? "bg-green-500/20 text-green-400" :
+      tomorrow ? "bg-blue-500/10 text-blue-400/60" :
+      "bg-white/5 text-white/40"
+    }`}>
+      {started && <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />}
+      {label}
+    </span>
+  );
+}
+
 interface PropItem {
   id: string;
   market: string;
@@ -105,6 +137,10 @@ interface PropItem {
   over_price: string | null;
   under_price: string | null;
   source: string;
+  game_date?: string;
+  commence_time?: string | null;
+  home_team?: string | null;
+  away_team?: string | null;
 }
 
 interface PreInjuryAvg {
@@ -131,6 +167,10 @@ interface PropsPlayer {
   avg10: PreInjuryAvg | null;
   gamesBack: number;
   avgSinceReturn: PreInjuryAvg | null;
+  game_date?: string;
+  commence_time?: string | null;
+  home_team?: string | null;
+  away_team?: string | null;
 }
 
 /** Median of a numeric array */
@@ -190,15 +230,27 @@ function computeAvg(games: any[], n: number): PreInjuryAvg | null {
 
 function usePropsWithPlayers() {
   const today = new Date().toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
   return useQuery<PropsPlayer[]>({
     queryKey: ["bip-props-page", today],
     queryFn: async () => {
-      // 1. Get today's props
-      const { data: props, error: propsErr } = await supabase
+      // 1. Get today's + tomorrow's props; fall back to most recent if none
+      let { data: props, error: propsErr } = await supabase
         .from("back_in_play_player_props")
-        .select("id, player_id, player_name, market, line, over_price, under_price, source")
-        .eq("game_date", today);
+        .select("id, player_id, player_name, market, line, over_price, under_price, source, game_date, commence_time, home_team, away_team")
+        .in("game_date", [today, tomorrow])
+        .order("game_date", { ascending: true });
       if (propsErr) throw propsErr;
+
+      // If no props for today/tomorrow, get the most recent day that has data
+      if (!props || props.length === 0) {
+        const { data: recent } = await supabase
+          .from("back_in_play_player_props")
+          .select("id, player_id, player_name, market, line, over_price, under_price, source, game_date, commence_time, home_team, away_team")
+          .order("game_date", { ascending: false })
+          .limit(1000);
+        props = recent ?? [];
+      }
       if (!props || props.length === 0) return [];
 
       // 2. Group props by player_id (skip nulls — unresolved players)
@@ -315,18 +367,26 @@ function usePropsWithPlayers() {
           is_star: player.is_star ?? false,
           is_starter: player.is_starter ?? false,
           injury_date: injuryDate ?? null,
-          props: playerProps.map((p) => ({
+          props: playerProps.map((p: any) => ({
             id: p.id,
             market: p.market,
             line: p.line,
             over_price: p.over_price,
             under_price: p.under_price,
             source: p.source,
+            game_date: p.game_date,
+            commence_time: p.commence_time,
+            home_team: p.home_team,
+            away_team: p.away_team,
           })),
           avg5,
           avg10,
           gamesBack,
           avgSinceReturn,
+          game_date: playerProps[0]?.game_date ?? today,
+          commence_time: playerProps[0]?.commence_time ?? null,
+          home_team: playerProps[0]?.home_team ?? null,
+          away_team: playerProps[0]?.away_team ?? null,
         });
       }
 
@@ -851,15 +911,36 @@ export default function PropsPage() {
           </button>
         </div>
         <p className="text-sm text-white/50 mb-5 leading-relaxed">
-          Today's prop lines for players with injury history. Compare current lines against
+          Prop lines for players with injury history. Compare current lines against
           historical return trends and pre-injury baselines to identify where the market
           may still reflect injury uncertainty.
         </p>
 
+        {/* Date context */}
+        {players.length > 0 && (() => {
+          const dates = [...new Set(players.flatMap((p) => p.props.map((pr) => pr.game_date).filter(Boolean)))].sort();
+          const todayStr = new Date().toISOString().slice(0, 10);
+          const hasTomorrow = dates.some((d) => d && d > todayStr);
+          const mostRecent = dates[dates.length - 1];
+          const isStale = mostRecent != null && mostRecent < todayStr;
+          return (
+            <div className={`rounded-lg px-3 py-2 mb-4 text-[11px] ${isStale ? "bg-amber-500/10 text-amber-400/70 border border-amber-500/20" : "bg-white/[0.03] text-white/40 border border-white/5"}`}>
+              {isStale ? (
+                <span>Showing props from {new Date(mostRecent + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} — today's lines aren't available yet</span>
+              ) : (
+                <span>
+                  {dates.filter((d) => d === todayStr).length > 0 ? "Today's games" : ""}
+                  {hasTomorrow ? (dates.filter((d) => d === todayStr).length > 0 ? " + tomorrow's games" : "Tomorrow's games") : ""}
+                </span>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Top 2 Edges — compact cards with large EV numbers */}
         {topEdges.length > 0 && (
           <section className="mb-6">
-            <h2 className="text-xs font-bold text-[#1C7CFF]/80 uppercase tracking-widest mb-3">Top Edges Today</h2>
+            <h2 className="text-xs font-bold text-[#1C7CFF]/80 uppercase tracking-widest mb-3">Top Edges</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {topEdges.map(({ player: p, ev: topEv, prop: topProp }) => {
                 const lc = leagueColor(p.league_slug);
@@ -885,6 +966,7 @@ export default function PropsPage() {
                           <span>{p.injury_type}</span>
                           <span>·</span>
                           <span>{p.gamesBack}G back</span>
+                          <GameTimeBadge commenceTime={p.commence_time} gameDate={p.game_date} />
                         </div>
                       </div>
                       <div className="text-right shrink-0">
@@ -959,6 +1041,7 @@ export default function PropsPage() {
                           <span>{p.injury_type}</span>
                           <span>·</span>
                           <span>{p.gamesBack} game{p.gamesBack !== 1 ? "s" : ""} back</span>
+                          <GameTimeBadge commenceTime={p.commence_time} gameDate={p.game_date} />
                         </div>
                       </div>
                       {topProp && (

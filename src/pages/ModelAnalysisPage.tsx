@@ -287,58 +287,131 @@ interface BacktestBet {
   conf: "High" | "Medium" | "Low";
   injury: string;
   league?: string;
+  open_pnl?: number | null;
+  close_pnl?: number | null;
+  scrape_pnl?: number | null;
+  open_line?: number | null;
+  close_line?: number | null;
+  open_correct?: boolean | null;
+  close_correct?: boolean | null;
+  scrape_correct?: boolean | null;
 }
 
-const BACKTEST_LEAGUES = ["nba", "nhl", "mlb", "premier-league"] as const;
-const ALL_RESULT_KEYS = [...BACKTEST_LEAGUES, "nba_lgbm", "nhl_lgbm", "nba_v2", "nhl_v2"];
+type OddsMode = "scrape" | "open" | "close";
+
+/** Get the PnL for a bet based on the selected odds mode.
+ * Models C/D: correct/pnl = open, scrape_pnl = scrape, close_pnl = close
+ * Older models: correct/pnl = scrape, open_pnl = open, close_pnl = close */
+function betPnl(b: BacktestBet, mode: OddsMode): number {
+  if (mode === "open") {
+    if (b.open_pnl != null) return b.open_pnl;
+    // For Models C/D, correct/pnl IS already at open
+    if (b.scrape_pnl != null) return b.pnl;
+  }
+  if (mode === "close" && b.close_pnl != null) return b.close_pnl;
+  if (mode === "scrape") {
+    if (b.scrape_pnl != null) return b.scrape_pnl;
+    return b.pnl; // older models: pnl is scrape
+  }
+  return b.pnl;
+}
+
+/** Did the bet win at the given odds mode's line? */
+function betCorrect(b: BacktestBet, mode: OddsMode): boolean {
+  if (mode === "open") {
+    if (b.open_correct != null) return b.open_correct;
+    // For Models C/D, correct IS already at open
+    if (b.scrape_correct != null) return b.correct;
+  }
+  if (mode === "close" && b.close_correct != null) return b.close_correct;
+  if (mode === "scrape") {
+    if (b.scrape_correct != null) return b.scrape_correct;
+    return b.correct; // older models: correct is scrape
+  }
+  return b.correct;
+}
+
+const BACKTEST_LEAGUES = ["nba", "nhl", "mlb", "nfl", "premier-league"] as const;
+const MODEL_SUFFIXES = [
+  { suffix: "", label: "Heuristic", color: "bg-white/5 text-white/50" },
+  { suffix: "_lgbm", label: "LightGBM V1", color: "bg-blue-500/10 text-blue-400/70" },
+  { suffix: "_v2", label: "V2 Edge", color: "bg-purple-500/10 text-purple-400/70" },
+  { suffix: "_model_c", label: "Model C", color: "bg-amber-500/10 text-amber-400/70" },
+  { suffix: "_model_d", label: "Model D", color: "bg-emerald-500/10 text-emerald-400/70" },
+] as const;
+const ALL_RESULT_KEYS = BACKTEST_LEAGUES.flatMap((l) =>
+  MODEL_SUFFIXES.map((m) => `${l}${m.suffix}`)
+);
+
+interface ModelMeta {
+  features: string[];
+  feature_importance: Record<string, number>;
+  accuracy?: number;
+  auc?: number;
+}
 
 function useBacktestBets() {
-  return useQuery<{ bets: BacktestBet[]; byLeague: Record<string, BacktestBet[]> }>({
+  return useQuery<{ bets: BacktestBet[]; byLeague: Record<string, BacktestBet[]>; modelMeta: Record<string, ModelMeta> }>({
     queryKey: ["backtest-bets-all"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("back_in_play_backtest_results")
         .select("league, results")
         .in("league", ALL_RESULT_KEYS);
-      if (error || !data) return { bets: [], byLeague: {} };
+      if (error || !data) return { bets: [], byLeague: {}, modelMeta: {} };
       const allBets: BacktestBet[] = [];
       const byLeague: Record<string, BacktestBet[]> = {};
+      const modelMeta: Record<string, ModelMeta> = {};
       for (const row of data) {
         const parsed = typeof row.results === "string" ? JSON.parse(row.results) : row.results;
         const bets: BacktestBet[] = (parsed.bets ?? []).map((b: BacktestBet) => ({ ...b, league: row.league }));
-        // Only add base league bets to "all" pool
         if (!row.league.includes("_")) {
           allBets.push(...bets);
         }
         byLeague[row.league] = bets;
+        if (parsed.features || parsed.feature_importance) {
+          modelMeta[row.league] = {
+            features: parsed.features ?? [],
+            feature_importance: parsed.feature_importance ?? {},
+            accuracy: parsed.accuracy,
+            auc: parsed.auc,
+          };
+        }
       }
-      return { bets: allBets, byLeague };
+      return { bets: allBets, byLeague, modelMeta };
     },
     staleTime: 60 * 60 * 1000,
   });
 }
 
 /** Kelly criterion: f* = (p*b - q) / b */
-function kellyFraction(winRate: number, avgOddsProfit: number): number {
+function kellyFraction(winRate: number, oddsProfit: number): number {
   const p = winRate;
   const q = 1 - p;
-  const b = avgOddsProfit;
+  const b = oddsProfit;
   if (b <= 0) return 0;
   return Math.max((p * b - q) / b, 0);
 }
 
-function kellyProfit(bets: BacktestBet[], fraction: number): number {
-  let bankroll = 100; // start with 100 units
+/** Compute Kelly PnL by simulating sequential bets with compounding bankroll. */
+function kellyProfit(bets: BacktestBet[], fraction: number, mode: OddsMode = "scrape"): number {
+  if (bets.length === 0) return 0;
+  const avgOddsProfit = 0.909;
+  const winRate = bets.filter((b) => betCorrect(b, mode)).length / bets.length;
+  const kf = kellyFraction(winRate, avgOddsProfit) * fraction;
+  if (kf <= 0) return 0;
+
+  let bankroll = 100;
   for (const b of bets) {
-    const k = kellyFraction(0.524, 0.909); // approximate for -110
-    const stake = bankroll * k * fraction;
-    if (b.correct) {
-      bankroll += stake * 0.909; // profit at -110
+    const stake = bankroll * kf;
+    const p = betPnl(b, mode);
+    if (p > 0) {
+      bankroll += stake * p;
     } else {
       bankroll -= stake;
     }
   }
-  return bankroll - 100; // net profit
+  return bankroll - 100;
 }
 
 interface StatRow {
@@ -354,24 +427,54 @@ interface StatRow {
   fullKellyPnl: number;
 }
 
-function LeagueStatTable({ allData }: { allData: Record<string, BacktestBet[]> }) {
+function ModelFeatures({ meta }: { meta: ModelMeta }) {
+  const sorted = Object.entries(meta.feature_importance).sort((a, b) => b[1] - a[1]);
+  const maxImp = sorted.length > 0 ? sorted[0][1] : 1;
+  return (
+    <div className="bg-white/[0.03] rounded-xl p-4 mb-4">
+      <div className="flex items-center gap-3 mb-3">
+        <h3 className="text-xs font-bold text-white/40 uppercase tracking-widest">Feature Importance</h3>
+        {meta.accuracy != null && (
+          <span className="text-[10px] text-white/30">Acc: {(meta.accuracy * 100).toFixed(1)}% | AUC: {((meta.auc ?? 0) * 100).toFixed(1)}%</span>
+        )}
+      </div>
+      <div className="space-y-1">
+        {sorted.map(([name, imp]) => (
+          <div key={name} className="flex items-center gap-2 text-[11px]">
+            <span className="w-44 text-white/50 shrink-0 font-mono truncate">{name}</span>
+            <div className="flex-1 h-3 bg-white/5 rounded overflow-hidden">
+              <div className={`h-full rounded ${imp > 0 ? "bg-blue-500/30" : ""}`}
+                style={{ width: `${maxImp > 0 ? Math.max((imp / maxImp) * 100, 0.5) : 0}%` }} />
+            </div>
+            <span className="w-12 text-right text-white/30 tabular-nums">{imp}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, BacktestBet[]>; modelMeta: Record<string, ModelMeta> }) {
   const [evThreshold, setEvThreshold] = useState(0);
+  const [selectedModels, setSelectedModels] = useState<string[]>(MODEL_SUFFIXES.map((m) => m.suffix));
+  const [showFeatures, setShowFeatures] = useState<string | null>(null);
+  const [oddsMode, setOddsMode] = useState<OddsMode>("open");
+
+  const toggleModel = (suffix: string) => {
+    setSelectedModels((prev) =>
+      prev.includes(suffix) ? prev.filter((s) => s !== suffix) : [...prev, suffix]
+    );
+  };
 
   const rows = useMemo(() => {
     const result: StatRow[] = [];
-    const models = [
-      { suffix: "", label: "Heuristic" },
-      { suffix: "_lgbm", label: "LightGBM" },
-      { suffix: "_v2", label: "V2 Edge" },
-    ];
-
     for (const leagueBase of BACKTEST_LEAGUES) {
-      for (const { suffix, label } of models) {
+      for (const { suffix, label } of MODEL_SUFFIXES) {
+        if (!selectedModels.includes(suffix)) continue;
         const key = `${leagueBase}${suffix}`;
         const bets = (allData[key] ?? []).filter((b) => b.ev >= evThreshold);
         if (bets.length === 0) continue;
 
-        // Group by market
         const byMarket: Record<string, BacktestBet[]> = {};
         for (const b of bets) {
           const m = b.market || "all";
@@ -379,44 +482,117 @@ function LeagueStatTable({ allData }: { allData: Record<string, BacktestBet[]> }
           byMarket[m].push(b);
         }
 
-        // Add "all" row
         const allBets = bets;
-        const allWins = allBets.filter((b) => b.correct).length;
+        const allWins = allBets.filter((b) => betCorrect(b, oddsMode)).length;
         const wr = allWins / allBets.length;
+        const allFlatPnl = allBets.reduce((s, b) => s + betPnl(b, oddsMode), 0);
         result.push({
           league: leagueBase, market: "ALL", model: label,
-          bets: allBets.length, wins: allWins,
-          winRate: wr,
-          flatPnl: allBets.reduce((s, b) => s + b.pnl, 0),
-          flatRoi: allBets.reduce((s, b) => s + b.pnl, 0) / allBets.length * 100,
-          halfKellyPnl: kellyProfit(allBets, 0.5),
-          fullKellyPnl: kellyProfit(allBets, 1.0),
+          bets: allBets.length, wins: allWins, winRate: wr,
+          flatPnl: allFlatPnl,
+          flatRoi: allFlatPnl / allBets.length * 100,
+          halfKellyPnl: kellyProfit(allBets, 0.5, oddsMode),
+          fullKellyPnl: kellyProfit(allBets, 1.0, oddsMode),
         });
 
-        // Add per-market rows
         for (const [market, mBets] of Object.entries(byMarket)) {
-          const mWins = mBets.filter((b) => b.correct).length;
+          const mWins = mBets.filter((b) => betCorrect(b, oddsMode)).length;
+          const mFlatPnl = mBets.reduce((s, b) => s + betPnl(b, oddsMode), 0);
           result.push({
             league: leagueBase, market, model: label,
             bets: mBets.length, wins: mWins,
             winRate: mWins / mBets.length,
-            flatPnl: mBets.reduce((s, b) => s + b.pnl, 0),
-            flatRoi: mBets.reduce((s, b) => s + b.pnl, 0) / mBets.length * 100,
-            halfKellyPnl: kellyProfit(mBets, 0.5),
-            fullKellyPnl: kellyProfit(mBets, 1.0),
+            flatPnl: mFlatPnl,
+            flatRoi: mFlatPnl / mBets.length * 100,
+            halfKellyPnl: kellyProfit(mBets, 0.5, oddsMode),
+            fullKellyPnl: kellyProfit(mBets, 1.0, oddsMode),
           });
         }
       }
     }
     return result;
-  }, [allData, evThreshold]);
+  }, [allData, evThreshold, selectedModels, oddsMode]);
 
   const evOptions = [0, 5, 10, 15, 20, 30];
+
+  const getModelColor = (label: string) =>
+    MODEL_SUFFIXES.find((m) => m.label === label)?.color ?? "bg-white/5 text-white/50";
 
   return (
     <div className="mb-8">
       <div className="flex items-center gap-3 mb-4">
         <h2 className="text-lg font-bold">League / Stat Breakdown</h2>
+      </div>
+
+      {/* Model selector */}
+      <div className="mb-4">
+        <p className="text-[11px] text-white/40 mb-2">Models</p>
+        <div className="flex flex-wrap gap-1.5">
+          {MODEL_SUFFIXES.map((m) => (
+            <button key={m.suffix} onClick={() => toggleModel(m.suffix)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+                selectedModels.includes(m.suffix)
+                  ? `${m.color} border-current`
+                  : "bg-white/[0.02] text-white/20 border-transparent"
+              }`}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Show features for a selected model */}
+      <div className="mb-4">
+        <p className="text-[11px] text-white/40 mb-2">View Model Variables</p>
+        <div className="flex flex-wrap gap-1.5">
+          {MODEL_SUFFIXES.filter((m) => m.suffix !== "").map((m) => {
+            const metaKey = Object.keys(modelMeta).find((k) => k.endsWith(m.suffix));
+            if (!metaKey) return null;
+            return (
+              <button key={m.suffix}
+                onClick={() => setShowFeatures(showFeatures === m.suffix ? null : m.suffix)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+                  showFeatures === m.suffix
+                    ? `${m.color} border-current`
+                    : "bg-white/[0.02] text-white/30 border-transparent"
+                }`}>
+                {m.label} Features
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {showFeatures && (() => {
+        const metaKey = Object.keys(modelMeta).find((k) => k.endsWith(showFeatures));
+        return metaKey ? <ModelFeatures meta={modelMeta[metaKey]} /> : null;
+      })()}
+
+      {/* Odds mode toggle */}
+      <div className="mb-4">
+        <p className="text-[11px] text-white/40 mb-2">Bet at Odds</p>
+        <div className="flex flex-wrap gap-1.5">
+          {([
+            { value: "scrape" as OddsMode, label: "Scraped Odds" },
+            { value: "open" as OddsMode, label: "Opening Odds" },
+            { value: "close" as OddsMode, label: "Closing Odds" },
+          ]).map(({ value, label }) => (
+            <button key={value} onClick={() => setOddsMode(value)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+                oddsMode === value
+                  ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border-[#1C7CFF]/30"
+                  : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-white/25 mt-1">
+          {oddsMode === "scrape" ? "PnL at odds from when props were scraped" :
+           oddsMode === "open" ? "PnL if you bet at opening odds (best value)" :
+           "PnL if you bet at closing odds (market-adjusted)"}
+          {oddsMode !== "scrape" && " — only available for Model D bets with open/close data"}
+        </p>
       </div>
 
       <div className="mb-4">
@@ -456,11 +632,7 @@ function LeagueStatTable({ allData }: { allData: Record<string, BacktestBet[]> }
                   <td className="py-1.5 px-2">{isAll ? (LEAGUE_LABELS[r.league] ?? r.league) : ""}</td>
                   <td className="py-1.5 px-2">{isAll ? "ALL" : (MARKET_LABELS[r.market] ?? r.market)}</td>
                   <td className="py-1.5 px-2">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${
-                      r.model === "Heuristic" ? "bg-white/5 text-white/50" :
-                      r.model === "LightGBM" ? "bg-blue-500/10 text-blue-400/70" :
-                      "bg-purple-500/10 text-purple-400/70"
-                    }`}>{r.model}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${getModelColor(r.model)}`}>{r.model}</span>
                   </td>
                   <td className="py-1.5 px-2 text-right tabular-nums">{r.bets.toLocaleString()}</td>
                   <td className={`py-1.5 px-2 text-right tabular-nums ${r.winRate > 0.524 ? "text-green-400" : "text-red-400/70"}`}>
@@ -723,7 +895,7 @@ function LeagueStatTableWrapper() {
   const { data, isLoading } = useBacktestBets();
   if (isLoading) return <div className="text-white/30 text-center py-6">Loading...</div>;
   if (!data || Object.keys(data.byLeague).length === 0) return null;
-  return <LeagueStatTable allData={data.byLeague} />;
+  return <LeagueStatTable allData={data.byLeague} modelMeta={data.modelMeta} />;
 }
 
 export default function ModelAnalysisPage() {

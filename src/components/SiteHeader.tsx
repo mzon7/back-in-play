@@ -35,9 +35,7 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
         {/* Desktop nav */}
         <div className="hidden md:flex items-center gap-1 sm:gap-3 text-sm font-medium">
           <Link to="/" className="px-2 py-1 text-[#1C7CFF] shrink-0">Home</Link>
-          {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (
-            <Link to="/recovery-stats" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Recovery Stats</Link>
-          )}
+          <Link to="/recovery-stats" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Recovery Stats</Link>
           <Link to="/props" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Props</Link>
           <Link to="/performance-curves" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Performance Curves</Link>
           <Link to="/tracked-players" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0" title="Tracked Players">&#9733; <span className="hidden sm:inline">Tracked</span></Link>
@@ -66,12 +64,7 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
             <Link to="/performance-curves" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Performance Curves</Link>
             <Link to="/props" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Props</Link>
             <Link to="/tracked-players" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Tracked Players</Link>
-            {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (
-              <>
-                <Link to="/recovery-stats" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Recovery Stats</Link>
-                <Link to="/returning-today" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Returning Today</Link>
-              </>
-            )}
+            <Link to="/recovery-stats" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Recovery Stats</Link>
           </div>
         </div>
       )}
