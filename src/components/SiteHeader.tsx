@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import { usePremiumBannerTracking, trackPremiumBannerClick } from "../lib/analytics";
+import { WaitlistModal, useWaitlistModal } from "./WaitlistModal";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -14,6 +16,10 @@ interface SiteHeaderProps {
 
 export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const waitlist = useWaitlistModal();
+  const location = useLocation();
+  const currentPage = location.pathname === "/" ? "homepage" : location.pathname.replace(/^\//, "");
+  usePremiumBannerTracking(currentPage);
   const allTabs: { key: string; label: string }[] = [
     { key: "top", label: "Top Players" },
     ...LEAGUE_ORDER.map((s) => ({ key: s, label: LEAGUE_LABELS[s] ?? s.toUpperCase() })),
@@ -32,16 +38,17 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
           <span className="text-[9px] font-semibold tracking-wide rounded-full px-2 py-0.5 bg-[#1C7CFF]/10 text-[#1C7CFF]/60 border border-[#1C7CFF]/15">Early Access</span>
         </Link>
 
-        {/* Desktop nav */}
+        {/* Desktop nav — ordered by value: Props emphasized */}
         <div className="hidden md:flex items-center gap-1 sm:gap-3 text-sm font-medium">
-          <Link to="/" className="px-2 py-1 text-[#1C7CFF] shrink-0">Home</Link>
-          <Link to="/recovery-stats" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Recovery Stats</Link>
-          <Link to="/props" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Props</Link>
-          <Link to="/performance-curves" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Performance Curves</Link>
-          <Link to="/tracked-players" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0" title="Tracked Players">&#9733; <span className="hidden sm:inline">Tracked</span></Link>
-          {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (
-            <Link to="/returning-today" className="px-2 py-1 text-white/60 hover:text-white transition-colors shrink-0">Returning Today</Link>
-          )}
+          <Link to="/" className={`px-2 py-1 shrink-0 ${currentPage === "homepage" ? "text-[#1C7CFF]" : "text-white/60 hover:text-white transition-colors"}`}>Home</Link>
+          <Link to="/props" className={`px-2 py-1 shrink-0 flex items-center gap-1 ${currentPage === "props" ? "text-[#3DFF8F]" : "text-[#3DFF8F]/70 hover:text-[#3DFF8F] transition-colors"}`}>
+            <span>Props</span>
+            <span className="text-[8px] font-bold uppercase tracking-wider bg-[#3DFF8F]/15 text-[#3DFF8F]/80 px-1.5 py-0.5 rounded-full border border-[#3DFF8F]/20">Signals</span>
+          </Link>
+          <Link to="/returning-today" className={`px-2 py-1 shrink-0 ${currentPage === "returning-today" ? "text-white" : "text-white/50 hover:text-white/70 transition-colors"}`}>Returning Today</Link>
+          <Link to="/recovery-stats" className={`px-2 py-1 shrink-0 ${currentPage === "recovery-stats" ? "text-white" : "text-white/50 hover:text-white/70 transition-colors"}`}>Recovery Stats</Link>
+          <Link to="/performance-curves" className={`px-2 py-1 shrink-0 ${currentPage === "performance-curves" ? "text-white" : "text-white/50 hover:text-white/70 transition-colors"}`}>Curves</Link>
+          <Link to="/tracked-players" className={`px-2 py-1 shrink-0 ${currentPage === "tracked-players" ? "text-white" : "text-white/50 hover:text-white/70 transition-colors"}`} title="Tracked Players">&#9733;</Link>
         </div>
 
         {/* Mobile hamburger */}
@@ -61,10 +68,11 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
         <div className="md:hidden border-t border-white/10 bg-[#0A0E1A]/95 backdrop-blur-md">
           <div className="flex flex-col px-4 py-2 text-sm font-medium">
             <Link to="/" onClick={() => setMenuOpen(false)} className="py-2.5 text-[#1C7CFF]">Home</Link>
-            <Link to="/performance-curves" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Performance Curves</Link>
-            <Link to="/props" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Props</Link>
-            <Link to="/tracked-players" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Tracked Players</Link>
+            <Link to="/props" onClick={() => setMenuOpen(false)} className="py-2.5 text-[#3DFF8F]/80 flex items-center gap-2">Props <span className="text-[8px] font-bold uppercase bg-[#3DFF8F]/15 text-[#3DFF8F]/70 px-1.5 py-0.5 rounded-full">Signals</span></Link>
+            <Link to="/returning-today" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Returning Today</Link>
             <Link to="/recovery-stats" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Recovery Stats</Link>
+            <Link to="/performance-curves" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Performance Curves</Link>
+            <Link to="/tracked-players" onClick={() => setMenuOpen(false)} className="py-2.5 text-white/60">Tracked Players</Link>
           </div>
         </div>
       )}
@@ -95,16 +103,20 @@ export function SiteHeader({ activeTab, onTabChange, showTabs = false }: SiteHea
         </div>
       )}
     </nav>
-    <div className="border-b border-white/5 bg-[#0A0E1A]/80">
+    <div className="border-b border-white/5 bg-gradient-to-r from-[#0A0E1A]/80 to-[#0D1224]/80">
       <div className="max-w-5xl mx-auto px-4 py-1.5 flex items-center justify-between gap-4">
         <p className="text-[11px] text-white/40 leading-relaxed">
-          🚀 Early Access — Back In Play is the first public version of a sports injury recovery analytics platform. New data and models are added weekly.
+          <span className="text-purple-400/60">Premium</span> — Deeper model insights, advanced filters, and full player breakdowns coming soon
         </p>
-        <a href="mailto:feedback@backinplay.ai" className="text-[11px] text-white/30 hover:text-white/50 transition-colors whitespace-nowrap shrink-0">
-          Send feedback
-        </a>
+        <button
+          onClick={() => { trackPremiumBannerClick(currentPage); waitlist.openModal("premium_banner", currentPage); }}
+          className="text-[10px] text-purple-400/40 hover:text-purple-400/70 transition-colors whitespace-nowrap shrink-0 border border-purple-400/15 rounded-full px-2.5 py-0.5"
+        >
+          Get early access
+        </button>
       </div>
     </div>
+    <WaitlistModal open={waitlist.open} onClose={waitlist.closeModal} source={waitlist.source} page={waitlist.page} />
     </>
   );
 }

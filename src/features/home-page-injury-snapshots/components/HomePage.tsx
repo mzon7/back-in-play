@@ -22,6 +22,9 @@ import type { PerformanceCurve } from "../../performance-curves/lib/types";
 import { STAT_LABELS } from "../../performance-curves/lib/types";
 import { isRealInjury } from "../../../lib/injuryFilters";
 import { computeEV, formatEV, parseOdds, type EVResult } from "../../../lib/evModel";
+import { EarlyAccessCTA } from "../../../components/PremiumTease";
+import { WaitlistModal, useWaitlistModal } from "../../../components/WaitlistModal";
+import { trackPlayerAnalysisView } from "../../../lib/analytics";
 import { useQuery } from "@tanstack/react-query";
 
 const LazyReturningToday = lazy(() => import("../../../pages/ReturningTodayEmbed"));
@@ -474,6 +477,65 @@ function StatusUpdatesBlock({ statusChanges, isLoadingChanges, showLeague, leagu
           </Link>
         ))}
       </div>
+    </div>
+  );
+}
+
+/* -- Hero Section: compact product intro -- */
+
+function HeroSection() {
+  const heroWaitlist = useWaitlistModal();
+  return (
+    <div className="mb-6">
+      {/* Hero */}
+      <div className="text-center py-5">
+        <h1 className="text-xl sm:text-2xl font-bold text-white leading-tight mb-2">
+          Find where returning players are mispriced<br className="hidden sm:inline" /> before the market adjusts
+        </h1>
+        <p className="text-sm text-white/40 leading-relaxed max-w-lg mx-auto">
+          Track injuries, recovery trends, and post-return performance across NBA, NFL, NHL, MLB, and EPL.
+        </p>
+        <div className="flex items-center justify-center gap-3 mt-4">
+          <a
+            href="#section-headlines"
+            className="px-4 py-2 rounded-lg bg-[#1C7CFF]/15 border border-[#1C7CFF]/25 text-[#1C7CFF] text-sm font-medium hover:bg-[#1C7CFF]/25 transition-colors"
+          >
+            Explore today&apos;s insights
+          </a>
+          <button
+            onClick={() => heroWaitlist.openModal("hero_cta", "homepage")}
+            className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white/50 text-sm font-medium hover:text-white/70 hover:border-white/20 transition-colors"
+          >
+            Get early access
+          </button>
+        </div>
+      </div>
+
+      {/* How it works — clickable 3-step strip */}
+      <div className="grid grid-cols-3 gap-3 mt-1">
+        {([
+          { step: "1", label: "Track injuries and return timelines", sub: "See who just returned", icon: "📋", href: "/returning-today", accent: false },
+          { step: "2", label: "Model performance after return", sub: "Understand post-injury trends", icon: "📊", href: "/performance-curves", accent: false },
+          { step: "3", label: "Compare to current lines", sub: "Find model vs market gaps", icon: "⚖️", href: "/props", accent: true },
+        ] as const).map((s) => (
+          <Link
+            key={s.step}
+            to={s.href}
+            className={`flex items-start gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer transition-all group ${
+              s.accent
+                ? "bg-[#3DFF8F]/[0.04] border border-[#3DFF8F]/15 hover:border-[#3DFF8F]/30 hover:bg-[#3DFF8F]/[0.07]"
+                : "bg-white/[0.03] border border-white/5 hover:border-white/15 hover:bg-white/[0.05]"
+            }`}
+          >
+            <span className="text-base shrink-0 mt-0.5">{s.icon}</span>
+            <div>
+              <p className={`text-[11px] leading-snug ${s.accent ? "text-white/50 group-hover:text-white/70" : "text-white/40 group-hover:text-white/60"} transition-colors`}>{s.label}</p>
+              <p className={`text-[9px] mt-0.5 ${s.accent ? "text-[#3DFF8F]/40" : "text-white/20"}`}>{s.sub}</p>
+            </div>
+          </Link>
+        ))}
+      </div>
+      <WaitlistModal open={heroWaitlist.open} onClose={heroWaitlist.closeModal} source={heroWaitlist.source} page={heroWaitlist.page} />
     </div>
   );
 }
@@ -941,7 +1003,9 @@ function InjuriesView({ activeTab }: { activeTab: string }) {
   if (isTop) {
     return (
       <div className="space-y-6">
+        <HeroSection />
         <HeadlineStories injuries={injuries} statusChanges={statusChanges} showLeague />
+        <MispricedReturnTable />
         <RecoveryInsights />
         <ReturningPlayerPropOpportunities />
         <RecoveryCurvePreview />
@@ -963,6 +1027,7 @@ function InjuriesView({ activeTab }: { activeTab: string }) {
       <TeamDropdown teams={teams} counts={injuries} teamFilter={teamFilter} setTeamFilter={setTeamFilter} />
       <JumpNav grouped={grouped} />
       <HeadlineStories injuries={filtered} statusChanges={statusChanges} leagueSlug={activeTab} teamFilter={teamFilter} />
+      <MispricedReturnTable />
       <RecoveryInsights />
       <ReturningPlayerPropOpportunities />
       <RecoveryCurvePreview />
@@ -1419,11 +1484,19 @@ function useReturningPlayerProps() {
   return useQuery<PropOpportunity[]>({
     queryKey: ["bip-home-prop-opps", today],
     queryFn: async () => {
-      // 1. Today's props (include odds for EV model)
-      const { data: props } = await supabase
+      // 1. Today's props (include odds for EV model); fall back to most recent
+      let { data: props } = await supabase
         .from("back_in_play_player_props")
         .select("player_id, player_name, market, line, over_price, under_price, source")
         .eq("game_date", today);
+      if (!props?.length) {
+        const { data: recent } = await supabase
+          .from("back_in_play_player_props")
+          .select("player_id, player_name, market, line, over_price, under_price, source")
+          .order("game_date", { ascending: false })
+          .limit(1000);
+        props = recent ?? [];
+      }
       if (!props?.length) return [];
 
       // Group by player, keep first prop per player (priority market)
@@ -1602,6 +1675,300 @@ function useReturningPlayerProps() {
   });
 }
 
+/* -- Potentially Mispriced Return Performances (STEP 1+2) -- */
+function MispricedReturnTable() {
+  const { data: opps = [], isLoading: oppsLoading } = useReturningPlayerProps();
+  const { data: curves = [], isLoading: curvesLoading } = usePerformanceCurves();
+
+  const enriched = useMemo(() => {
+    if (opps.length === 0 || curves.length === 0) return [];
+
+    const curveMap = new Map<string, PerformanceCurve>();
+    for (const c of curves) {
+      if (c.position) continue;
+      const key = `${c.injury_type_slug}|${c.league_slug}`;
+      const ex = curveMap.get(key);
+      if (!ex || c.sample_size > ex.sample_size) curveMap.set(key, c);
+    }
+
+    const findCurve = (injuryType: string, leagueSlug: string): PerformanceCurve | null => {
+      const slug = injuryType.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const exact = curveMap.get(`${slug}|${leagueSlug}`);
+      if (exact) return exact;
+      for (const [key, curve] of curveMap) {
+        const [cSlug, cLeague] = key.split("|");
+        if (cLeague === leagueSlug && (cSlug.includes(slug) || slug.includes(cSlug))) return curve;
+      }
+      return null;
+    };
+
+    const MKT_STAT: Record<string, string> = {
+      player_points: "stat_pts", player_rebounds: "stat_reb", player_assists: "stat_ast",
+      player_pass_yds: "stat_pass_yds", player_rush_yds: "stat_rush_yds",
+      player_reception_yds: "stat_rec_yds", player_goals: "stat_goals",
+      player_shots_on_goal: "stat_sog", batter_hits: "stat_h", batter_rbis: "stat_rbi",
+    };
+
+    return opps
+      .map((opp) => {
+        const curve = findCurve(opp.injuryType, opp.leagueSlug);
+        const statKey = MKT_STAT[opp.propMarket];
+        let ev: EVResult | null = null;
+        if (curve && statKey && opp.baseline != null && opp.baseline > 0 && opp.propLine != null && opp.gamesBack > 0) {
+          ev = computeEV({
+            baseline: opp.baseline,
+            propLine: opp.propLine,
+            overOdds: parseOdds(opp.overOdds),
+            underOdds: parseOdds(opp.underOdds),
+            gamesSinceReturn: opp.gamesBack,
+            recentAvg: opp.recentAvg,
+            curve,
+            leagueSlug: opp.leagueSlug,
+            statKey,
+            preInjuryMinutes: opp.preInjuryMinutes,
+            currentMinutes: opp.currentMinutes,
+          });
+        }
+        return { ...opp, ev, projection: ev?.expectedCombined ?? null };
+      })
+      .filter((o) => o.ev?.recommendation && o.ev?.bestEv != null && o.ev.bestEv > 0)
+      .sort((a, b) => Math.abs(b.ev?.bestEv ?? 0) - Math.abs(a.ev?.bestEv ?? 0))
+      .slice(0, 8);
+  }, [opps, curves]);
+
+  if (oppsLoading || curvesLoading || enriched.length === 0) return null;
+
+  // Daily summary counts
+  const returningToday = opps.filter((o) => o.gamesBack <= 1).length;
+  const earlyReturn = opps.filter((o) => o.gamesBack <= 3).length;
+  const significantEdge = enriched.filter((o) => o.ev && o.ev.bestEv != null && Math.abs(o.ev.bestEv) > 10).length;
+
+  // STEP 1: Generate "why" signal for each row
+  function getSignalReason(opp: (typeof enriched)[0]): string {
+    if (opp.gamesBack <= 3) {
+      if (opp.preInjuryMinutes && opp.currentMinutes && opp.currentMinutes / opp.preInjuryMinutes < 0.8) return "Early return + reduced minutes";
+      return "Early return suppression";
+    }
+    if (opp.preInjuryMinutes && opp.currentMinutes && opp.currentMinutes / opp.preInjuryMinutes < 0.8) return "Minutes still reduced";
+    if (opp.baseline && opp.recentAvg && opp.recentAvg / opp.baseline < 0.85) return "Usage not recovered";
+    if (opp.curveImpactG3 && opp.curveImpactG3.diff < -0.3) return `Historical underperformance G1–G3`;
+    if (opp.baseline && opp.recentAvg && opp.recentAvg / opp.baseline >= 0.95) return "Volume restored post-return";
+    return "Return window impact";
+  }
+
+  // STEP 2: Games back badge colors
+  function gamesBackBadge(gb: number) {
+    const color = gb <= 3
+      ? "bg-red-500/15 text-red-400/90 border-red-500/25"
+      : gb <= 6
+      ? "bg-amber-500/15 text-amber-400/90 border-amber-500/25"
+      : "bg-green-500/15 text-green-400/90 border-green-500/25";
+    return (
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-semibold whitespace-nowrap ${color}`}>
+        Game {gb} After Return
+      </span>
+    );
+  }
+
+  // Top 2 featured players for highlight cards
+  const featured = enriched.slice(0, 2);
+
+  return (
+    <section className="mt-5">
+      {/* Primary section — strongest visual treatment, boosted separation */}
+      <div className="rounded-xl border border-blue-500/25 bg-gradient-to-br from-blue-500/[0.08] to-purple-500/[0.05] p-4 sm:p-5 shadow-[0_0_40px_rgba(28,124,255,0.06)]">
+        {/* Return Impact Today bar */}
+        {(returningToday > 0 || earlyReturn > 0 || significantEdge > 0) && (
+          <div className="rounded-lg bg-white/[0.03] border border-blue-500/15 px-3.5 py-2.5 mb-4">
+            <p className="text-[11px] font-semibold text-blue-400/80 mb-1">Return Impact Today</p>
+            <div className="flex items-center gap-4 text-[11px] text-white/40 flex-wrap">
+              {returningToday > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                  {returningToday} player{returningToday !== 1 ? "s" : ""} returned today
+                </span>
+              )}
+              {earlyReturn > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-400/80" />
+                  <span className="font-medium text-red-400/70">{earlyReturn} in early return window</span>
+                  <span className="text-white/25">(first 3 games)</span>
+                </span>
+              )}
+              {significantEdge > 0 && (
+                <span>{significantEdge} projection{significantEdge !== 1 ? "s" : ""} with &gt;10% model gap</span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Section title — larger and more prominent */}
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm">📊</span>
+            <span className="text-[13px] font-bold uppercase tracking-[0.1em] text-blue-400">
+              Top Return-Based Model Signals <span className="text-blue-300">Today</span>
+            </span>
+            <span className="text-[8px] text-white/20 font-medium">Updated today</span>
+          </div>
+          <Link
+            to="/props?sort=best"
+            className="text-[11px] text-white/30 hover:text-white/50 transition-colors"
+          >
+            View all projections →
+          </Link>
+        </div>
+        <p className="text-[11px] text-white/30 mb-2">
+          Top signals based on largest model vs market differences
+        </p>
+        <p className="text-[11px] text-white/35 mb-5">
+          Players where the model sees the largest differences between expected post-injury performance and current lines
+        </p>
+
+        {/* Featured highlight cards — top 2 (dominant) */}
+        {featured.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+            {featured.map((opp, idx) => {
+              const isOver = opp.ev?.recommendation === "OVER";
+              const lc = leagueColor(opp.leagueSlug);
+              const gapPct = opp.projection != null && opp.propLine != null && opp.propLine > 0
+                ? ((opp.projection - opp.propLine) / opp.propLine * 100) : null;
+              return (
+                <div
+                  key={`feat-${opp.playerId}`}
+                  className={`rounded-xl border p-4 cursor-pointer transition-all ${
+                    isOver
+                      ? "bg-green-500/[0.08] border-green-500/25 hover:border-green-500/40 shadow-[0_0_20px_rgba(34,197,94,0.04)]"
+                      : "bg-red-500/[0.08] border-red-500/25 hover:border-red-500/40 shadow-[0_0_20px_rgba(239,68,68,0.04)]"
+                  }`}
+                  onClick={() => window.location.href = `/props?player=${encodeURIComponent(opp.playerName)}`}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full mb-1.5 inline-block ${
+                        idx === 0 ? "bg-amber-500/15 text-amber-400/80 border border-amber-500/20" : "bg-blue-500/15 text-blue-400/70 border border-blue-500/20"
+                      }`}>
+                        {idx === 0 ? "Largest gap today" : "Top signal"}
+                      </span>
+                      <p className="text-[13px] font-bold text-white">{opp.playerName}</p>
+                      <div className="flex items-center gap-1.5 text-[9px] text-white/30 mt-0.5">
+                        <span style={{ color: `${lc}aa` }}>{LEAGUE_LABELS[opp.leagueSlug]}</span>
+                        <span>·</span>
+                        <span>{opp.injuryType}</span>
+                        <span>·</span>
+                        {gamesBackBadge(opp.gamesBack)}
+                      </div>
+                    </div>
+                    <span className={`text-base font-black ${isOver ? "text-green-400" : "text-red-400"}`}>
+                      {opp.ev?.recommendation}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-4 text-[11px]">
+                    <span className="text-white/40">{PROP_MARKET_LABELS[opp.propMarket] ?? opp.propMarket}</span>
+                    <span className="text-white/60 tabular-nums">Market: {opp.propLine}</span>
+                    <span className="text-white/40 tabular-nums">Model: {opp.projection?.toFixed(1)}</span>
+                    {gapPct != null && (
+                      <span className={`text-sm font-bold tabular-nums ${gapPct < 0 ? "text-red-400" : "text-green-400"}`}>
+                        {gapPct > 0 ? "+" : ""}{gapPct.toFixed(0)}%
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[9px] text-white/25 mt-2 italic">{getSignalReason(opp)}</p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <p className="text-[10px] text-white/25 font-medium uppercase tracking-wider mb-2">More signals</p>
+        <div className="rounded-xl border border-white/5 overflow-hidden opacity-90">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="text-[9px] text-white/20 uppercase tracking-wider border-b border-white/5 bg-white/[0.02]">
+                  <th className="px-3 py-2 font-medium">Player</th>
+                  <th className="px-3 py-2 font-medium">Injury</th>
+                  <th className="px-3 py-2 font-medium">Return Status</th>
+                  <th className="px-3 py-2 font-medium">Stat</th>
+                  <th className="px-3 py-2 font-medium text-right">Market</th>
+                  <th className="px-3 py-2 font-medium text-right">Model</th>
+                  <th className="px-3 py-2 font-medium text-right">Signal</th>
+                  <th className="px-3 py-2 font-medium">Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                {enriched.map((opp) => {
+                  const isOver = opp.ev?.recommendation === "OVER";
+                  const lc = leagueColor(opp.leagueSlug);
+                  // STEP 3: Model vs market gap
+                  const gapPct = opp.projection != null && opp.propLine != null && opp.propLine > 0
+                    ? ((opp.projection - opp.propLine) / opp.propLine * 100)
+                    : null;
+                  return (
+                    <tr
+                      key={opp.playerId}
+                      className="border-b border-white/5 last:border-0 hover:bg-white/[0.03] transition-colors cursor-pointer group"
+                      onClick={() => {
+                        trackPlayerAnalysisView({
+                          player_name: opp.playerName,
+                          injury_type: opp.injuryType,
+                          games_since_return: opp.gamesBack,
+                          stat_type: PROP_MARKET_LABELS[opp.propMarket] ?? opp.propMarket,
+                          edge_percent: opp.ev?.bestEv ?? undefined,
+                          page_origin: "homepage",
+                        });
+                        window.location.href = `/props?player=${encodeURIComponent(opp.playerName)}`;
+                      }}
+                    >
+                      <td className="px-3 py-2.5">
+                        <div>
+                          <p className="text-[11px] font-medium text-white truncate max-w-[110px] group-hover:text-blue-400 transition-colors">{opp.playerName}</p>
+                          <p className="text-[9px]" style={{ color: `${lc}88` }}>{LEAGUE_LABELS[opp.leagueSlug]}</p>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className="text-[10px] text-white/50">{opp.injuryType}</span>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {gamesBackBadge(opp.gamesBack)}
+                      </td>
+                      <td className="px-3 py-2.5 text-[10px] text-white/50">{PROP_MARKET_LABELS[opp.propMarket] ?? opp.propMarket}</td>
+                      <td className="px-3 py-2.5 text-[11px] text-white/70 text-right tabular-nums font-medium">{opp.propLine}</td>
+                      <td className="px-3 py-2.5 text-right">
+                        <span className="text-[11px] text-white/50 tabular-nums">{opp.projection?.toFixed(1) ?? "—"}</span>
+                        {gapPct != null && (
+                          <p className="text-[9px] text-white/30 mt-0.5 tabular-nums">
+                            {gapPct > 0 ? "+" : ""}{gapPct.toFixed(0)}% vs market
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right">
+                        {opp.ev && opp.ev.recommendation && opp.ev.bestEv != null && (
+                          <span className={`text-[11px] font-bold tabular-nums ${isOver ? "text-green-400" : "text-red-400"}`}>
+                            {opp.ev.recommendation}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className="text-[9px] text-white/35 italic">{getSignalReason(opp)}</span>
+                        <span className="text-[9px] text-blue-400/50 ml-1.5 opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <p className="text-[10px] text-white/20 mt-3 text-center italic">
+          Early return performance often lags expectations — these are the biggest current gaps
+        </p>
+        <EarlyAccessCTA className="mt-1" page="homepage" location="mispriced_table_footer" />
+      </div>
+    </section>
+  );
+}
+
 function ReturningPlayerPropOpportunities() {
   const { data: opps = [], isLoading: oppsLoading } = useReturningPlayerProps();
   const { data: curves = [], isLoading: curvesLoading } = usePerformanceCurves();
@@ -1712,7 +2079,7 @@ function ReturningPlayerPropOpportunities() {
       <div className="rounded-xl border border-white/8 bg-gradient-to-br from-orange-500/[0.03] to-transparent p-4 sm:p-5">
         <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-1.5">
-            <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-orange-400/80">Returning Player Prop Opportunities</span>
+            <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-orange-400/80">Return Performance Projections</span>
             <Link
               to="/props"
               className="shrink-0 w-4 h-4 rounded-full border border-white/12 text-white/25 hover:text-white/50 hover:border-white/25 transition-colors text-[9px] font-semibold flex items-center justify-center"
@@ -1725,10 +2092,10 @@ function ReturningPlayerPropOpportunities() {
             to="/props?sort=gap"
             className="text-[11px] text-white/30 hover:text-white/50 transition-colors"
           >
-            See all edges &rarr;
+            View all projections &rarr;
           </Link>
         </div>
-        <p className="text-[11px] text-white/25 mb-3">Injury-adjusted EV model estimates for returning players</p>
+        <p className="text-[11px] text-white/25 mb-3">Injury-adjusted performance projections for returning players</p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {enriched.map((opp) => {

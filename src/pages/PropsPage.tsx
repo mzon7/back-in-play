@@ -6,11 +6,15 @@ import { SiteHeader } from "../components/SiteHeader";
 import { SEO } from "../components/seo/SEO";
 import { PlayerAvatar } from "../components/PlayerAvatar";
 import { InjuryPlayerCard } from "../components/InjuryPlayerCard";
-import { trackLeagueFilter } from "../lib/analytics";
+import { trackLeagueFilter, trackPlayerAnalysisView } from "../lib/analytics";
 import { leagueColor } from "../lib/leagueColors";
 import { usePerformanceCurves } from "../features/performance-curves/lib/queries";
 import type { PerformanceCurve } from "../features/performance-curves/lib/types";
-import { computeEV, formatEV, parseOdds, type EVResult } from "../lib/evModel";
+import { computeEV, parseOdds, type EVResult } from "../lib/evModel";
+import { BlurredInsight, EarlyAccessCTA } from "../components/PremiumTease";
+import { WhyThisSignal } from "../components/WhyThisSignal";
+import { PremiumGate } from "../components/PremiumGate";
+import { PremiumUnlockCounter } from "../components/PremiumUnlockCounter";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -97,6 +101,23 @@ const SOURCE_LABELS: Record<string, string> = {
   betrivers: "BetRivers",
   bovada: "Bovada",
 };
+
+// Stat filter options per league
+const STAT_FILTERS: { value: string; label: string; markets: string[] }[] = [
+  { value: "all", label: "All Stats", markets: [] },
+  { value: "pts", label: "PTS", markets: ["player_points"] },
+  { value: "reb", label: "REB", markets: ["player_rebounds"] },
+  { value: "ast", label: "AST", markets: ["player_assists"] },
+  { value: "pra", label: "PRA", markets: ["player_points_rebounds_assists"] },
+  { value: "3pt", label: "3PT", markets: ["player_threes"] },
+  { value: "pass", label: "Pass Yds", markets: ["player_pass_yds"] },
+  { value: "rush", label: "Rush Yds", markets: ["player_rush_yds"] },
+  { value: "rec", label: "Rec Yds", markets: ["player_reception_yds", "player_receptions"] },
+  { value: "goals", label: "Goals", markets: ["player_goals"] },
+  { value: "sog", label: "SOG", markets: ["player_shots_on_goal", "player_shots", "player_shots_on_target"] },
+  { value: "hits", label: "Hits", markets: ["batter_hits"] },
+  { value: "tb", label: "TB", markets: ["batter_total_bases"] },
+];
 
 /** Format game status from commence_time */
 function gameStatus(commenceTime: string | null | undefined, gameDate: string | undefined): { label: string; started: boolean; tomorrow: boolean } {
@@ -185,7 +206,7 @@ function arrMedian(arr: number[]): number {
  * 1. Filter out games below 25% of the player's median minutes (injury exits)
  * 2. Compute per-minute rate for each game
  * 3. Take median of rates (robust to outliers)
- * 4. Multiply by median minutes → per-game expected value
+ * 4. Multiply by median minutes -> per-game expected value
  */
 function computeAvg(games: any[], n: number): PreInjuryAvg | null {
   // First pass: get all games with any minutes to compute typical minutes
@@ -220,7 +241,7 @@ function computeAvg(games: any[], n: number): PreInjuryAvg | null {
         rates.push(val / g.minutes);
       }
     }
-    // Median per-minute rate × median minutes = expected per-game stat
+    // Median per-minute rate x median minutes = expected per-game stat
     result[key] = rates.length > 0
       ? Math.round(arrMedian(rates) * medMinutes * 10) / 10
       : null;
@@ -253,7 +274,7 @@ function usePropsWithPlayers() {
       }
       if (!props || props.length === 0) return [];
 
-      // 2. Group props by player_id (skip nulls — unresolved players)
+      // 2. Group props by player_id (skip nulls)
       const propsByPlayer = new Map<string, typeof props>();
       for (const p of props) {
         if (!p.player_id) continue;
@@ -266,14 +287,11 @@ function usePropsWithPlayers() {
 
       // 3. Parallel: players (with team+league joins), injuries, game logs
       const [playersRes, leaguesRes, ...injuryChunks] = await Promise.all([
-        // Players with team+league join (1 call instead of 3 sequential)
         supabase
           .from("back_in_play_players")
           .select("player_id, player_name, slug, position, team_id, league_id, headshot_url, espn_id, is_star, is_starter, team:back_in_play_teams(team_name, league_id), league:back_in_play_leagues!back_in_play_players_league_id_fkey(slug)")
           .in("player_id", playerIds),
-        // Leagues (small, fast)
         supabase.from("back_in_play_leagues").select("league_id, slug"),
-        // Injuries — parallel chunks
         ...Array.from({ length: Math.ceil(playerIds.length / 200) }, (_, i) =>
           supabase
             .from("back_in_play_injuries")
@@ -299,7 +317,7 @@ function usePropsWithPlayers() {
         }
       }
 
-      // 4. Game logs — parallel chunks, 20 players per chunk to ensure enough rows per player
+      // 4. Game logs — parallel chunks
       const LOG_CHUNK_SIZE = 20;
       const logChunks = await Promise.all(
         Array.from({ length: Math.ceil(playerIds.length / LOG_CHUNK_SIZE) }, (_, i) =>
@@ -334,10 +352,8 @@ function usePropsWithPlayers() {
         let preInjuryGames = allGames;
         const injuryDate = injury?.date_injured;
         if (injuryDate) {
-          // Only games before the injury date
           preInjuryGames = allGames.filter((g: any) => g.game_date < injuryDate);
         }
-        // Sort descending (most recent first)
         preInjuryGames.sort((a: any, b: any) => b.game_date.localeCompare(a.game_date));
 
         const avg5 = computeAvg(preInjuryGames, 5);
@@ -403,14 +419,139 @@ function usePropsWithPlayers() {
   });
 }
 
-function PlayerPropCard({ player, sourceFilter, curve, highlighted }: { player: PropsPlayer; sourceFilter: string; curve?: PerformanceCurve | null; highlighted?: boolean }) {
+// ─── Recovery Curve Mini Visualization ───────────────────────────────────────
+
+function RecoveryCurveMini({ curve, leagueSlug, gamesBack }: { curve: PerformanceCurve; leagueSlug: string; gamesBack: number }) {
+  const ps = PRIMARY_STAT[leagueSlug];
+  if (!ps) return null;
+  const baselines = curve.stat_baselines ?? {};
+  const medians = curve.stat_median_pct ?? {};
+  const base = baselines[ps.key];
+  const pcts = medians[ps.key] as number[] | undefined;
+  if (!base || !pcts || pcts.length === 0) return null;
+
+  const points = pcts.slice(0, 10);
+  const minPct = Math.min(...points, 0.7);
+  const maxPct = Math.max(...points, 1.1);
+  const range = maxPct - minPct || 0.1;
+  const w = 160;
+  const h = 40;
+  const step = w / (points.length - 1 || 1);
+
+  const pathPoints = points.map((p, i) => {
+    const x = i * step;
+    const y = h - ((p - minPct) / range) * h;
+    return `${x},${y}`;
+  });
+  const path = `M${pathPoints.join(" L")}`;
+
+  // Baseline line at pct=1.0
+  const baselineY = h - ((1.0 - minPct) / range) * h;
+
+  // Current game marker
+  const curIdx = Math.min(gamesBack - 1, points.length - 1);
+  const curX = curIdx >= 0 ? curIdx * step : 0;
+  const curY = curIdx >= 0 ? h - ((points[curIdx] - minPct) / range) * h : h / 2;
+
+  return (
+    <svg width={w} height={h + 4} className="overflow-visible">
+      {/* Baseline */}
+      <line x1={0} y1={baselineY} x2={w} y2={baselineY} stroke="rgba(255,255,255,0.1)" strokeDasharray="3,3" />
+      {/* Curve */}
+      <path d={path} fill="none" stroke="rgba(59,130,246,0.5)" strokeWidth={1.5} />
+      {/* Current position */}
+      {curIdx >= 0 && (
+        <circle cx={curX} cy={curY} r={3} fill="#3b82f6" stroke="#0a0f1a" strokeWidth={1.5} />
+      )}
+    </svg>
+  );
+}
+
+// ─── STEP 3: Edge strength label (cap display, keep actual for sorting) ──────
+
+function edgeLabel(evPct: number): { text: string; color: string } {
+  const abs = Math.abs(evPct);
+  if (abs >= 15) return { text: "Strong signal", color: evPct > 0 ? "text-green-400" : "text-red-400" };
+  if (abs >= 7) return { text: "Moderate signal", color: evPct > 0 ? "text-green-400/80" : "text-red-400/80" };
+  return { text: "Weak signal", color: "text-white/40" };
+}
+
+// ─── STEP 4: Game return badge ──────────────────────────────────────────────
+
+function GameReturnBadge({ gamesBack }: { gamesBack: number }) {
+  if (gamesBack <= 0) return null;
+  const color = gamesBack <= 3
+    ? "bg-red-500/15 text-red-400/90 border-red-500/25"
+    : gamesBack <= 6
+    ? "bg-amber-500/15 text-amber-400/90 border-amber-500/25"
+    : "bg-green-500/15 text-green-400/90 border-green-500/25";
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[10px] font-semibold ${color}`}>
+      Game {gamesBack} After Return
+    </span>
+  );
+}
+
+// ─── STEP 2: Auto-generate "why this edge" explanation per prop ──────────────
+
+function generatePropExplanation(
+  market: string,
+  line: number | null,
+  preVal: number | null,
+  returnVal: number | null,
+  gamesBack: number,
+  impDiff: number | null,
+): string | null {
+  const reasons: string[] = [];
+  const statLabel = MARKET_LABELS[market] ?? market;
+
+  // Pre vs post stat difference
+  if (preVal != null && returnVal != null && line != null) {
+    const diff = returnVal - preVal;
+    if (Math.abs(diff) > 0.3) {
+      const dir = diff < 0 ? "lower" : "higher";
+      reasons.push(`${dir} post-injury ${statLabel.toLowerCase()} (${returnVal.toFixed(1)} vs ${preVal.toFixed(1)} pre-injury)`);
+    }
+  }
+
+  // Historical trend
+  if (impDiff != null && impDiff < -0.3) {
+    reasons.push("historical return trend suppression");
+  }
+
+  // Early return
+  if (gamesBack <= 3) {
+    reasons.push("early return window uncertainty");
+  }
+
+  if (reasons.length === 0) return null;
+  return reasons.join(" + ");
+}
+
+// ─── PlayerPropCard (Redesigned with Signal → Explanation → Context) ─────────
+
+function PlayerPropCard({ player, sourceFilter, curve, highlighted, statFilter }: {
+  player: PropsPlayer;
+  sourceFilter: string;
+  curve?: PerformanceCurve | null;
+  highlighted?: boolean;
+  statFilter?: string;
+}) {
   const priority = ["player_points", "player_goals", "batter_hits", "player_pass_yds", "player_rush_yds",
     "player_rebounds", "player_assists", "player_threes", "player_shots_on_goal", "batter_total_bases"];
 
   // Filter by source, then dedupe by market (prefer draftkings when showing all)
-  const sourceProps = sourceFilter === "all"
+  let sourceProps = sourceFilter === "all"
     ? player.props
     : player.props.filter((p) => p.source === sourceFilter);
+
+  // Apply stat filter
+  if (statFilter && statFilter !== "all") {
+    const sf = STAT_FILTERS.find((f) => f.value === statFilter);
+    if (sf && sf.markets.length > 0) {
+      sourceProps = sourceProps.filter((p) => sf.markets.includes(p.market));
+    }
+  }
 
   const deduped = new Map<string, PropItem>();
   const SOURCE_PRIORITY = ["draftkings", "fanduel"];
@@ -435,7 +576,6 @@ function PlayerPropCard({ player, sourceFilter, curve, highlighted }: { player: 
 
   if (sorted.length === 0) return null;
 
-  const isEarlyReturn = player.gamesBack > 0 && player.gamesBack <= 10;
   const injurySlug = player.injury_type ? injuryToSlug(player.injury_type) : "";
 
   // Curve impacts at G1, G3, G5
@@ -466,139 +606,569 @@ function PlayerPropCard({ player, sourceFilter, curve, highlighted }: { player: 
       avatarSize={48}
       linkToPlayer={false}
     >
-      {/* Return context bar */}
-      <div className="px-4 pb-1">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-[11px] text-white/30">
-          {player.avg10?.minutes != null && (
-            <span>Pre-injury: {player.avg10.minutes} min/g</span>
-          )}
-          {player.gamesBack > 0 && (
-            <span>{player.gamesBack} game{player.gamesBack !== 1 ? "s" : ""} back{player.avgSinceReturn?.minutes != null ? ` · ${player.avgSinceReturn.minutes} min/g since return` : ""}</span>
-          )}
-          {isEarlyReturn && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400/80 font-medium">Early return window</span>
-          )}
+      {/* RETURN SUMMARY — the most important context box */}
+      {player.gamesBack > 0 && (
+        <div className="px-4 pb-2">
+          <div className="rounded-lg bg-gradient-to-r from-blue-500/[0.06] to-purple-500/[0.04] border border-blue-500/15 px-3.5 py-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <p className="text-[10px] font-bold text-blue-400/90 uppercase tracking-wider">Return Summary</p>
+              <GameReturnBadge gamesBack={player.gamesBack} />
+            </div>
+            {(() => {
+              // Build the summary lines
+              const lines: string[] = [];
+              if (impG3 && impG3.diff < 0) {
+                lines.push(`Players returning from ${player.injury_type?.toLowerCase() ?? "this injury"} typically underperform in the first 3–5 games.`);
+              } else if (impG3 && impG3.diff >= 0) {
+                lines.push(`${player.injury_type ?? "This injury"} returns historically show near-baseline performance.`);
+              }
+              // Find the biggest gap stat
+              const bestGap = sorted.reduce<{ market: string; pct: number } | null>((best, p) => {
+                const sk = MARKET_TO_STAT[p.market];
+                const base = sk && player.avg10 ? player.avg10[sk] : null;
+                if (!curve || !sk || base == null || base <= 0 || p.line == null || player.gamesBack <= 0) return best;
+                const ev = computeEV({ baseline: base, propLine: p.line, overOdds: parseOdds(p.over_price), underOdds: parseOdds(p.under_price), gamesSinceReturn: player.gamesBack, recentAvg: sk && player.avgSinceReturn ? player.avgSinceReturn[sk] : null, curve, leagueSlug: player.league_slug, statKey: sk, preInjuryMinutes: player.avg10?.minutes, currentMinutes: player.avgSinceReturn?.minutes });
+                if (!ev || ev.expectedCombined == null || p.line === 0) return best;
+                const pct = Math.abs(((ev.expectedCombined - p.line) / p.line) * 100);
+                if (!best || pct > best.pct) return { market: p.market, pct };
+                return best;
+              }, null);
+              if (bestGap && bestGap.pct > 5) {
+                lines.push(`This player is currently projected ${Math.round(bestGap.pct)}% ${bestGap.pct > 0 ? "away from" : "from"} market expectations on ${MARKET_LABELS[bestGap.market] ?? bestGap.market}.`);
+              }
+              if (player.avg10?.minutes && player.avgSinceReturn?.minutes && player.gamesBack > 0) {
+                const pct = player.avgSinceReturn.minutes / player.avg10.minutes;
+                if (pct < 0.8) lines.push(`Minutes still below pre-injury levels (${Math.round(pct * 100)}% of usual).`);
+              }
+              if (lines.length === 0 && player.gamesBack <= 3) {
+                lines.push(`Game ${player.gamesBack} after return — early return window with highest performance uncertainty.`);
+              }
+              return lines.length > 0 ? (
+                <p className="text-[11px] text-white/50 leading-relaxed">{lines.join(" ")}</p>
+              ) : null;
+            })()}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Prop market boxes */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 px-4 pb-2">
-        {sorted.map((p) => {
-          const statKey = MARKET_TO_STAT[p.market];
-          const avg10Val = statKey && player.avg10 ? player.avg10[statKey] : null;
-          const sinceReturnVal = statKey && player.avgSinceReturn ? player.avgSinceReturn[statKey] : null;
+      {/* WHY THIS SIGNAL — free summary + locked premium breakdown */}
+      {player.gamesBack > 0 && (() => {
+        // Find the primary stat's EV and data for the signal explanation
+        const primaryProp = sorted[0];
+        const primaryStatKey = primaryProp ? MARKET_TO_STAT[primaryProp.market] : null;
+        const primaryBaseline = primaryStatKey && player.avg10 ? player.avg10[primaryStatKey] as number | undefined : null;
+        const primaryReturn = primaryStatKey && player.avgSinceReturn ? player.avgSinceReturn[primaryStatKey] as number | undefined : null;
+        let primaryEv: EVResult | null = null;
+        if (curve && primaryStatKey && primaryBaseline != null && primaryBaseline > 0 && primaryProp?.line != null) {
+          primaryEv = computeEV({
+            baseline: primaryBaseline,
+            propLine: primaryProp.line,
+            overOdds: parseOdds(primaryProp.over_price),
+            underOdds: parseOdds(primaryProp.under_price),
+            gamesSinceReturn: player.gamesBack,
+            recentAvg: primaryReturn ?? null,
+            curve,
+            leagueSlug: player.league_slug,
+            statKey: primaryStatKey,
+            preInjuryMinutes: player.avg10?.minutes,
+            currentMinutes: player.avgSinceReturn?.minutes,
+          });
+        }
+        return (
+          <div className="px-4 pb-2">
+            <WhyThisSignal
+              playerName={player.player_name}
+              injuryType={player.injury_type}
+              gamesBack={player.gamesBack}
+              ev={primaryEv}
+              curve={curve ?? null}
+              preBaseline={primaryBaseline ?? null}
+              returnAvg={primaryReturn ?? null}
+              preMinutes={player.avg10?.minutes ?? null}
+              currentMinutes={player.avgSinceReturn?.minutes ?? null}
+              marketLabel={MARKET_LABELS[primaryProp?.market ?? ""] ?? primaryProp?.market ?? "stat"}
+              propLine={primaryProp?.line ?? null}
+              leagueSlug={player.league_slug}
+              statKey={primaryStatKey}
+              isPremium={false}
+            />
+          </div>
+        );
+      })()}
 
-          // EV computation
-          let ev: EVResult | null = null;
-          if (curve && statKey && avg10Val != null && p.line != null && player.gamesBack > 0) {
-            ev = computeEV({
-              baseline: avg10Val,
-              propLine: p.line,
-              overOdds: parseOdds(p.over_price),
-              underOdds: parseOdds(p.under_price),
-              gamesSinceReturn: player.gamesBack,
-              recentAvg: sinceReturnVal,
-              curve,
-              leagueSlug: player.league_slug,
-              statKey,
-              preInjuryMinutes: player.avg10?.minutes,
-              currentMinutes: player.avgSinceReturn?.minutes,
-            });
+      {/* PROP PROJECTIONS — primary stat highlighted */}
+      <div className="px-4 pb-2">
+        {(() => {
+          // Compute EV for all props and find primary (largest gap)
+          const propData = sorted.map((p) => {
+            const statKey = MARKET_TO_STAT[p.market];
+            const avg10Val = statKey && player.avg10 ? player.avg10[statKey] : null;
+            const sinceReturnVal = statKey && player.avgSinceReturn ? player.avgSinceReturn[statKey] : null;
+            let ev: EVResult | null = null;
+            if (curve && statKey && avg10Val != null && p.line != null && player.gamesBack > 0) {
+              ev = computeEV({ baseline: avg10Val, propLine: p.line, overOdds: parseOdds(p.over_price), underOdds: parseOdds(p.under_price), gamesSinceReturn: player.gamesBack, recentAvg: sinceReturnVal, curve, leagueSlug: player.league_slug, statKey, preInjuryMinutes: player.avg10?.minutes, currentMinutes: player.avgSinceReturn?.minutes });
+            }
+            const hasEdge = ev?.recommendation && ev?.bestEv != null && ev.bestEv > 0;
+            const projDiffPct = ev && p.line != null && p.line > 0 ? Math.round(((ev.expectedCombined - p.line) / p.line) * 100) : null;
+            return { prop: p, ev, hasEdge, projDiffPct, avg10Val, sinceReturnVal, statKey };
+          });
+
+          // Find primary stat (largest absolute gap)
+          let primaryIdx = 0;
+          let bestGap = 0;
+          propData.forEach((d, i) => {
+            const gap = Math.abs(d.projDiffPct ?? 0);
+            if (gap > bestGap) { bestGap = gap; primaryIdx = i; }
+          });
+
+          function confidenceLabel(conf: string | undefined): { text: string; color: string } {
+            if (conf === "high") return { text: "High confidence", color: "text-green-400/70" };
+            if (conf === "medium") return { text: "Medium confidence", color: "text-amber-400/70" };
+            return { text: "Low confidence", color: "text-white/35" };
           }
 
           return (
-            <div key={p.id} className="bg-white/5 rounded-lg px-2.5 py-2 text-center">
-              <p className="text-[10px] text-emerald-400/70 font-medium mb-0.5">
-                {MARKET_LABELS[p.market] ?? p.market}
-              </p>
-              <p className="text-base font-bold text-white">{p.line}</p>
-              <div className="flex justify-center gap-2 mt-0.5 text-[11px]">
-                {p.over_price && <span className="text-green-400/80">O {p.over_price}</span>}
-                {p.under_price && <span className="text-red-400/80">U {p.under_price}</span>}
-              </div>
-              {sourceFilter === "all" && (
-                <p className="text-[9px] text-white/20 mt-0.5">{SOURCE_LABELS[p.source] ?? p.source}</p>
-              )}
-              {(avg10Val != null || sinceReturnVal != null) && (
-                <div className="mt-1.5 pt-1.5 border-t border-white/5 text-[10px] text-white/35 space-y-0.5">
-                  {avg10Val != null && (
-                    <p>Pre-injury avg: <span className={p.line != null && avg10Val > p.line ? "text-green-400/70" : p.line != null && avg10Val < p.line ? "text-red-400/70" : "text-white/50"}>{avg10Val}</span></p>
-                  )}
-                  {sinceReturnVal != null && player.gamesBack > 0 && (
-                    <p>Return avg: <span className={p.line != null && sinceReturnVal > p.line ? "text-green-400/70" : p.line != null && sinceReturnVal < p.line ? "text-red-400/70" : "text-white/50"}>{sinceReturnVal}</span></p>
-                  )}
-                </div>
-              )}
-              {/* EV model output */}
-              {ev && (
-                <div className="mt-1.5 pt-1.5 border-t border-white/5 text-[10px] space-y-0.5">
-                  <p className="text-white/30">Model: <span className="text-white/60 font-medium tabular-nums">{ev.expectedCombined.toFixed(1)}</span></p>
-                  {ev.recommendation && ev.bestEv != null && (
-                    <p className={`font-semibold tabular-nums ${ev.recommendation === "OVER" ? "text-green-400/90" : "text-red-400/90"}`}>
-                      EV {formatEV(ev.bestEv)} · {ev.recommendation}
-                    </p>
-                  )}
-                  {!ev.recommendation && (
-                    <p className="text-white/20">No positive EV edge</p>
-                  )}
-                </div>
-              )}
+            <div className="space-y-1.5">
+              {propData.map((d, idx) => {
+                const { prop: p, ev, hasEdge, projDiffPct, avg10Val, sinceReturnVal } = d;
+                const isPrimary = idx === primaryIdx && hasEdge;
+                const isOver = ev?.recommendation === "OVER";
+                const edge = hasEdge && ev?.bestEv != null ? edgeLabel(ev.bestEv) : null;
+                const conf = confidenceLabel(ev?.confidence);
+                const propExplanation = hasEdge ? generatePropExplanation(p.market, p.line, avg10Val, sinceReturnVal, player.gamesBack, impG3?.diff ?? null) : null;
+
+                return (
+                  <div
+                    key={p.id}
+                    className={`rounded-lg ${isPrimary ? "px-3.5 py-3" : "px-2.5 py-2"} ${
+                      hasEdge
+                        ? isOver
+                          ? isPrimary ? "bg-green-500/[0.1] border-2 border-green-500/30" : "bg-green-500/[0.06] border border-green-500/15"
+                          : isPrimary ? "bg-red-500/[0.1] border-2 border-red-500/30" : "bg-red-500/[0.06] border border-red-500/15"
+                        : "bg-white/[0.03] border border-white/5"
+                    }`}
+                  >
+                    {/* Header: stat + confidence + direction */}
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <p className={`${isPrimary ? "text-[11px]" : "text-[10px]"} text-emerald-400/70 font-semibold`}>
+                          {MARKET_LABELS[p.market] ?? p.market}
+                        </p>
+                        {isPrimary && <span className="text-[8px] text-blue-400/60 font-bold uppercase tracking-wider bg-blue-400/10 px-1.5 py-0.5 rounded">Primary</span>}
+                      </div>
+                      {hasEdge && edge && (
+                        <PremiumGate
+                          contentId={`${p.id}-direction`}
+                          playerName={player.player_name}
+                          section="prop_direction"
+                          inline
+                          placeholder={
+                            <span className={`${isPrimary ? "text-[11px]" : "text-[10px]"} font-bold text-white/40`}>OVER</span>
+                          }
+                        >
+                          <span className={`${isPrimary ? "text-[11px]" : "text-[10px]"} font-bold ${edge.color}`}>
+                            {ev!.recommendation}
+                          </span>
+                        </PremiumGate>
+                      )}
+                    </div>
+
+                    {/* Market vs Model */}
+                    <div className="flex items-baseline justify-between gap-3">
+                      <div>
+                        <p className="text-[9px] text-white/30">Market</p>
+                        <p className={`${isPrimary ? "text-xl" : "text-base"} font-bold text-white tabular-nums`}>{p.line}</p>
+                      </div>
+                      {ev && (
+                        <PremiumGate
+                          contentId={`${p.id}-model`}
+                          playerName={player.player_name}
+                          section="prop_model"
+                          placeholder={
+                            <div className="text-right">
+                              <p className="text-[9px] text-white/30">Model</p>
+                              <p className={`${isPrimary ? "text-xl" : "text-base"} font-bold text-white/70 tabular-nums`}>24.5</p>
+                            </div>
+                          }
+                        >
+                          <div className="text-right">
+                            <p className="text-[9px] text-white/30">Model</p>
+                            <p className={`${isPrimary ? "text-xl" : "text-base"} font-bold text-white/70 tabular-nums`}>{ev.expectedCombined.toFixed(1)}</p>
+                          </div>
+                        </PremiumGate>
+                      )}
+                      {projDiffPct != null && projDiffPct !== 0 && (
+                        <PremiumGate
+                          contentId={`${p.id}-gap`}
+                          playerName={player.player_name}
+                          section="prop_gap"
+                          placeholder={
+                            <div className="text-right">
+                              <p className="text-[9px] text-white/30">Gap</p>
+                              <p className={`${isPrimary ? "text-lg" : "text-sm"} font-bold tabular-nums text-green-400/80`}>+8%</p>
+                            </div>
+                          }
+                        >
+                          <div className="text-right">
+                            <p className="text-[9px] text-white/30">Gap</p>
+                            <p className={`${isPrimary ? "text-lg" : "text-sm"} font-bold tabular-nums ${projDiffPct < 0 ? "text-red-400/80" : "text-green-400/80"}`}>
+                              {projDiffPct > 0 ? "+" : ""}{projDiffPct}%
+                            </p>
+                          </div>
+                        </PremiumGate>
+                      )}
+                    </div>
+
+                    {/* Confidence + sample context */}
+                    {ev && (
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span className={`text-[9px] font-medium ${conf.color}`}>{conf.text}</span>
+                        {curve && (
+                          <span className="text-[9px] text-white/20">· Based on {curve.sample_size.toLocaleString()} similar cases</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Why explanation — blurred premium tease */}
+                    {propExplanation && (
+                      <p className="text-[9px] text-white/25 mt-1.5 pt-1 border-t border-white/5 leading-snug italic">
+                        <BlurredInsight text={propExplanation} section="prop_explanation" page="props" playerName={player.player_name} statType={MARKET_LABELS[p.market]} gamesBack={player.gamesBack} />
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           );
-        })}
+        })()}
       </div>
 
-      {/* Historical injury trend + analytics links */}
-      {(curve || injurySlug) && (
-        <div className="px-4 pb-4">
-          {/* Historical trend from curve data */}
-          {curve && (impG1 || impG3 || impG5) && (
-            <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3 mb-2">
-              <p className="text-[10px] text-white/35 mb-1.5">
-                Historical {player.injury_type?.toLowerCase()} return trend
-                <span className="text-white/20 ml-1">({LEAGUE_LABELS[player.league_slug]} · {curve.sample_size} cases)</span>
-              </p>
-              <div className="grid grid-cols-3 gap-2">
-                {([["G1", impG1], ["G3", impG3], ["G5", impG5]] as [string, { label: string; diff: number } | null][]).map(([label, imp]) => (
-                  <div key={label} className="text-center">
-                    <p className="text-[9px] text-white/20">{label}</p>
+      {/* INJURY CURVE — typical performance after this injury */}
+      {curve && (impG1 || impG3 || impG5) && (
+        <div className="px-4 pb-2">
+          <div className="rounded-lg bg-blue-500/[0.04] border border-blue-500/10 p-3">
+            <p className="text-[11px] font-semibold text-blue-400/80 mb-0.5">
+              Typical Performance After {player.injury_type ?? "This Injury"}
+            </p>
+            <p className="text-[10px] text-white/30 mb-2">
+              Historical return trend for {player.injury_type?.toLowerCase() ?? "this injury"} in {LEAGUE_LABELS[player.league_slug]}
+            </p>
+
+            <div className="flex items-center gap-4">
+              {/* Impact numbers — G1–G5 highlighted */}
+              <div className="grid grid-cols-3 gap-3 flex-1">
+                {([["G1", impG1, true], ["G3", impG3, true], ["G5", impG5, false]] as [string, { label: string; diff: number } | null, boolean][]).map(([label, imp, isEarly]) => (
+                  <div key={label} className={`text-center rounded-lg py-1.5 ${isEarly ? "bg-white/[0.03]" : ""}`}>
+                    <p className={`text-[9px] mb-0.5 ${isEarly ? "text-red-400/50 font-medium" : "text-white/25"}`}>{label}{isEarly ? " ⚠" : ""}</p>
                     <p className={`text-xs font-bold tabular-nums ${imp == null ? "text-white/20" : imp.diff >= 0 ? "text-green-400" : "text-red-400"}`}>
                       {imp != null ? `${fmtDiff(imp.diff)} ${imp.label}` : "—"}
                     </p>
                   </div>
                 ))}
               </div>
-              {impG3 && impG3.diff < 0 && (
-                <p className="text-[10px] text-white/25 mt-2 leading-snug">
-                  Historical {impG3.label.toLowerCase()} has typically lagged pre-injury baseline in the first few games back.
-                </p>
-              )}
-            </div>
-          )}
 
-          {/* Analytics links */}
-          {injurySlug && (
-            <div className="flex items-center gap-3 text-[10px]">
-              <Link
-                to={`/performance-curves?league=${player.league_slug}&injury=${injurySlug}`}
-                className="text-white/25 hover:text-[#1C7CFF]/70 transition-colors"
-              >
-                View recovery curve &rarr;
-              </Link>
-              <Link
-                to={`/injuries/${injurySlug}?league=${player.league_slug}`}
-                className="text-white/25 hover:text-[#1C7CFF]/70 transition-colors"
-              >
-                View recovery stats &rarr;
-              </Link>
+              {/* Mini recovery curve */}
+              <div className="shrink-0">
+                <RecoveryCurveMini curve={curve} leagueSlug={player.league_slug} gamesBack={player.gamesBack} />
+              </div>
             </div>
-          )}
+
+            {/* Interpretation line */}
+            <p className="text-[10px] text-white/30 mt-2 leading-snug">
+              {impG3 && impG3.diff < 0
+                ? "Performance typically lags baseline in the first few games after return — the early window (G1–G5) carries the highest uncertainty."
+                : "Historical data suggests near-baseline performance for this injury type after return."
+              }
+            </p>
+
+            <p className="text-[9px] text-white/20 mt-1.5">
+              Based on {curve.sample_size.toLocaleString()} similar injury return cases
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* EXPECTED ROLE (minutes context + interpretation) */}
+      {(player.avg10?.minutes != null || player.avgSinceReturn?.minutes != null) && (
+        <div className="px-4 pb-2">
+          <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3">
+            <p className="text-[11px] font-semibold text-white/50 mb-2">Expected Role</p>
+            <div className="flex items-center gap-4">
+              {player.avg10?.minutes != null && (
+                <div className="text-center">
+                  <p className="text-[9px] text-white/25">Pre-injury</p>
+                  <p className="text-sm font-bold text-white/70 tabular-nums">{player.avg10.minutes} min</p>
+                </div>
+              )}
+              {player.avgSinceReturn?.minutes != null && player.gamesBack > 0 && (
+                <div className="text-center">
+                  <p className="text-[9px] text-white/25">Since return</p>
+                  <p className="text-sm font-bold text-white/70 tabular-nums">{player.avgSinceReturn.minutes} min</p>
+                </div>
+              )}
+              {/* Minutes bar */}
+              {player.avg10?.minutes != null && player.avg10.minutes > 0 && player.avgSinceReturn?.minutes != null && player.gamesBack > 0 && (() => {
+                const pct = player.avgSinceReturn!.minutes! / player.avg10!.minutes!;
+                const pctRound = Math.round(pct * 100);
+                return (
+                  <div className="flex-1 min-w-[80px]">
+                    <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${pct >= 0.8 ? "bg-cyan-400" : "bg-amber-400"}`}
+                        style={{ width: `${Math.min(100, pctRound)}%` }}
+                      />
+                    </div>
+                    <p className="text-[9px] text-white/25 mt-0.5 text-right tabular-nums">
+                      {pctRound}% of usual
+                    </p>
+                  </div>
+                );
+              })()}
+            </div>
+            {/* Interpretation */}
+            {player.avg10?.minutes != null && player.avg10.minutes > 0 && player.avgSinceReturn?.minutes != null && player.gamesBack > 0 && (() => {
+              const pct = player.avgSinceReturn!.minutes! / player.avg10!.minutes!;
+              if (pct < 0.7) return <p className="text-[10px] text-amber-400/50 mt-2">Still ramping up — significantly reduced minutes suggest a cautious return</p>;
+              if (pct < 0.85) return <p className="text-[10px] text-amber-400/40 mt-2">Not yet at full workload — minutes still below pre-injury levels</p>;
+              if (pct < 0.95) return <p className="text-[10px] text-white/30 mt-2">Approaching full workload — minutes nearly restored to pre-injury levels</p>;
+              return <p className="text-[10px] text-green-400/40 mt-2">Full workload restored — playing at or above pre-injury minutes</p>;
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Analytics links */}
+      {injurySlug && (
+        <div className="flex items-center gap-3 px-4 pb-4 text-[10px]">
+          <Link
+            to={`/performance-curves?league=${player.league_slug}&injury=${injurySlug}`}
+            className="text-white/25 hover:text-[#1C7CFF]/70 transition-colors"
+          >
+            View recovery curve &rarr;
+          </Link>
+          <Link
+            to={`/injuries/${injurySlug}?league=${player.league_slug}`}
+            className="text-white/25 hover:text-[#1C7CFF]/70 transition-colors"
+          >
+            View recovery stats &rarr;
+          </Link>
         </div>
       )}
     </InjuryPlayerCard>
     </div>
   );
 }
+
+// ─── Daily Opportunities Table ───────────────────────────────────────────────
+
+function DailyOpportunitiesTable({ players, findCurve }: {
+  players: PropsPlayer[];
+  findCurve: (p: PropsPlayer) => PerformanceCurve | null;
+}) {
+  // Build rows: returning players with their best prop edge
+  const rows = players
+    .filter((p) => p.gamesBack > 0 && p.gamesBack <= 10)
+    .map((p) => {
+      const curve = findCurve(p);
+      let bestEv: EVResult | null = null;
+      let bestProp: PropItem | null = null;
+
+      for (const prop of p.props) {
+        const statKey = MARKET_TO_STAT[prop.market];
+        const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
+        const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
+        if (!curve || !statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack <= 0) continue;
+
+        const ev = computeEV({
+          baseline, propLine: prop.line,
+          overOdds: parseOdds(prop.over_price), underOdds: parseOdds(prop.under_price),
+          gamesSinceReturn: p.gamesBack, recentAvg: recent, curve,
+          leagueSlug: p.league_slug, statKey,
+          preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
+        });
+
+        if (ev && ev.bestEv != null && ev.recommendation && (!bestEv || (ev.bestEv > (bestEv.bestEv ?? 0)))) {
+          bestEv = ev;
+          bestProp = prop;
+        }
+      }
+
+      return { player: p, curve, bestEv, bestProp };
+    })
+    .filter((r) => r.bestEv?.recommendation)
+    .sort((a, b) => (b.bestEv?.bestEv ?? 0) - (a.bestEv?.bestEv ?? 0))
+    .slice(0, 10);
+
+  if (rows.length === 0) return null;
+
+  // Strength label from gap %
+  function gapStrength(evPct: number): { text: string; color: string } {
+    const abs = Math.abs(evPct);
+    if (abs >= 15) return { text: "Elite", color: "text-amber-400" };
+    if (abs >= 8) return { text: "Strong", color: "text-green-400/80" };
+    return { text: "Moderate", color: "text-white/50" };
+  }
+
+  // Why tag
+  function whyTag(p: PropsPlayer, curve: PerformanceCurve | null): string {
+    if (p.gamesBack <= 3) {
+      if (p.avg10?.minutes && p.avgSinceReturn?.minutes && p.avgSinceReturn.minutes / p.avg10.minutes < 0.8)
+        return "Minutes restriction";
+      return "Early return suppression";
+    }
+    if (p.avg10?.minutes && p.avgSinceReturn?.minutes && p.avgSinceReturn.minutes / p.avg10.minutes < 0.8)
+      return "Minutes restriction";
+    if (curve) {
+      const impG3 = getCurveImpact(curve, 2, p.league_slug);
+      if (impG3 && impG3.diff < -0.3) return "Historical underperformance";
+    }
+    return "Return window impact";
+  }
+
+  return (
+    <section className="mb-6">
+      <h2 className="text-xs font-bold text-blue-400/80 uppercase tracking-widest mb-1">Biggest Return vs Market Gaps Today</h2>
+      <p className="text-[11px] text-white/30 mb-3">Players where post-injury performance differs most from current lines</p>
+      <div className="rounded-xl border border-white/8 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="text-[9px] text-white/25 uppercase tracking-wider border-b border-white/5 bg-white/[0.02]">
+                <th className="px-3 py-2.5 font-medium w-8">#</th>
+                <th className="px-3 py-2.5 font-medium">Player</th>
+                <th className="px-3 py-2.5 font-medium">Return</th>
+                <th className="px-3 py-2.5 font-medium">Stat</th>
+                <th className="px-3 py-2.5 font-medium text-right">Market</th>
+                <th className="px-3 py-2.5 font-medium text-right">Model ✦</th>
+                <th className="px-3 py-2.5 font-medium text-right">Gap ✦</th>
+                <th className="px-3 py-2.5 font-medium">Strength ✦</th>
+                <th className="px-3 py-2.5 font-medium">Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ player: p, bestEv, bestProp, curve }, idx) => {
+                const isOver = bestEv?.recommendation === "OVER";
+                const lc = leagueColor(p.league_slug);
+                const isTop3 = idx < 3;
+                const strength = bestEv?.bestEv != null ? gapStrength(bestEv.bestEv) : null;
+                const gbColor = p.gamesBack <= 3
+                  ? "bg-red-500/15 text-red-400/90 border-red-500/25"
+                  : p.gamesBack <= 6
+                  ? "bg-amber-500/15 text-amber-400/90 border-amber-500/25"
+                  : "bg-green-500/15 text-green-400/90 border-green-500/25";
+                const gapPct = bestEv && bestProp?.line != null && bestProp.line > 0
+                  ? ((bestEv.expectedCombined - bestProp.line) / bestProp.line * 100)
+                  : null;
+                return (
+                  <tr
+                    key={p.player_id}
+                    className={`border-b border-white/5 transition-colors cursor-pointer group ${
+                      isTop3
+                        ? "bg-blue-500/[0.04] hover:bg-blue-500/[0.08]"
+                        : "hover:bg-white/[0.03]"
+                    }`}
+                    onClick={() => {
+                      trackPlayerAnalysisView({
+                        player_name: p.player_name,
+                        injury_type: p.injury_type ?? "unknown",
+                        games_since_return: p.gamesBack,
+                        stat_type: bestProp ? (MARKET_LABELS[bestProp.market] ?? bestProp.market) : undefined,
+                        edge_percent: bestEv?.bestEv ?? undefined,
+                        page_origin: "props_page_table",
+                      });
+                      const el = document.getElementById(`prop-player-${p.player_id}`);
+                      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    }}
+                  >
+                    <td className="px-3 py-2.5">
+                      <span className={`text-[11px] font-bold tabular-nums ${isTop3 ? "text-blue-400" : "text-white/25"}`}>
+                        #{idx + 1}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <PlayerAvatar src={p.headshot_url} name={p.player_name} size={24} />
+                        <div>
+                          <p className="text-xs font-medium text-white truncate max-w-[120px] group-hover:text-blue-400 transition-colors">{p.player_name}</p>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[9px]" style={{ color: `${lc}99` }}>{LEAGUE_LABELS[p.league_slug]}</span>
+                            <span className="text-[9px] text-white/20">·</span>
+                            <span className="text-[9px] text-white/30 truncate max-w-[80px]">{p.injury_type}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[9px] font-semibold whitespace-nowrap ${gbColor}`}>
+                        G{p.gamesBack}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-[11px] text-white/50">{bestProp ? (MARKET_LABELS[bestProp.market] ?? bestProp.market) : "—"}</td>
+                    <td className="px-3 py-2.5 text-[11px] text-white/70 text-right tabular-nums font-medium">{bestProp?.line ?? "—"}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <PremiumGate
+                        contentId={`table-${p.player_id}-model`}
+                        playerName={p.player_name}
+                        section="table_model"
+                        placeholder={
+                          <>
+                            <span className="text-[11px] text-white/50 tabular-nums">24.5</span>
+                            <p className="text-[9px] text-white/25 tabular-nums">+8%</p>
+                          </>
+                        }
+                      >
+                        <span className="text-[11px] text-white/50 tabular-nums">{bestEv?.expectedCombined.toFixed(1) ?? "—"}</span>
+                        {gapPct != null && (
+                          <p className="text-[9px] text-white/25 tabular-nums">{gapPct > 0 ? "+" : ""}{gapPct.toFixed(0)}%</p>
+                        )}
+                      </PremiumGate>
+                    </td>
+                    <td className="px-3 py-2.5 text-right">
+                      <PremiumGate
+                        contentId={`table-${p.player_id}-dir`}
+                        playerName={p.player_name}
+                        section="table_direction"
+                        inline
+                        placeholder={
+                          <span className="text-[11px] font-bold text-white/40">OVER</span>
+                        }
+                      >
+                        <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
+                          {bestEv!.recommendation}
+                        </span>
+                      </PremiumGate>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <PremiumGate
+                        contentId={`table-${p.player_id}-strength`}
+                        playerName={p.player_name}
+                        section="table_strength"
+                        inline
+                        placeholder={
+                          <span className="text-[10px] font-semibold text-white/40">Strong</span>
+                        }
+                      >
+                        {strength && (
+                          <span className={`text-[10px] font-semibold ${strength.color}`}>{strength.text}</span>
+                        )}
+                      </PremiumGate>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="text-[9px] text-white/35 italic">{whyTag(p, curve)}</span>
+                      <span className="text-[9px] text-blue-400/50 ml-1 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─── EV Info Modal ───────────────────────────────────────────────────────────
 
 function EVInfoModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   if (!open) return null;
@@ -609,7 +1179,7 @@ function EVInfoModal({ open, onClose }: { open: boolean; onClose: () => void }) 
         className="relative bg-[#111827] border border-white/10 rounded-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <button onClick={onClose} className="absolute top-4 right-4 text-white/30 hover:text-white/60 transition-colors text-lg">✕</button>
+        <button onClick={onClose} className="absolute top-4 right-4 text-white/30 hover:text-white/60 transition-colors text-lg">&#x2715;</button>
 
         <h2 className="text-lg font-bold text-white mb-1">How EV Works</h2>
         <p className="text-xs text-white/40 mb-5">Injury-adjusted expected value</p>
@@ -657,7 +1227,7 @@ function EVInfoModal({ open, onClose }: { open: boolean; onClose: () => void }) 
               </div>
               <div className="rounded-lg bg-amber-500/10 border border-amber-500/15 p-2.5 text-center">
                 <p className="text-xs font-bold text-amber-400 mb-0.5">Medium</p>
-                <p className="text-[10px] text-white/40">100–500 cases</p>
+                <p className="text-[10px] text-white/40">100-500 cases</p>
               </div>
               <div className="rounded-lg bg-red-500/10 border border-red-500/15 p-2.5 text-center">
                 <p className="text-xs font-bold text-red-400 mb-0.5">Low</p>
@@ -679,6 +1249,8 @@ function EVInfoModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   );
 }
 
+// ─── Main PropsPage ──────────────────────────────────────────────────────────
+
 export default function PropsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const qLeague = searchParams.get("league")?.toLowerCase();
@@ -693,13 +1265,14 @@ export default function PropsPage() {
     qLeague && LEAGUE_ORDER.includes(qLeague) ? qLeague : "all"
   );
   const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [statFilter, setStatFilter] = useState<string>("all");
   const [sortMode, setSortMode] = useState<SortMode>(
     qSort && ["best", "gap", "early", "drop"].includes(qSort) ? qSort as SortMode : "best"
   );
   const [showEVInfo, setShowEVInfo] = useState(false);
   const [highlightedPlayerId, setHighlightedPlayerId] = useState<string | null>(null);
 
-  // Build curve lookup: injury_type_slug|league_slug → PerformanceCurve
+  // Build curve lookup: injury_type_slug|league_slug -> PerformanceCurve
   const curveMap = useMemo(() => {
     const m = new Map<string, PerformanceCurve>();
     for (const c of curves) {
@@ -718,7 +1291,7 @@ export default function PropsPage() {
     // Exact match first
     const exact = curveMap.get(`${slug}|${p.league_slug}`);
     if (exact) return exact;
-    // Partial match: find curve whose slug contains the injury slug or vice versa
+    // Partial match
     for (const [key, curve] of curveMap) {
       const [cSlug, cLeague] = key.split("|");
       if (cLeague === p.league_slug && (cSlug.includes(slug) || slug.includes(cSlug))) return curve;
@@ -726,7 +1299,7 @@ export default function PropsPage() {
     return null;
   };
 
-  // Scroll to matched player and highlight — re-scroll if layout shifts
+  // Scroll to matched player and highlight
   useEffect(() => {
     if (!qPlayer || players.length === 0 || isLoading || curvesIsLoading) return;
     const q = qPlayer.toLowerCase();
@@ -735,7 +1308,6 @@ export default function PropsPage() {
 
     setHighlightedPlayerId(match.player_id);
 
-    // Scroll with retry: if the element moves due to late-rendering sections, scroll again
     let attempts = 0;
     let lastTop = -1;
     let rafId: number;
@@ -749,22 +1321,18 @@ export default function PropsPage() {
       const rect = el.getBoundingClientRect();
       const currentTop = rect.top + window.scrollY;
 
-      // Scroll if first attempt or if the element moved significantly
       if (lastTop < 0 || Math.abs(currentTop - lastTop) > 20) {
         lastTop = currentTop;
         el.scrollIntoView({ behavior: "smooth", block: "center" });
       }
 
-      // Keep checking for layout shifts for 2 seconds
       attempts++;
       if (attempts < 20) {
         setTimeout(() => { rafId = requestAnimationFrame(scrollToTarget); }, 150);
       }
     }
 
-    // Start after a brief delay for initial render
     const timer = setTimeout(() => { rafId = requestAnimationFrame(scrollToTarget); }, 100);
-
     const fadeTimer = setTimeout(() => setHighlightedPlayerId(null), 4000);
 
     return () => { clearTimeout(timer); clearTimeout(fadeTimer); cancelAnimationFrame(rafId); };
@@ -784,7 +1352,6 @@ export default function PropsPage() {
     let list = leagueFilter === "all"
       ? players
       : players.filter((p) => p.league_slug === leagueFilter);
-    // If injury query param, prioritize matching players
     if (qInjury) {
       list = [...list].sort((a, b) => {
         const aMatch = a.injury_type && injuryToSlug(a.injury_type).includes(qInjury) ? 1 : 0;
@@ -792,7 +1359,6 @@ export default function PropsPage() {
         return bMatch - aMatch;
       });
     }
-    // If player query param, prioritize matching players
     if (qPlayer) {
       const q = qPlayer.toLowerCase();
       list = [...list].sort((a, b) => {
@@ -811,7 +1377,11 @@ export default function PropsPage() {
   // Get unique sources
   const activeSources = Array.from(new Set(players.flatMap((p) => p.props.map((pr) => pr.source)))).filter(Boolean);
 
-  const injuredCount = filtered.filter((p) => p.status !== "active" && p.status !== "returned").length;
+  // Get active stat markets for filter pills
+  const activeMarkets = new Set(players.flatMap((p) => p.props.map((pr) => pr.market)));
+  const activeStatFilters = STAT_FILTERS.filter(
+    (f) => f.value === "all" || f.markets.some((m) => activeMarkets.has(m))
+  );
 
   // Split: recently returned (10 games or fewer since injury) vs rest
   const recentlyReturned = useMemo(() => {
@@ -823,7 +1393,6 @@ export default function PropsPage() {
       list.sort((a, b) => a.gamesBack - b.gamesBack);
     } else if (sortMode === "gap") {
       list.sort((a, b) => {
-        // Largest gap between return avg and line
         const gapA = getMaxGap(a);
         const gapB = getMaxGap(b);
         return gapB - gapA;
@@ -856,37 +1425,46 @@ export default function PropsPage() {
     return maxGap;
   }
 
-  // Top 2 edges by EV for highlight cards, plus full list for edges section
-  const returningEdges = useMemo(() => {
+  // Top edges for highlight cards
+  const topEdges = useMemo(() => {
     return recentlyReturned
       .filter((p) => findCurve(p) != null)
-      .slice(0, 6);
-  }, [recentlyReturned, curveMap]);
-
-  const topEdges = useMemo(() => {
-    return returningEdges
       .map((p) => {
         const curve = findCurve(p)!;
-        const topProp = p.props[0];
-        const statKey = topProp ? MARKET_TO_STAT[topProp.market] : null;
-        const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
-        const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
-        let ev: EVResult | null = null;
-        if (curve && statKey && baseline != null && baseline > 0 && topProp?.line != null && p.gamesBack > 0) {
-          ev = computeEV({
-            baseline, propLine: topProp.line,
-            overOdds: parseOdds(topProp.over_price), underOdds: parseOdds(topProp.under_price),
+        // Find the BEST prop (highest positive EV), not just the first
+        let bestEv: EVResult | null = null;
+        let bestProp: PropItem | null = null;
+
+        for (const prop of p.props) {
+          const statKey = MARKET_TO_STAT[prop.market];
+          const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
+          const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
+          if (!statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack <= 0) continue;
+
+          const ev = computeEV({
+            baseline, propLine: prop.line,
+            overOdds: parseOdds(prop.over_price), underOdds: parseOdds(prop.under_price),
             gamesSinceReturn: p.gamesBack, recentAvg: recent, curve,
             leagueSlug: p.league_slug, statKey,
             preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
           });
+
+          if (ev && ev.bestEv != null && ev.recommendation && (!bestEv || ev.bestEv > (bestEv.bestEv ?? 0))) {
+            bestEv = ev;
+            bestProp = prop;
+          }
         }
-        return { player: p, ev, prop: topProp, evVal: ev?.bestEv != null && ev.bestEv > 0 ? ev.bestEv : 0 };
+
+        return { player: p, ev: bestEv, prop: bestProp, evVal: bestEv?.bestEv != null && bestEv.bestEv > 0 ? bestEv.bestEv : 0 };
       })
       .filter((e) => e.ev?.recommendation && e.evVal > 0)
       .sort((a, b) => b.evVal - a.evVal)
       .slice(0, 4);
-  }, [returningEdges, curveMap]);
+  }, [recentlyReturned, curveMap]);
+
+  // STEP 6: Daily hook counts
+  const returningToday = recentlyReturned.filter((p) => p.gamesBack <= 1).length;
+  const earlyReturn = recentlyReturned.filter((p) => p.gamesBack <= 3).length;
 
   return (
     <div className="min-h-screen bg-[#0a0f1a] text-white">
@@ -900,6 +1478,28 @@ export default function PropsPage() {
       <EVInfoModal open={showEVInfo} onClose={() => setShowEVInfo(false)} />
 
       <div className="max-w-3xl mx-auto px-4 py-6">
+        {/* STEP 6: Daily hook banner */}
+        {(returningToday > 0 || earlyReturn > 0) && !isLoading && (
+          <div className="rounded-xl bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/20 px-4 py-3 mb-5">
+            <p className="text-sm font-semibold text-white/90">Injury Return Monitor</p>
+            <div className="flex items-center gap-4 mt-1 text-[12px] text-white/50">
+              {returningToday > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                  {returningToday} player{returningToday !== 1 ? "s" : ""} returning today
+                </span>
+              )}
+              {earlyReturn > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-red-400/80" />
+                  <span className="font-medium text-red-400/80">{earlyReturn} in first 3 games</span>
+                  <span className="text-white/30">— historically highest impact window</span>
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="flex items-center gap-3 mb-2">
           <h1 className="text-2xl font-bold">Player Props</h1>
           <button
@@ -911,9 +1511,8 @@ export default function PropsPage() {
           </button>
         </div>
         <p className="text-sm text-white/50 mb-5 leading-relaxed">
-          Prop lines for players with injury history. Compare current lines against
-          historical return trends and pre-injury baselines to identify where the market
-          may still reflect injury uncertainty.
+          Injury return analytics: model projections vs. market lines based on historical recovery data.
+          Identify where the market may still reflect injury uncertainty.
         </p>
 
         {/* Date context */}
@@ -937,200 +1536,8 @@ export default function PropsPage() {
           );
         })()}
 
-        {/* Top 2 Edges — compact cards with large EV numbers */}
-        {topEdges.length > 0 && (
-          <section className="mb-6">
-            <h2 className="text-xs font-bold text-[#1C7CFF]/80 uppercase tracking-widest mb-3">Top Edges</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {topEdges.map(({ player: p, ev: topEv, prop: topProp }) => {
-                const lc = leagueColor(p.league_slug);
-                const side = topEv!.recommendation!;
-                const isOver = side === "OVER";
-                return (
-                  <Link
-                    key={p.player_id}
-                    to={`/props?player=${p.player_id}&sort=best`}
-                    className={`relative rounded-xl border p-3.5 transition-all overflow-hidden ${
-                      isOver
-                        ? "bg-green-500/[0.06] border-green-500/20 hover:border-green-500/40"
-                        : "bg-red-500/[0.06] border-red-500/20 hover:border-red-500/40"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <PlayerAvatar src={p.headshot_url} name={p.player_name} size={40} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold truncate">{p.player_name}</p>
-                        <div className="flex items-center gap-1.5 text-[10px] text-white/35">
-                          <span style={{ color: `${lc}aa` }}>{LEAGUE_LABELS[p.league_slug]}</span>
-                          <span>·</span>
-                          <span>{p.injury_type}</span>
-                          <span>·</span>
-                          <span>{p.gamesBack}G back</span>
-                          <GameTimeBadge commenceTime={p.commence_time} gameDate={p.game_date} />
-                        </div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <p className={`text-lg font-black tabular-nums ${isOver ? "text-green-400" : "text-red-400"}`}>
-                          EV {formatEV(topEv!.bestEv!)}
-                        </p>
-                        <p className={`text-[11px] font-bold ${isOver ? "text-green-400/70" : "text-red-400/70"}`}>
-                          {side}
-                        </p>
-                        <p className="text-[10px] text-white/40">
-                          {MARKET_LABELS[topProp.market] ?? topProp.market} {topProp.line}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 mt-2 text-[10px] text-white/35">
-                      <span>Model: <span className="text-white/60 font-medium tabular-nums">{topEv!.expectedCombined.toFixed(1)}</span></span>
-                      <span>·</span>
-                      <span>P({side.toLowerCase()}): <span className="text-white/60 font-medium tabular-nums">{Math.round((isOver ? topEv!.probOver : topEv!.probUnder) * 100)}%</span></span>
-                      <span>·</span>
-                      <span>{topEv!.confidence} confidence</span>
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        {/* Returning Player Edges */}
-        {returningEdges.length > 0 && (
-          <section className="mb-8">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xs font-bold text-white/40 uppercase tracking-widest">Returning Player Edges</h2>
-              <span className="text-[10px] text-white/25">Based on historical injury return data</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-2">
-              {returningEdges.map((p) => {
-                const curve = findCurve(p);
-                const impG3 = curve ? getCurveImpact(curve, 2, p.league_slug) : null;
-                const topProp = p.props[0];
-                const lc = leagueColor(p.league_slug);
-                const fmtD = (d: number) => `${d >= 0 ? "+" : ""}${d.toFixed(1)}`;
-
-                const topStatKey = topProp ? MARKET_TO_STAT[topProp.market] : null;
-                const topBaseline = topStatKey && p.avg10 ? p.avg10[topStatKey] : null;
-                const topRecent = topStatKey && p.avgSinceReturn ? p.avgSinceReturn[topStatKey] : null;
-                let topEv: EVResult | null = null;
-                if (curve && topStatKey && topBaseline != null && topBaseline > 0 && topProp?.line != null && p.gamesBack > 0) {
-                  topEv = computeEV({
-                    baseline: topBaseline, propLine: topProp.line,
-                    overOdds: parseOdds(topProp.over_price), underOdds: parseOdds(topProp.under_price),
-                    gamesSinceReturn: p.gamesBack, recentAvg: topRecent, curve,
-                    leagueSlug: p.league_slug, statKey: topStatKey,
-                    preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
-                  });
-                }
-
-                return (
-                  <div
-                    key={p.player_id}
-                    className="relative rounded-xl bg-white/[0.03] border border-white/8 p-4 hover:bg-white/[0.06] hover:border-white/15 transition-all overflow-hidden"
-                  >
-                    <div className="absolute left-0 top-0 bottom-0 w-[2px]" style={{ backgroundColor: `${lc}55` }} />
-
-                    <div className="flex items-center gap-3 mb-2.5">
-                      <PlayerAvatar src={p.headshot_url} name={p.player_name} size={36} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold truncate">{p.player_name}</p>
-                        <div className="flex items-center gap-1.5 text-[10px] text-white/35">
-                          <span style={{ color: `${lc}aa` }}>{LEAGUE_LABELS[p.league_slug]}</span>
-                          <span>·</span>
-                          <span>{p.injury_type}</span>
-                          <span>·</span>
-                          <span>{p.gamesBack} game{p.gamesBack !== 1 ? "s" : ""} back</span>
-                          <GameTimeBadge commenceTime={p.commence_time} gameDate={p.game_date} />
-                        </div>
-                      </div>
-                      {topProp && (
-                        <div className="text-right shrink-0">
-                          <p className="text-[9px] text-white/30">{MARKET_LABELS[topProp.market] ?? topProp.market} line</p>
-                          <p className="text-lg font-bold">{topProp.line}</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {curve && impG3 && (
-                      <div className="rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2 mb-2">
-                        <p className="text-[10px] text-white/30 mb-1">
-                          Historical {p.injury_type?.toLowerCase()} return trend
-                        </p>
-                        <div className="flex items-center gap-4 text-[11px]">
-                          {([["G1", 0], ["G3", 2], ["G5", 4]] as [string, number][]).map(([label, gIdx]) => {
-                            const imp = getCurveImpact(curve, gIdx, p.league_slug);
-                            return (
-                              <span key={label} className="tabular-nums">
-                                <span className="text-white/25">{label}: </span>
-                                <span className={imp && imp.diff < 0 ? "text-red-400/80" : "text-green-400/80"}>
-                                  {imp ? `${fmtD(imp.diff)} ${imp.label}` : "—"}
-                                </span>
-                              </span>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {topEv && topEv.recommendation && topEv.bestEv != null && (
-                      <div className={`rounded-lg px-3 py-2 mb-1 border ${topEv.recommendation === "OVER" ? "bg-green-500/10 border-green-500/20" : "bg-red-500/10 border-red-500/20"}`}>
-                        <div className="flex items-center justify-between">
-                          <div className="text-[10px] text-white/40">
-                            <span>Model: <span className="text-white/60 font-medium tabular-nums">{topEv.expectedCombined.toFixed(1)}</span></span>
-                            <span className="mx-1.5">·</span>
-                            <span>P({topEv.recommendation.toLowerCase()}): <span className="text-white/60 font-medium tabular-nums">{Math.round((topEv.recommendation === "OVER" ? topEv.probOver : topEv.probUnder) * 100)}%</span></span>
-                          </div>
-                          <span className={`text-xs font-bold tabular-nums ${topEv.recommendation === "OVER" ? "text-green-400" : "text-red-400"}`}>
-                            EV {formatEV(topEv.bestEv)} · {topEv.recommendation}
-                          </span>
-                        </div>
-                        <p className="text-[9px] text-white/20 mt-0.5">
-                          Confidence: {topEv.confidence} · {topEv.sampleSize.toLocaleString()} historical cases
-                        </p>
-                      </div>
-                    )}
-
-                    {!topEv?.recommendation && impG3 && impG3.diff < 0 && (
-                      <p className="text-[10px] text-white/25 leading-snug">
-                        Market may still reflect injury uncertainty — historical {impG3.label.toLowerCase()} has typically lagged baseline in early return games.
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-
-        {/* Source tabs */}
-        {activeSources.length > 1 && (
-          <div className="flex gap-1 mb-4">
-            {["draftkings", "fanduel", ...activeSources.filter((s) => s !== "draftkings" && s !== "fanduel")].filter((s) => activeSources.includes(s)).map((src) => (
-              <button
-                key={src}
-                onClick={() => setSourceFilter(src)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  sourceFilter === src ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
-                }`}
-              >
-                {SOURCE_LABELS[src] ?? src}
-              </button>
-            ))}
-            <button
-              onClick={() => setSourceFilter("all")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                sourceFilter === "all" ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
-              }`}
-            >
-              All
-            </button>
-          </div>
-        )}
-
-        {/* League filter */}
-        <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
+        {/* STEP 5: League filters */}
+        <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1">
           <button
             onClick={() => setLeagueFilter("all")}
             className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
@@ -1155,6 +1562,50 @@ export default function PropsPage() {
           })}
         </div>
 
+        {/* STEP 5: Stat filters */}
+        {activeStatFilters.length > 2 && (
+          <div className="flex gap-1 mb-3 overflow-x-auto pb-1">
+            {activeStatFilters.map((f) => (
+              <button
+                key={f.value}
+                onClick={() => setStatFilter(f.value)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors shrink-0 ${
+                  statFilter === f.value
+                    ? "bg-emerald-500/20 text-emerald-400"
+                    : "bg-white/5 text-white/35 hover:text-white/55"
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Source tabs */}
+        {activeSources.length > 1 && (
+          <div className="flex gap-1 mb-3">
+            {["draftkings", "fanduel", ...activeSources.filter((s) => s !== "draftkings" && s !== "fanduel")].filter((s) => activeSources.includes(s)).map((src) => (
+              <button
+                key={src}
+                onClick={() => setSourceFilter(src)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  sourceFilter === src ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
+                }`}
+              >
+                {SOURCE_LABELS[src] ?? src}
+              </button>
+            ))}
+            <button
+              onClick={() => setSourceFilter("all")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                sourceFilter === "all" ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
+              }`}
+            >
+              All
+            </button>
+          </div>
+        )}
+
         {/* Sort controls */}
         <div className="flex items-center gap-2 mb-4">
           <span className="text-[10px] text-white/25 shrink-0">Sort by</span>
@@ -1177,7 +1628,6 @@ export default function PropsPage() {
         {filtered.length > 0 && (
           <div className="flex gap-4 text-xs text-white/40 mb-4">
             <span>{filtered.length} players with props</span>
-            <span>{injuredCount} currently injured</span>
             {recentlyReturned.length > 0 && (
               <span>{recentlyReturned.length} recently returned</span>
             )}
@@ -1197,6 +1647,130 @@ export default function PropsPage() {
           </div>
         ) : (
           <>
+            {/* STEP 1: Top signal cards — analytics-first design */}
+            {topEdges.length > 0 && (
+              <section className="mb-6">
+                <h2 className="text-xs font-bold text-[#1C7CFF]/80 uppercase tracking-widest mb-3">Strongest Return Signals</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {topEdges.map(({ player: p, ev: topEv, prop: topProp }) => {
+                    const lc = leagueColor(p.league_slug);
+                    const side = topEv!.recommendation!;
+                    const isOver = side === "OVER";
+                    const curve = findCurve(p);
+                    const impG3 = curve ? getCurveImpact(curve, 2, p.league_slug) : null;
+                    const edge = edgeLabel(topEv!.bestEv!);
+                    const statKey = MARKET_TO_STAT[topProp?.market ?? ""];
+                    const preVal = statKey && p.avg10 ? (p.avg10 as Record<string, number | undefined>)[statKey.replace("stat_", "")] ?? null : null;
+                    const returnVal = statKey && p.avgSinceReturn ? (p.avgSinceReturn as Record<string, number | undefined>)[statKey.replace("stat_", "")] ?? null : null;
+                    const propExplanation = topProp ? generatePropExplanation(
+                      topProp.market, topProp.line, preVal, returnVal, p.gamesBack, impG3?.diff ?? null
+                    ) : null;
+                    const modelDiffPct = topProp && topProp.line && topEv!.expectedCombined > 0
+                      ? ((topEv!.expectedCombined - topProp.line) / topProp.line * 100)
+                      : null;
+                    return (
+                      <div
+                        key={p.player_id}
+                        className={`relative rounded-xl border p-4 transition-all overflow-hidden cursor-pointer ${
+                          isOver
+                            ? "bg-green-500/[0.06] border-green-500/20 hover:border-green-500/40"
+                            : "bg-red-500/[0.06] border-red-500/20 hover:border-red-500/40"
+                        }`}
+                        onClick={() => {
+                          trackPlayerAnalysisView({
+                            player_name: p.player_name,
+                            injury_type: p.injury_type ?? "unknown",
+                            games_since_return: p.gamesBack,
+                            stat_type: topProp ? (MARKET_LABELS[topProp.market] ?? topProp.market) : undefined,
+                            edge_percent: topEv?.bestEv ?? undefined,
+                            page_origin: "props_page",
+                          });
+                          const el = document.getElementById(`prop-player-${p.player_id}`);
+                          el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                        }}
+                      >
+                        {/* Player Header + Game Return Badge */}
+                        <div className="flex items-center gap-3 mb-2">
+                          <PlayerAvatar src={p.headshot_url} name={p.player_name} size={40} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-semibold truncate">{p.player_name}</p>
+                              <GameReturnBadge gamesBack={p.gamesBack} />
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[10px] text-white/35">
+                              <span style={{ color: `${lc}aa` }}>{LEAGUE_LABELS[p.league_slug]}</span>
+                              <span>·</span>
+                              <span>{p.injury_type}</span>
+                              <GameTimeBadge commenceTime={p.commence_time} gameDate={p.game_date} />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Signal box — market vs model comparison */}
+                        {topProp && (
+                          <div className={`rounded-lg px-3 py-2.5 mb-2 ${isOver ? "bg-green-500/10" : "bg-red-500/10"}`}>
+                            <div className="flex items-center justify-between mb-1.5">
+                              <p className="text-[10px] text-white/40">{MARKET_LABELS[topProp.market] ?? topProp.market}</p>
+                              <span className={`text-[11px] font-semibold ${edge.color}`}>{edge.text}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-baseline gap-4">
+                                <div>
+                                  <p className="text-[9px] text-white/30">Market</p>
+                                  <p className="text-lg font-bold text-white tabular-nums">{topProp.line}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-white/30">Model</p>
+                                  <p className="text-lg font-bold text-white/60 tabular-nums">{topEv!.expectedCombined.toFixed(1)}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className={`text-xs font-bold ${isOver ? "text-green-400/80" : "text-red-400/80"}`}>
+                                  {side}
+                                </p>
+                                {modelDiffPct != null && (
+                                  <p className="text-[10px] text-white/45 mt-0.5">
+                                    Model {modelDiffPct > 0 ? "+" : ""}{modelDiffPct.toFixed(1)}% vs market
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Why this signal — 1-line explanation */}
+                        {propExplanation && (
+                          <p className="text-[10px] text-white/40 italic mb-2 leading-snug">Signal: {propExplanation}</p>
+                        )}
+
+                        {/* Metadata row */}
+                        <div className="flex items-center gap-3 text-[10px] text-white/35">
+                          <span>P({side.toLowerCase()}) <span className="text-white/60 font-medium tabular-nums">{Math.round((isOver ? topEv!.probOver : topEv!.probUnder) * 100)}%</span></span>
+                          <span className="text-white/20">|</span>
+                          <span>{topEv!.confidence} conf.</span>
+                          {impG3 && impG3.diff < 0 && (
+                            <>
+                              <span className="text-white/20">|</span>
+                              <span className="text-red-400/60">{impG3.diff.toFixed(1)} {impG3.label} hist. avg</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {/* Premium unlock counter */}
+            <div className="flex items-center justify-between mb-3">
+              <PremiumUnlockCounter />
+              <span className="text-[9px] text-white/15">Free during beta</span>
+            </div>
+
+            {/* STEP 2: Daily Opportunities Table */}
+            <DailyOpportunitiesTable players={filtered} findCurve={findCurve} />
+
             {/* Recently Returned from Injury */}
             {recentlyReturned.length > 0 && (
               <section className="mb-8">
@@ -1206,7 +1780,7 @@ export default function PropsPage() {
                 </div>
                 <div className="space-y-3">
                   {recentlyReturned.map((p) => (
-                    <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} curve={findCurve(p)} highlighted={highlightedPlayerId === p.player_id} />
+                    <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} curve={findCurve(p)} highlighted={highlightedPlayerId === p.player_id} statFilter={statFilter} />
                   ))}
                 </div>
               </section>
@@ -1221,11 +1795,13 @@ export default function PropsPage() {
                 </div>
                 <div className="space-y-3">
                   {otherPlayers.map((p) => (
-                    <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} curve={findCurve(p)} highlighted={highlightedPlayerId === p.player_id} />
+                    <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} curve={findCurve(p)} highlighted={highlightedPlayerId === p.player_id} statFilter={statFilter} />
                   ))}
                 </div>
               </section>
             )}
+            {/* Early access CTA */}
+            <EarlyAccessCTA className="mt-6 border-t border-white/5" page="props" location="page_footer" />
           </>
         )}
       </div>

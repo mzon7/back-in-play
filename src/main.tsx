@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HelmetProvider } from "react-helmet-async";
 import { AuthProvider } from "@mzon7/zon-incubator-sdk/auth";
 import { supabase } from "./lib/supabase";
+import { PremiumUnlocksProvider } from "./lib/premiumUnlocks";
 import { installFrontendErrorCapture } from "./lib/errorReporting";
 import { Analytics } from "@vercel/analytics/react";
 import { SpeedInsights } from "@vercel/speed-insights/react";
@@ -39,9 +40,11 @@ createRoot(document.getElementById("root")!).render(
       <BrowserRouter>
         <QueryClientProvider client={queryClient}>
           <AuthProvider supabase={supabase}>
-            <App />
-            <Analytics />
-            <SpeedInsights />
+            <PremiumUnlocksProvider>
+              <App />
+              <Analytics />
+              <SpeedInsights />
+            </PremiumUnlocksProvider>
           </AuthProvider>
         </QueryClientProvider>
       </BrowserRouter>

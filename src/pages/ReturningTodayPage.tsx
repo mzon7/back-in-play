@@ -5,7 +5,8 @@ import { SiteHeader } from "../components/SiteHeader";
 import { SEO } from "../components/seo/SEO";
 import { breadcrumbJsonLd, jsonLdGraph } from "../components/seo/seoHelpers";
 import { supabase, dbTable } from "../lib/supabase";
-import { InjuryPlayerCard } from "../components/InjuryPlayerCard";
+import { PlayerAvatar } from "../components/PlayerAvatar";
+import { leagueColor } from "../lib/leagueColors";
 import type { PerformanceCurve } from "../features/performance-curves/lib/types";
 import { STAT_LABELS, LEAGUE_STATS } from "../features/performance-curves/lib/types";
 
@@ -274,109 +275,150 @@ function useReturningPlayers(leagueSlug?: string) {
   });
 }
 
-function parseJsonArray(val: unknown): (number | null)[] {
-  if (Array.isArray(val)) return val;
-  if (typeof val === "string") { try { return JSON.parse(val); } catch { return []; } }
-  return [];
+/** Compact tag for player status */
+function returnTag(p: ReturningPlayer): { text: string; color: string } | null {
+  if (p.games_back <= 3 && p.curve) {
+    const medians = p.curve.stat_median_pct ?? {};
+    const vals = Object.values(medians).map((arr) => (Array.isArray(arr) ? arr[0] : null)).filter((v): v is number => v != null);
+    const avg = vals.length > 0 ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+    if (avg != null && avg < 0.85) return { text: "Strong historical drop", color: "bg-red-500/15 text-red-400/80 border-red-500/25" };
+  }
+  if (p.status === "reduced_load") return { text: "Minutes restricted", color: "bg-amber-500/15 text-amber-400/80 border-amber-500/25" };
+  if (p.is_star && p.games_back <= 3) return { text: "High impact return", color: "bg-blue-500/15 text-blue-400/80 border-blue-500/25" };
+  return null;
 }
 
-function PerformancePreview({ curve, leagueSlug }: { curve: PerformanceCurve; leagueSlug: string }) {
-  const stats = LEAGUE_STATS[leagueSlug] ?? [];
-  const median1 = parseJsonArray(curve.median_pct_recent)[0];
-  const median5 = parseJsonArray(curve.median_pct_recent)[4];
+/** Performance trend from curve data */
+function perfTrend(p: ReturningPlayer): { text: string; color: string; detail: string | null } {
+  if (!p.curve || p.games_back <= 0) return { text: "No data", color: "text-white/30", detail: null };
+  const medians = p.curve.stat_median_pct ?? {};
+  const gIdx = Math.min(p.games_back - 1, 9);
+  const vals = Object.values(medians).map((arr) => (Array.isArray(arr) ? arr[gIdx] : null)).filter((v): v is number => v != null);
+  if (vals.length === 0) return { text: "No data", color: "text-white/30", detail: null };
+  const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
+  const pct = Math.round((avg - 1) * 100);
+  if (avg < 0.85) return { text: "Underperforming", color: "text-red-400", detail: `${pct}% vs baseline` };
+  if (avg < 0.95) return { text: "Below baseline", color: "text-amber-400", detail: `${pct}% vs baseline` };
+  if (avg <= 1.05) return { text: "Near baseline", color: "text-green-400", detail: `${pct >= 0 ? "+" : ""}${pct}% vs baseline` };
+  return { text: "Overperforming", color: "text-cyan-400", detail: `+${pct}% vs baseline` };
+}
 
-  // Parse stat data
-  let statAvg: Record<string, (number | null)[]> | null = null;
-  if (curve.stat_avg_pct) {
-    statAvg = typeof curve.stat_avg_pct === "string" ? JSON.parse(curve.stat_avg_pct) : curve.stat_avg_pct;
-  }
+function DashboardCard({ player, multiLeague }: { player: ReturningPlayer; multiLeague: boolean }) {
+  const isBack = ["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(player.status);
+  const lc = leagueColor(player.league_slug);
+  const tag = isBack ? returnTag(player) : null;
+  const trend = isBack ? perfTrend(player) : null;
+  const gbColor = player.games_back <= 3
+    ? "bg-red-500/15 text-red-400/90 border-red-500/25"
+    : player.games_back <= 6
+    ? "bg-amber-500/15 text-amber-400/90 border-amber-500/25"
+    : "bg-green-500/15 text-green-400/90 border-green-500/25";
 
   return (
-    <div className="mt-3 bg-white/[0.03] rounded-lg p-3 border border-white/5">
-      <p className="text-[10px] text-white/30 uppercase tracking-wider font-medium mb-2">
-        Historical Performance After {curve.injury_type} ({curve.sample_size} cases)
-      </p>
-      <div className="grid grid-cols-2 gap-2 mb-2">
-        <div className="text-center">
-          <p className="text-[10px] text-white/30">Game 1 Back</p>
-          <p className={`text-sm font-bold ${median1 != null && median1 >= 1.0 ? "text-green-400" : "text-amber-400"}`}>
-            {median1 != null ? `${Math.round(median1 * 100)}%` : "—"}
-          </p>
-        </div>
-        <div className="text-center">
-          <p className="text-[10px] text-white/30">Game 5 Back</p>
-          <p className={`text-sm font-bold ${median5 != null && median5 >= 1.0 ? "text-green-400" : "text-amber-400"}`}>
-            {median5 != null ? `${Math.round(median5 * 100)}%` : "—"}
-          </p>
+    <div className="rounded-xl border border-white/8 bg-white/[0.02] hover:bg-white/[0.04] transition-colors p-4">
+      {/* Header row */}
+      <div className="flex items-start gap-3 mb-3">
+        <PlayerAvatar src={player.headshot_url} name={player.player_name} size={40} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Link to={`/player/${player.player_slug}`} className="text-sm font-semibold text-white hover:text-blue-400 transition-colors truncate">
+              {player.player_name}
+            </Link>
+            {player.is_star && <span className="text-[9px] text-amber-400/70">★</span>}
+            {tag && (
+              <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[8px] font-semibold ${tag.color}`}>
+                {tag.text}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 text-[10px] text-white/35 mt-0.5">
+            {multiLeague && <span style={{ color: `${lc}aa` }}>{LEAGUE_LABELS[player.league_slug]}</span>}
+            {multiLeague && <span>·</span>}
+            <span>{player.team_name}</span>
+            <span>·</span>
+            <span>{player.position}</span>
+            <span>·</span>
+            <span>{player.injury_type}</span>
+          </div>
         </div>
       </div>
-      {/* Per-stat breakdown for game 1 */}
-      {statAvg && (
-        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
-          {stats.map((stat) => {
-            const g1 = statAvg![stat]?.[0];
-            if (g1 == null) return null;
-            const pct = Math.round(g1 * 100);
-            const diff = pct - 100;
-            return (
-              <span key={stat} className="text-[11px]">
-                <span className="text-white/30">{STAT_LABELS[stat] ?? stat}: </span>
-                <span className={diff >= 0 ? "text-green-400" : "text-red-400"}>
-                  {diff >= 0 ? "+" : ""}{diff}%
-                </span>
-              </span>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
-function PlayerCard({ player, multiLeague }: { player: ReturningPlayer; multiLeague: boolean }) {
-  const isBack = ["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(player.status);
+      {/* Key metrics row */}
+      <div className="flex items-center gap-3 flex-wrap">
+        {/* Games back badge */}
+        {isBack && player.games_back >= 0 && (
+          <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[9px] font-semibold ${gbColor}`}>
+            {player.games_back === 0 ? "Just Returned" : `Game ${player.games_back} After Return`}
+          </span>
+        )}
 
-  return (
-    <InjuryPlayerCard
-      player_name={player.player_name}
-      player_slug={player.player_slug}
-      position={player.position}
-      team_name={player.team_name}
-      league_slug={player.league_slug}
-      headshot_url={player.headshot_url}
-      status={player.status}
-      injury_type={player.injury_type}
-      date_injured={player.date_injured}
-      expected_return={player.expected_return}
-      is_star={player.is_star}
-      is_starter={player.is_starter}
-      games_missed={player.games_missed}
-      showLeague={multiLeague}
-      avatarSize={48}
-    >
-      {/* Extra returning-specific details */}
-      <div className="px-4 pb-3">
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          {player.games_missed != null && player.games_missed > 0 && (
-            <span className="text-white/50">
-              <span className="text-white/30">Missed:</span> {player.games_missed} game{player.games_missed !== 1 ? "s" : ""}
-            </span>
-          )}
-          {isBack && player.games_back > 0 && (
-            <span className="text-cyan-400/70 font-medium">
-              ~{player.games_back} game{player.games_back !== 1 ? "s" : ""} back
-            </span>
-          )}
-          {isBack && player.games_back === 0 && (
-            <span className="text-green-400/70 font-medium">Just returned</span>
-          )}
-        </div>
-        {/* Performance preview from curve data */}
-        {player.curve && (
-          <PerformancePreview curve={player.curve} leagueSlug={player.league_slug} />
+        {/* Performance trend */}
+        {isBack && trend && trend.text !== "No data" && (
+          <div className="flex items-center gap-1.5">
+            <span className={`text-[10px] font-semibold ${trend.color}`}>{trend.text}</span>
+            {trend.detail && <span className="text-[9px] text-white/25 tabular-nums">{trend.detail}</span>}
+          </div>
+        )}
+
+        {/* Games missed */}
+        {player.games_missed != null && player.games_missed > 0 && (
+          <span className="text-[10px] text-white/30">Missed {player.games_missed} game{player.games_missed !== 1 ? "s" : ""}</span>
+        )}
+
+        {/* Nearing return status */}
+        {!isBack && player.expected_return && (
+          <span className="text-[10px] text-amber-400/60">Expected: {player.expected_return}</span>
         )}
       </div>
-    </InjuryPlayerCard>
+
+      {/* Compact performance preview — only 1-2 key stats */}
+      {isBack && player.curve && (() => {
+        const stats = LEAGUE_STATS[player.league_slug] ?? [];
+        const statAvg = player.curve!.stat_avg_pct
+          ? (typeof player.curve!.stat_avg_pct === "string" ? JSON.parse(player.curve!.stat_avg_pct) : player.curve!.stat_avg_pct)
+          : null;
+        if (!statAvg) return null;
+        const gIdx = Math.min(player.games_back - 1, 9);
+        const items = stats
+          .map((stat) => {
+            const val = statAvg[stat]?.[gIdx];
+            if (val == null) return null;
+            const pct = Math.round((val - 1) * 100);
+            return { stat, pct };
+          })
+          .filter((v): v is { stat: string; pct: number } => v != null)
+          .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
+          .slice(0, 2);
+        if (items.length === 0) return null;
+        return (
+          <div className="flex items-center gap-3 mt-2">
+            {items.map(({ stat, pct }) => (
+              <span key={stat} className="text-[10px]">
+                <span className="text-white/30">{STAT_LABELS[stat] ?? stat}: </span>
+                <span className={pct >= 0 ? "text-green-400/70" : "text-red-400/70"}>{pct >= 0 ? "+" : ""}{pct}%</span>
+              </span>
+            ))}
+            <span className="text-[9px] text-white/15">({player.curve!.sample_size} cases)</span>
+          </div>
+        );
+      })()}
+
+      {/* Action link */}
+      <div className="flex items-center gap-3 mt-3 pt-2 border-t border-white/5">
+        <Link
+          to={`/props?player=${encodeURIComponent(player.player_name)}`}
+          className="text-[10px] text-blue-400/50 hover:text-blue-400/80 transition-colors"
+        >
+          View model signals →
+        </Link>
+        <Link
+          to={`/player/${player.player_slug}`}
+          className="text-[10px] text-white/25 hover:text-white/50 transition-colors"
+        >
+          Player profile →
+        </Link>
+      </div>
+    </div>
   );
 }
 
@@ -394,17 +436,32 @@ export default function ReturningTodayPage() {
     (p) => !["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(p.status)
   ), [players]);
 
-  // Just Returned: players with return_date, 0-10 games back, sorted by fewest games
-  const justReturned = useMemo(() => players.filter(
+  // Group returned players by return window
+  const allReturned = useMemo(() => players.filter(
     (p) => ["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(p.status)
-      && p.return_date && (p.games_back ?? 0) >= 0 && (p.games_back ?? 0) <= 10
-  ).sort((a, b) => (a.games_back ?? 0) - (b.games_back ?? 0)), [players]);
-
-  // Other recently returned: more than 10 games back
-  const recentlyBack = useMemo(() => players.filter(
-    (p) => ["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(p.status)
-      && (!p.return_date || (p.games_back ?? 0) > 10)
   ), [players]);
+
+  const earlyReturn = useMemo(() => allReturned
+    .filter((p) => p.games_back >= 0 && p.games_back <= 3)
+    .sort((a, b) => a.games_back - b.games_back), [allReturned]);
+
+  const recentReturn = useMemo(() => allReturned
+    .filter((p) => p.games_back >= 4 && p.games_back <= 10)
+    .sort((a, b) => a.games_back - b.games_back), [allReturned]);
+
+  const allOther = useMemo(() => allReturned
+    .filter((p) => p.games_back > 10 || !p.return_date)
+    .sort((a, b) => (a.games_back ?? 0) - (b.games_back ?? 0)), [allReturned]);
+
+  // Summary stats
+  const reducedPerf = useMemo(() => allReturned.filter((p) => {
+    if (!p.curve || p.games_back <= 0) return false;
+    const medians = p.curve.stat_median_pct ?? {};
+    const gIdx = Math.min(p.games_back - 1, 9);
+    const vals = Object.values(medians).map((arr) => (Array.isArray(arr) ? arr[gIdx] : null)).filter((v): v is number => v != null);
+    if (vals.length === 0) return false;
+    return vals.reduce((s, v) => s + v, 0) / vals.length < 0.9;
+  }).length, [allReturned]);
 
   const leagueLabel = league === "all" ? "" : ` ${LEAGUE_LABELS[league]}`;
   const title = `${leagueLabel ? LEAGUE_LABELS[league] : ""} Players Returning From Injury Today (${today})`;
@@ -485,58 +542,99 @@ export default function ReturningTodayPage() {
           ))}
         </div>
 
+        {/* Summary bar */}
+        {!isLoading && (allReturned.length > 0 || returning.length > 0) && (
+          <div className="rounded-xl bg-gradient-to-r from-blue-500/[0.06] to-purple-500/[0.04] border border-blue-500/15 px-4 py-3 mb-6">
+            <div className="flex items-center gap-5 text-[12px] text-white/45 flex-wrap">
+              <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                <span className="font-medium text-white/60">{allReturned.length}</span> players returned recently
+              </span>
+              {earlyReturn.length > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-400/80" />
+                  <span className="font-medium text-red-400/70">{earlyReturn.length}</span> in early return window (G1–G3)
+                </span>
+              )}
+              {reducedPerf > 0 && (
+                <span className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400/80" />
+                  <span className="font-medium text-amber-400/70">{reducedPerf}</span> showing reduced performance
+                </span>
+              )}
+              {returning.length > 0 && (
+                <span>{returning.length} nearing return</span>
+              )}
+            </div>
+          </div>
+        )}
+
         {isLoading ? (
           <div className="space-y-3">
             {[1, 2, 3, 4].map((i) => <div key={i} className="h-28 rounded-xl bg-white/10 animate-pulse" />)}
           </div>
         ) : (
           <>
-            {/* Players likely returning / questionable */}
+            {/* Section 1: Early Return Window (G1–G3) — most important */}
+            {earlyReturn.length > 0 && (
+              <section className="mb-8">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-base">🔥</span>
+                  <h2 className="text-sm font-bold text-red-400/80 uppercase tracking-wider">Early Return Window</h2>
+                  <span className="text-[10px] text-white/30">({earlyReturn.length})</span>
+                </div>
+                <p className="text-[11px] text-white/30 mb-3">Games 1–3 after return — highest performance volatility and largest market gaps</p>
+                <div className="space-y-2.5">
+                  {earlyReturn.map((p) => <DashboardCard key={p.player_id} player={p} multiLeague={league === "all"} />)}
+                </div>
+              </section>
+            )}
+
+            {/* Section 2: Recently Returned (G4–G10) */}
+            {recentReturn.length > 0 && (
+              <section className="mb-8">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-base">⚡</span>
+                  <h2 className="text-sm font-bold text-amber-400/80 uppercase tracking-wider">Recently Returned</h2>
+                  <span className="text-[10px] text-white/30">({recentReturn.length})</span>
+                </div>
+                <p className="text-[11px] text-white/30 mb-3">Games 4–10 after return — still stabilizing toward baseline performance</p>
+                <div className="space-y-2.5">
+                  {recentReturn.map((p) => <DashboardCard key={p.player_id} player={p} multiLeague={league === "all"} />)}
+                </div>
+              </section>
+            )}
+
+            {/* Section 3: Nearing Return */}
             {returning.length > 0 && (
               <section className="mb-8">
-                <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-amber-400" />
-                  Nearing Return ({returning.length})
-                </h2>
-                <div className="space-y-3">
-                  {returning.map((p) => <PlayerCard key={p.player_id} player={p} multiLeague={league === "all"} />)}
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-base">📋</span>
+                  <h2 className="text-sm font-bold text-white/50 uppercase tracking-wider">Nearing Return</h2>
+                  <span className="text-[10px] text-white/30">({returning.length})</span>
+                </div>
+                <p className="text-[11px] text-white/30 mb-3">Players likely to return soon — watch for status updates</p>
+                <div className="space-y-2.5">
+                  {returning.map((p) => <DashboardCard key={p.player_id} player={p} multiLeague={league === "all"} />)}
                 </div>
               </section>
             )}
 
-            {/* Just Returned: 0-10 games back */}
-            {justReturned.length > 0 && (
+            {/* Section 4: All Other Returns */}
+            {allOther.length > 0 && (
               <section className="mb-8">
-                <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-cyan-400" />
-                  Just Returned ({justReturned.length})
-                </h2>
-                <p className="text-xs text-white/30 mb-3">
-                  Players within their first 10 games back from injury — the window where performance is most affected.
-                </p>
-                <div className="space-y-3">
-                  {justReturned.map((p) => <PlayerCard key={p.player_id} player={p} multiLeague={league === "all"} />)}
+                <div className="flex items-center gap-2 mb-1">
+                  <h2 className="text-sm font-bold text-white/30 uppercase tracking-wider">Past Recovery Window</h2>
+                  <span className="text-[10px] text-white/20">({allOther.length})</span>
+                </div>
+                <p className="text-[11px] text-white/20 mb-3">Players past the initial recovery window</p>
+                <div className="space-y-2.5">
+                  {allOther.map((p) => <DashboardCard key={p.player_id} player={p} multiLeague={league === "all"} />)}
                 </div>
               </section>
             )}
 
-            {/* Recently returned: 11+ games back */}
-            {recentlyBack.length > 0 && (
-              <section className="mb-8">
-                <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-green-400" />
-                  Recently Returned ({recentlyBack.length})
-                </h2>
-                <p className="text-xs text-white/30 mb-3">
-                  Players who recently returned from injury and are past the initial recovery window.
-                </p>
-                <div className="space-y-3">
-                  {recentlyBack.map((p) => <PlayerCard key={p.player_id} player={p} multiLeague={league === "all"} />)}
-                </div>
-              </section>
-            )}
-
-            {returning.length === 0 && justReturned.length === 0 && recentlyBack.length === 0 && (
+            {allReturned.length === 0 && returning.length === 0 && (
               <div className="rounded-2xl border border-white/10 bg-white/5 p-8 text-center">
                 <p className="text-white/50">No players currently nearing return{league !== "all" ? ` in the ${LEAGUE_LABELS[league]}` : ""}.</p>
                 <p className="text-xs text-white/30 mt-2">Check back during the season for daily return updates.</p>
