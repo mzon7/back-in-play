@@ -64,14 +64,16 @@ LEAGUES = {
     },
     "premier-league": {
         "sport_key": "soccer_epl",
-        "markets": ["player_shots", "player_shots_on_target"],
+        "markets": ["player_shots", "player_shots_on_target", "player_goals"],
         "start": "2023-08-11",
         "end": "2026-03-14",
         "league_id": "759cf693-7e15-4ea5-a3ed-ff9fd7d6bbb0",
     },
 }
 
-REGION = "us"
+REGION_DEFAULT = "us"
+# EPL gets much better coverage from UK bookmakers
+REGION_BY_LEAGUE = {"premier-league": "uk"}
 MIN_GAME_LOGS = 5  # Player must have at least this many game logs
 
 
@@ -206,13 +208,14 @@ def get_historical_events(sport, date_str):
     return resp.json().get("data", []), remaining
 
 
-def get_historical_event_odds(sport, event_id, date_str, markets):
+def get_historical_event_odds(sport, event_id, date_str, markets, league=None):
     date_param = f"{date_str}T18:00:00Z"
     url = f"{BASE_URL}/historical/sports/{sport}/events/{event_id}/odds"
+    region = REGION_BY_LEAGUE.get(league, REGION_DEFAULT)
     params = {
         "apiKey": ODDS_API_KEY,
         "date": date_param,
-        "regions": REGION,
+        "regions": region,
         "markets": ",".join(markets),
         "oddsFormat": "american",
     }
@@ -413,7 +416,7 @@ def scrape_league(league_slug):
 
             try:
                 odds_data, remaining = get_historical_event_odds(
-                    sport_key, event_id, date_str, markets
+                    sport_key, event_id, date_str, markets, league=league
                 )
                 credits_used += len(markets) * 10
             except Exception as e:

@@ -15,6 +15,8 @@ import { BlurredInsight, EarlyAccessCTA } from "../components/PremiumTease";
 import { WhyThisSignal } from "../components/WhyThisSignal";
 import { PremiumGate } from "../components/PremiumGate";
 import { PremiumUnlockCounter } from "../components/PremiumUnlockCounter";
+import { PlayerBreakdownPanel } from "../components/PlayerBreakdownPanel";
+import { trackFilterChange, trackTableSort, trackOpportunityRowClick, trackDateFilterChange } from "../lib/analytics";
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -467,13 +469,156 @@ function RecoveryCurveMini({ curve, leagueSlug, gamesBack }: { curve: Performanc
   );
 }
 
-// ─── STEP 3: Edge strength label (cap display, keep actual for sorting) ──────
+// ─── Backtest-driven signal strength ──────────────────────────────────────────
 
-function edgeLabel(evPct: number): { text: string; color: string } {
+/** ML model suffixes to evaluate (Model D and E only) */
+const SIGNAL_MODEL_SUFFIXES = ["_model_d", "_model_e"];
+
+/** Profitability profile per league, derived from ML backtest results */
+interface LeagueModelProfile {
+  bestModel: string; // suffix of best model
+  roi: number; // ROI at EV>=5% filter
+  winRate: number; // win rate at EV>=5% filter
+  profitable: boolean;
+  totalBets: number;
+}
+
+/** Compute ROI/win-rate from raw bets, filtered by minimum EV threshold */
+function computeBetStats(bets: any[], minEv = 5) {
+  const filtered = bets.filter((b: any) => Math.abs(b.ev ?? 0) >= minEv);
+  if (filtered.length === 0) return { roi: 0, winRate: 0, total: 0 };
+  const correct = filtered.filter((b: any) => b.correct).length;
+  const pnl = filtered.reduce((sum: number, b: any) => sum + (b.pnl ?? 0), 0);
+  return {
+    roi: (pnl / filtered.length) * 100,
+    winRate: (correct / filtered.length) * 100,
+    total: filtered.length,
+  };
+}
+
+/** Hook: fetch Model D & E backtest results and build profitability map per league */
+function useBacktestProfiles() {
+  const BACKTEST_LEAGUES = ["nba", "nhl", "mlb", "nfl", "premier-league"];
+  const keys = BACKTEST_LEAGUES.flatMap((l) => SIGNAL_MODEL_SUFFIXES.map((s) => `${l}${s}`));
+
+  return useQuery<Record<string, LeagueModelProfile>>({
+    queryKey: ["bip-backtest-profiles"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("back_in_play_backtest_results")
+        .select("league, results")
+        .in("league", keys);
+      if (error || !data) return {};
+
+      // Parse results and find best ML model per base league
+      const byBase: Record<string, { suffix: string; roi: number; winRate: number; total: number }[]> = {};
+      for (const row of data) {
+        const parsed = typeof row.results === "string" ? JSON.parse(row.results) : row.results;
+        const bets = parsed?.bets;
+        if (!bets || !Array.isArray(bets) || bets.length === 0) continue;
+
+        // Extract base league from key like "nba_model_d"
+        let base = row.league;
+        let suffix = "";
+        for (const s of SIGNAL_MODEL_SUFFIXES) {
+          if (row.league.endsWith(s)) {
+            base = row.league.slice(0, -s.length);
+            suffix = s;
+            break;
+          }
+        }
+
+        // Compute stats at EV >= 5% threshold (where models tend to be profitable)
+        const stats = computeBetStats(bets, 5);
+        if (!byBase[base]) byBase[base] = [];
+        byBase[base].push({ suffix, roi: stats.roi, winRate: stats.winRate, total: stats.total });
+      }
+
+      const profiles: Record<string, LeagueModelProfile> = {};
+      for (const [base, models] of Object.entries(byBase)) {
+        // Pick the model with the highest ROI (prefer models with enough bets)
+        const viable = models.filter((m) => m.total >= 20);
+        const candidates = viable.length > 0 ? viable : models;
+        const best = candidates.reduce((a, b) => (b.roi > a.roi ? b : a), candidates[0]);
+        profiles[base] = {
+          bestModel: best.suffix,
+          roi: best.roi,
+          winRate: best.winRate,
+          profitable: best.roi > 0,
+          totalBets: best.total,
+        };
+      }
+      return profiles;
+    },
+    staleTime: 30 * 60 * 1000, // Cache for 30 minutes
+  });
+}
+
+/**
+ * Percentile-based edge label.
+ * Labels are relative to today's picks — top 20% Strong, next 40% Moderate, bottom 40% Lower.
+ * The `percentile` (0–1) is the player's rank among today's scored picks.
+ */
+function edgeLabel(evPct: number, _leagueProfile?: LeagueModelProfile | null, percentile?: number): { text: string; color: string } {
+  // If we have a percentile rank from today's picks, use it
+  if (percentile != null) {
+    if (percentile >= 0.8) {
+      return { text: "Strong signal", color: evPct > 0 ? "text-green-400" : "text-red-400" };
+    }
+    if (percentile >= 0.4) {
+      return { text: "Moderate signal", color: evPct > 0 ? "text-green-400/80" : "text-red-400/80" };
+    }
+    return { text: "Lower confidence", color: "text-white/40" };
+  }
+
+  // Fallback: pure EV-based (no percentile data available)
   const abs = Math.abs(evPct);
   if (abs >= 15) return { text: "Strong signal", color: evPct > 0 ? "text-green-400" : "text-red-400" };
   if (abs >= 7) return { text: "Moderate signal", color: evPct > 0 ? "text-green-400/80" : "text-red-400/80" };
-  return { text: "Weak signal", color: "text-white/40" };
+  return { text: "Lower confidence", color: "text-white/40" };
+}
+
+/**
+ * Compute percentile map for all scored players.
+ * Returns player_id -> percentile (0–1), where 1 = best.
+ */
+function computePercentiles(
+  players: PropsPlayer[],
+  findCurve: (p: PropsPlayer) => PerformanceCurve | null,
+): Map<string, number> {
+  // Score each player by their best EV
+  const scores: { playerId: string; ev: number }[] = [];
+  for (const p of players) {
+    if (p.gamesBack <= 0) continue;
+    const curve = findCurve(p);
+    if (!curve) continue;
+    let bestEv = 0;
+    for (const prop of p.props) {
+      const statKey = MARKET_TO_STAT[prop.market];
+      const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
+      const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
+      if (!statKey || baseline == null || baseline <= 0 || prop.line == null) continue;
+      const ev = computeEV({
+        baseline, propLine: prop.line,
+        overOdds: parseOdds(prop.over_price), underOdds: parseOdds(prop.under_price),
+        gamesSinceReturn: p.gamesBack, recentAvg: recent, curve,
+        leagueSlug: p.league_slug, statKey,
+        preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
+      });
+      if (ev?.bestEv != null && Math.abs(ev.bestEv) > bestEv) {
+        bestEv = Math.abs(ev.bestEv);
+      }
+    }
+    if (bestEv > 0) scores.push({ playerId: p.player_id, ev: bestEv });
+  }
+
+  // Sort ascending by EV, then assign percentiles
+  scores.sort((a, b) => a.ev - b.ev);
+  const map = new Map<string, number>();
+  for (let i = 0; i < scores.length; i++) {
+    map.set(scores[i].playerId, scores.length > 1 ? i / (scores.length - 1) : 0.5);
+  }
+  return map;
 }
 
 // ─── STEP 4: Game return badge ──────────────────────────────────────────────
@@ -484,10 +629,10 @@ function GameReturnBadge({ gamesBack }: { gamesBack: number }) {
     ? "bg-red-500/15 text-red-400/90 border-red-500/25"
     : gamesBack <= 6
     ? "bg-amber-500/15 text-amber-400/90 border-amber-500/25"
-    : "bg-green-500/15 text-green-400/90 border-green-500/25";
+    : "bg-white/10 text-white/50 border-white/15";
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[10px] font-semibold ${color}`}>
-      Game {gamesBack} After Return
+      G{gamesBack}
     </span>
   );
 }
@@ -959,11 +1104,146 @@ function PlayerPropCard({ player, sourceFilter, curve, highlighted, statFilter }
   );
 }
 
+// ─── Teaser Generator ─────────────────────────────────────────────────────────
+
+function generateTeaser(
+  player: PropsPlayer,
+  curve: PerformanceCurve | null,
+  bestEv: EVResult | null,
+  bestProp: PropItem | null,
+): string {
+  const parts: string[] = [];
+  if (bestEv?.recommendation && bestProp) {
+    const gapPct = bestProp.line != null && bestProp.line > 0
+      ? Math.round(((bestEv.expectedCombined - bestProp.line) / bestProp.line) * 100)
+      : null;
+    if (gapPct != null && gapPct !== 0) parts.push(`Model ${gapPct > 0 ? "+" : ""}${gapPct}% vs ${MARKET_LABELS[bestProp.market] ?? bestProp.market} line`);
+  }
+  if (player.gamesBack > 0 && player.gamesBack <= 3) parts.push(`G${player.gamesBack} early return`);
+  else if (player.gamesBack > 0) parts.push(`G${player.gamesBack} return`);
+  if (player.avg10?.minutes && player.avgSinceReturn?.minutes && player.avgSinceReturn.minutes / player.avg10.minutes < 0.85) {
+    parts.push("minutes limited");
+  }
+  if (curve) {
+    const imp = getCurveImpact(curve, Math.min(player.gamesBack - 1, 2), player.league_slug);
+    if (imp && imp.diff < -0.5) parts.push(`hist. ${imp.diff.toFixed(1)} ${imp.label}`);
+  }
+  return parts.slice(0, 3).join(" · ") || "Injury return analysis available";
+}
+
+// ─── Compact Player Row ──────────────────────────────────────────────────────
+
+function CompactPlayerRow({
+  player, curve, sourceFilter, statFilter, bestEv, bestProp, expanded, onToggle, forceFree, leagueProfile, percentile,
+}: {
+  player: PropsPlayer;
+  curve: PerformanceCurve | null;
+  sourceFilter: string;
+  statFilter?: string;
+  bestEv: EVResult | null;
+  bestProp: PropItem | null;
+  expanded: boolean;
+  onToggle: () => void;
+  forceFree?: boolean;
+  leagueProfile?: LeagueModelProfile | null;
+  percentile?: number;
+}) {
+  const lc = leagueColor(player.league_slug);
+  const isOver = bestEv?.recommendation === "OVER";
+  const edge = bestEv?.bestEv != null ? edgeLabel(bestEv.bestEv, leagueProfile, percentile) : null;
+  const gapPct = bestEv && bestProp?.line != null && bestProp.line > 0
+    ? Math.round(((bestEv.expectedCombined - bestProp.line) / bestProp.line) * 100)
+    : null;
+  const teaser = generateTeaser(player, curve, bestEv, bestProp);
+
+  return (
+    <div id={`prop-player-${player.player_id}`} className="scroll-mt-24">
+      <div
+        className={`rounded-xl border transition-all cursor-pointer ${
+          expanded ? "border-white/15 bg-white/[0.04]" : "border-white/8 bg-white/[0.02] hover:bg-white/[0.04]"
+        }`}
+      >
+        {/* Compact row header */}
+        <div className="flex items-center gap-3 px-4 py-3" onClick={onToggle}>
+          <PlayerAvatar src={player.headshot_url} name={player.player_name} size={36} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <p className="text-[13px] font-semibold truncate">{player.player_name}</p>
+              <GameReturnBadge gamesBack={player.gamesBack} />
+              {forceFree && <span className="text-[8px] text-blue-400/50 font-bold uppercase tracking-wider bg-blue-400/10 px-1 py-0.5 rounded">Top pick</span>}
+            </div>
+            <div className="flex items-center gap-1.5 text-[10px] text-white/35">
+              <span style={{ color: `${lc}aa` }}>{LEAGUE_LABELS[player.league_slug]}</span>
+              <span>·</span>
+              <span className="truncate max-w-[100px]">{player.injury_type}</span>
+              <GameTimeBadge commenceTime={player.commence_time} gameDate={player.game_date} />
+            </div>
+          </div>
+
+          {/* Right side: signal direction + strength */}
+          <div className="flex items-center gap-3 shrink-0">
+            {bestEv?.recommendation && bestProp && (
+              <>
+                <div className="text-right">
+                  <span className="text-[10px] text-white/30">{MARKET_LABELS[bestProp.market] ?? bestProp.market}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[13px] font-bold text-white tabular-nums">{bestProp.line}</span>
+                    <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
+                      {bestEv.recommendation}
+                    </span>
+                  </div>
+                </div>
+                {edge && (
+                  <span className={`text-[10px] font-semibold ${edge.color}`}>{edge.text}</span>
+                )}
+              </>
+            )}
+            <span className={`text-white/30 text-xs transition-transform ${expanded ? "rotate-180" : ""}`}>▾</span>
+          </div>
+        </div>
+
+        {/* Teaser line */}
+        {!expanded && teaser && (
+          <div className="px-4 pb-2.5 -mt-1">
+            <p className="text-[11px] text-white/35 italic">{teaser}</p>
+          </div>
+        )}
+
+        {/* Expanded: PlayerBreakdownPanel */}
+        {expanded && (
+          <PlayerBreakdownPanel
+            player={{
+              player_id: player.player_id,
+              player_name: player.player_name,
+              player_slug: player.player_slug,
+              league_slug: player.league_slug,
+              injury_type: player.injury_type,
+              gamesBack: player.gamesBack,
+              avg10: player.avg10,
+              avgSinceReturn: player.avgSinceReturn,
+              props: player.props,
+            }}
+            curve={curve}
+            sourceFilter={sourceFilter}
+            statFilter={statFilter}
+            onClose={onToggle}
+            forceFree={forceFree}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Daily Opportunities Table ───────────────────────────────────────────────
 
-function DailyOpportunitiesTable({ players, findCurve }: {
+function DailyOpportunitiesTable({ players, findCurve, freePlayerIds, onPlayerClick, backtestProfiles, percentileMap }: {
   players: PropsPlayer[];
   findCurve: (p: PropsPlayer) => PerformanceCurve | null;
+  freePlayerIds?: Set<string>;
+  onPlayerClick?: (playerId: string) => void;
+  backtestProfiles?: Record<string, LeagueModelProfile>;
+  percentileMap?: Map<string, number>;
 }) {
   // Build rows: returning players with their best prop edge
   const rows = players
@@ -1001,12 +1281,9 @@ function DailyOpportunitiesTable({ players, findCurve }: {
 
   if (rows.length === 0) return null;
 
-  // Strength label from gap %
-  function gapStrength(evPct: number): { text: string; color: string } {
-    const abs = Math.abs(evPct);
-    if (abs >= 15) return { text: "Elite", color: "text-amber-400" };
-    if (abs >= 8) return { text: "Strong", color: "text-green-400/80" };
-    return { text: "Moderate", color: "text-white/50" };
+  // Strength label using percentile rank
+  function gapStrength(evPct: number, leagueSlug: string, playerId: string): { text: string; color: string } {
+    return edgeLabel(evPct, backtestProfiles?.[leagueSlug], percentileMap?.get(playerId));
   }
 
   // Why tag
@@ -1033,15 +1310,15 @@ function DailyOpportunitiesTable({ players, findCurve }: {
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
-              <tr className="text-[9px] text-white/25 uppercase tracking-wider border-b border-white/5 bg-white/[0.02]">
+              <tr className="text-[10px] text-white/35 uppercase tracking-wider border-b border-white/5 bg-white/[0.02]">
                 <th className="px-3 py-2.5 font-medium w-8">#</th>
                 <th className="px-3 py-2.5 font-medium">Player</th>
                 <th className="px-3 py-2.5 font-medium">Return</th>
                 <th className="px-3 py-2.5 font-medium">Stat</th>
                 <th className="px-3 py-2.5 font-medium text-right">Market</th>
+                <th className="px-3 py-2.5 font-medium text-right">Direction</th>
                 <th className="px-3 py-2.5 font-medium text-right">Model ✦</th>
-                <th className="px-3 py-2.5 font-medium text-right">Gap ✦</th>
-                <th className="px-3 py-2.5 font-medium">Strength ✦</th>
+                <th className="px-3 py-2.5 font-medium">Strength</th>
                 <th className="px-3 py-2.5 font-medium">Why</th>
               </tr>
             </thead>
@@ -1050,7 +1327,7 @@ function DailyOpportunitiesTable({ players, findCurve }: {
                 const isOver = bestEv?.recommendation === "OVER";
                 const lc = leagueColor(p.league_slug);
                 const isTop3 = idx < 3;
-                const strength = bestEv?.bestEv != null ? gapStrength(bestEv.bestEv) : null;
+                const strength = bestEv?.bestEv != null ? gapStrength(bestEv.bestEv, p.league_slug, p.player_id) : null;
                 const gbColor = p.gamesBack <= 3
                   ? "bg-red-500/15 text-red-400/90 border-red-500/25"
                   : p.gamesBack <= 6
@@ -1076,8 +1353,11 @@ function DailyOpportunitiesTable({ players, findCurve }: {
                         edge_percent: bestEv?.bestEv ?? undefined,
                         page_origin: "props_page_table",
                       });
-                      const el = document.getElementById(`prop-player-${p.player_id}`);
-                      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      onPlayerClick?.(p.player_id);
+                      setTimeout(() => {
+                        const el = document.getElementById(`prop-player-${p.player_id}`);
+                        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      }, 100);
                     }}
                   >
                     <td className="px-3 py-2.5">
@@ -1104,54 +1384,43 @@ function DailyOpportunitiesTable({ players, findCurve }: {
                       </span>
                     </td>
                     <td className="px-3 py-2.5 text-[11px] text-white/50">{bestProp ? (MARKET_LABELS[bestProp.market] ?? bestProp.market) : "—"}</td>
-                    <td className="px-3 py-2.5 text-[11px] text-white/70 text-right tabular-nums font-medium">{bestProp?.line ?? "—"}</td>
+                    <td className="px-3 py-2.5 text-[12px] text-white/70 text-right tabular-nums font-medium">{bestProp?.line ?? "—"}</td>
                     <td className="px-3 py-2.5 text-right">
-                      <PremiumGate
-                        contentId={`table-${p.player_id}-model`}
-                        playerName={p.player_name}
-                        section="table_model"
-                        placeholder={
-                          <>
-                            <span className="text-[11px] text-white/50 tabular-nums">24.5</span>
-                            <p className="text-[9px] text-white/25 tabular-nums">+8%</p>
-                          </>
-                        }
-                      >
-                        <span className="text-[11px] text-white/50 tabular-nums">{bestEv?.expectedCombined.toFixed(1) ?? "—"}</span>
-                        {gapPct != null && (
-                          <p className="text-[9px] text-white/25 tabular-nums">{gapPct > 0 ? "+" : ""}{gapPct.toFixed(0)}%</p>
-                        )}
-                      </PremiumGate>
+                      <span className={`text-[12px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
+                        {bestEv!.recommendation}
+                      </span>
                     </td>
                     <td className="px-3 py-2.5 text-right">
-                      <PremiumGate
-                        contentId={`table-${p.player_id}-dir`}
-                        playerName={p.player_name}
-                        section="table_direction"
-                        inline
-                        placeholder={
-                          <span className="text-[11px] font-bold text-white/40">OVER</span>
-                        }
-                      >
-                        <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
-                          {bestEv!.recommendation}
-                        </span>
-                      </PremiumGate>
+                      {freePlayerIds?.has(p.player_id) ? (
+                        <>
+                          <span className="text-[12px] text-white/50 tabular-nums">{bestEv?.expectedCombined.toFixed(1) ?? "—"}</span>
+                          {gapPct != null && (
+                            <p className="text-[9px] text-white/25 tabular-nums">{gapPct > 0 ? "+" : ""}{gapPct.toFixed(0)}%</p>
+                          )}
+                        </>
+                      ) : (
+                        <PremiumGate
+                          contentId={`table-${p.player_id}-model`}
+                          playerName={p.player_name}
+                          section="table_model"
+                          placeholder={
+                            <>
+                              <span className="text-[12px] text-white/50 tabular-nums">24.5</span>
+                              <p className="text-[9px] text-white/25 tabular-nums">+8%</p>
+                            </>
+                          }
+                        >
+                          <span className="text-[12px] text-white/50 tabular-nums">{bestEv?.expectedCombined.toFixed(1) ?? "—"}</span>
+                          {gapPct != null && (
+                            <p className="text-[9px] text-white/25 tabular-nums">{gapPct > 0 ? "+" : ""}{gapPct.toFixed(0)}%</p>
+                          )}
+                        </PremiumGate>
+                      )}
                     </td>
                     <td className="px-3 py-2.5">
-                      <PremiumGate
-                        contentId={`table-${p.player_id}-strength`}
-                        playerName={p.player_name}
-                        section="table_strength"
-                        inline
-                        placeholder={
-                          <span className="text-[10px] font-semibold text-white/40">Strong</span>
-                        }
-                      >
-                        {strength && (
-                          <span className={`text-[10px] font-semibold ${strength.color}`}>{strength.text}</span>
-                        )}
-                      </PremiumGate>
+                      {strength && (
+                        <span className={`text-[11px] font-semibold ${strength.color}`}>{strength.text}</span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5">
                       <span className="text-[9px] text-white/35 italic">{whyTag(p, curve)}</span>
@@ -1260,6 +1529,7 @@ export default function PropsPage() {
 
   const { data: players = [], isLoading } = usePropsWithPlayers();
   const { data: curves = [], isLoading: curvesIsLoading } = usePerformanceCurves();
+  const { data: backtestProfiles = {} } = useBacktestProfiles();
 
   const [leagueFilter, setLeagueFilter] = useState<string>(
     qLeague && LEAGUE_ORDER.includes(qLeague) ? qLeague : "all"
@@ -1271,6 +1541,7 @@ export default function PropsPage() {
   );
   const [showEVInfo, setShowEVInfo] = useState(false);
   const [highlightedPlayerId, setHighlightedPlayerId] = useState<string | null>(null);
+  const [expandedPlayerId, setExpandedPlayerId] = useState<string | null>(null);
 
   // Build curve lookup: injury_type_slug|league_slug -> PerformanceCurve
   const curveMap = useMemo(() => {
@@ -1462,6 +1733,11 @@ export default function PropsPage() {
       .slice(0, 4);
   }, [recentlyReturned, curveMap]);
 
+  const topEdgePlayerIds = useMemo(() => new Set(topEdges.map((e) => e.player.player_id)), [topEdges]);
+
+  // Percentile map: player_id -> percentile (0-1) for signal strength labels
+  const percentileMap = useMemo(() => computePercentiles(players, findCurve), [players, curveMap]);
+
   // STEP 6: Daily hook counts
   const returningToday = recentlyReturned.filter((p) => p.gamesBack <= 1).length;
   const earlyReturn = recentlyReturned.filter((p) => p.gamesBack <= 3).length;
@@ -1477,7 +1753,7 @@ export default function PropsPage() {
 
       <EVInfoModal open={showEVInfo} onClose={() => setShowEVInfo(false)} />
 
-      <div className="max-w-3xl mx-auto px-4 py-6">
+      <div className="max-w-3xl lg:max-w-[1400px] mx-auto px-4 lg:px-10 py-6">
         {/* STEP 6: Daily hook banner */}
         {(returningToday > 0 || earlyReturn > 0) && !isLoading && (
           <div className="rounded-xl bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/20 px-4 py-3 mb-5">
@@ -1501,7 +1777,7 @@ export default function PropsPage() {
         )}
 
         <div className="flex items-center gap-3 mb-2">
-          <h1 className="text-2xl font-bold">Player Props</h1>
+          <h1 className="text-[26px] font-bold">Player Props</h1>
           <button
             onClick={() => setShowEVInfo(true)}
             className="shrink-0 w-6 h-6 rounded-full border border-white/15 text-white/35 hover:text-white/70 hover:border-white/30 transition-colors text-xs font-semibold flex items-center justify-center"
@@ -1510,7 +1786,7 @@ export default function PropsPage() {
             ?
           </button>
         </div>
-        <p className="text-sm text-white/50 mb-5 leading-relaxed">
+        <p className="text-[14px] text-white/50 mb-5 leading-relaxed">
           Injury return analytics: model projections vs. market lines based on historical recovery data.
           Identify where the market may still reflect injury uncertainty.
         </p>
@@ -1540,7 +1816,7 @@ export default function PropsPage() {
         <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1">
           <button
             onClick={() => setLeagueFilter("all")}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
+            className={`px-3 py-1.5 rounded-full text-[13px] font-medium transition-colors shrink-0 ${
               leagueFilter === "all" ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
             }`}
           >
@@ -1552,7 +1828,7 @@ export default function PropsPage() {
               <button
                 key={slug}
                 onClick={() => { setLeagueFilter(slug); trackLeagueFilter(slug, "props"); }}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
+                className={`px-3 py-1.5 rounded-full text-[13px] font-medium transition-colors shrink-0 ${
                   leagueFilter === slug ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
                 }`}
               >
@@ -1658,7 +1934,7 @@ export default function PropsPage() {
                     const isOver = side === "OVER";
                     const curve = findCurve(p);
                     const impG3 = curve ? getCurveImpact(curve, 2, p.league_slug) : null;
-                    const edge = edgeLabel(topEv!.bestEv!);
+                    const edge = edgeLabel(topEv!.bestEv!, backtestProfiles[p.league_slug], percentileMap.get(p.player_id));
                     const statKey = MARKET_TO_STAT[topProp?.market ?? ""];
                     const preVal = statKey && p.avg10 ? (p.avg10 as Record<string, number | undefined>)[statKey.replace("stat_", "")] ?? null : null;
                     const returnVal = statKey && p.avgSinceReturn ? (p.avgSinceReturn as Record<string, number | undefined>)[statKey.replace("stat_", "")] ?? null : null;
@@ -1769,7 +2045,16 @@ export default function PropsPage() {
             </div>
 
             {/* STEP 2: Daily Opportunities Table */}
-            <DailyOpportunitiesTable players={filtered} findCurve={findCurve} />
+            <DailyOpportunitiesTable
+              players={filtered}
+              findCurve={findCurve}
+              freePlayerIds={topEdgePlayerIds}
+              onPlayerClick={(pid) => {
+                setExpandedPlayerId(pid);
+              }}
+              backtestProfiles={backtestProfiles}
+              percentileMap={percentileMap}
+            />
 
             {/* Recently Returned from Injury */}
             {recentlyReturned.length > 0 && (
@@ -1778,10 +2063,46 @@ export default function PropsPage() {
                   <h2 className="text-xs font-bold text-[#3DFF8F]/80 uppercase tracking-widest">Recently Returned</h2>
                   <span className="text-[10px] text-white/30">{recentlyReturned.length} players within 10 games of return</span>
                 </div>
-                <div className="space-y-3">
-                  {recentlyReturned.map((p) => (
-                    <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} curve={findCurve(p)} highlighted={highlightedPlayerId === p.player_id} statFilter={statFilter} />
-                  ))}
+                <div className="space-y-2">
+                  {recentlyReturned.map((p) => {
+                    const curve = findCurve(p);
+                    // Get best EV for this player
+                    let bestEv: EVResult | null = null;
+                    let bestProp: PropItem | null = null;
+                    for (const prop of p.props) {
+                      const statKey = MARKET_TO_STAT[prop.market];
+                      const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
+                      const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
+                      if (!curve || !statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack <= 0) continue;
+                      const ev = computeEV({
+                        baseline, propLine: prop.line,
+                        overOdds: parseOdds(prop.over_price), underOdds: parseOdds(prop.under_price),
+                        gamesSinceReturn: p.gamesBack, recentAvg: recent, curve,
+                        leagueSlug: p.league_slug, statKey,
+                        preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
+                      });
+                      if (ev && ev.bestEv != null && ev.recommendation && (!bestEv || ev.bestEv > (bestEv.bestEv ?? 0))) {
+                        bestEv = ev;
+                        bestProp = prop;
+                      }
+                    }
+                    return (
+                      <CompactPlayerRow
+                        key={p.player_id}
+                        player={p}
+                        curve={curve}
+                        sourceFilter={sourceFilter}
+                        statFilter={statFilter}
+                        bestEv={bestEv}
+                        bestProp={bestProp}
+                        expanded={expandedPlayerId === p.player_id}
+                        onToggle={() => setExpandedPlayerId(expandedPlayerId === p.player_id ? null : p.player_id)}
+                        forceFree={topEdgePlayerIds.has(p.player_id)}
+                        leagueProfile={backtestProfiles[p.league_slug]}
+                        percentile={percentileMap.get(p.player_id)}
+                      />
+                    );
+                  })}
                 </div>
               </section>
             )}
@@ -1793,10 +2114,44 @@ export default function PropsPage() {
                   <h2 className="text-xs font-bold text-white/50 uppercase tracking-widest">Other Player Props</h2>
                   <span className="text-[10px] text-white/30">{otherPlayers.length} players</span>
                 </div>
-                <div className="space-y-3">
-                  {otherPlayers.map((p) => (
-                    <PlayerPropCard key={p.player_id} player={p} sourceFilter={sourceFilter} curve={findCurve(p)} highlighted={highlightedPlayerId === p.player_id} statFilter={statFilter} />
-                  ))}
+                <div className="space-y-2">
+                  {otherPlayers.map((p) => {
+                    const curve = findCurve(p);
+                    let bestEv: EVResult | null = null;
+                    let bestProp: PropItem | null = null;
+                    for (const prop of p.props) {
+                      const statKey = MARKET_TO_STAT[prop.market];
+                      const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
+                      const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
+                      if (!curve || !statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack <= 0) continue;
+                      const ev = computeEV({
+                        baseline, propLine: prop.line,
+                        overOdds: parseOdds(prop.over_price), underOdds: parseOdds(prop.under_price),
+                        gamesSinceReturn: p.gamesBack, recentAvg: recent, curve,
+                        leagueSlug: p.league_slug, statKey,
+                        preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
+                      });
+                      if (ev && ev.bestEv != null && ev.recommendation && (!bestEv || ev.bestEv > (bestEv.bestEv ?? 0))) {
+                        bestEv = ev;
+                        bestProp = prop;
+                      }
+                    }
+                    return (
+                      <CompactPlayerRow
+                        key={p.player_id}
+                        player={p}
+                        curve={curve}
+                        sourceFilter={sourceFilter}
+                        statFilter={statFilter}
+                        bestEv={bestEv}
+                        bestProp={bestProp}
+                        expanded={expandedPlayerId === p.player_id}
+                        onToggle={() => setExpandedPlayerId(expandedPlayerId === p.player_id ? null : p.player_id)}
+                        leagueProfile={backtestProfiles[p.league_slug]}
+                        percentile={percentileMap.get(p.player_id)}
+                      />
+                    );
+                  })}
                 </div>
               </section>
             )}

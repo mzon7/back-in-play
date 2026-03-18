@@ -76,12 +76,12 @@ def fetch_events(sport_key: str) -> list:
     return r.json()
 
 
-def fetch_props(sport_key: str, event_id: str, markets: list[str]) -> dict | None:
+def fetch_props(sport_key: str, event_id: str, markets: list[str], regions: str = "us") -> dict | None:
     """Get player prop odds for an event."""
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds"
     params = {
         "apiKey": ODDS_API_KEY,
-        "regions": "us",
+        "regions": regions,
         "markets": ",".join(markets),
         "oddsFormat": "american",
     }
@@ -138,8 +138,10 @@ def extract_props_from_odds(odds_data: dict, event_id: str, game_date: str, leag
             if data["line"] is None:
                 continue
             player_id = resolve_player_id(player_name, league_slug)
+            # Deterministic ID so upserts don't create duplicates
+            row_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{event_id}:{player_name}:{market_key}:{source}"))
             rows.append({
-                "id": str(uuid.uuid4()),
+                "id": row_id,
                 "player_id": player_id,
                 "player_name": player_name,
                 "market": market_key,
@@ -156,21 +158,26 @@ def extract_props_from_odds(odds_data: dict, event_id: str, game_date: str, leag
 
 
 def main():
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    target_dates = {today, tomorrow}
     total_props = 0
     total_events = 0
 
-    print(f"[{datetime.now(timezone.utc).isoformat()}] Fetching props for {today}")
+    print(f"[{now.isoformat()}] Fetching props for {today} + {tomorrow}")
 
     for sport_key, league_slug in SPORT_MAP.items():
         events = fetch_events(sport_key)
-        today_events = [e for e in events if e.get("commence_time", "")[:10] == today]
+        # Fetch events for today AND tomorrow
+        target_events = [e for e in events if e.get("commence_time", "")[:10] in target_dates]
 
-        if not today_events:
-            print(f"  {league_slug}: no events today")
+        if not target_events:
+            print(f"  {league_slug}: no events today/tomorrow")
             continue
 
-        print(f"  {league_slug}: {len(today_events)} events today")
+        print(f"  {league_slug}: {len(target_events)} events (today+tomorrow)")
 
         # Determine which markets to fetch for this sport
         sport_markets = []
@@ -185,28 +192,29 @@ def main():
         elif league_slug == "premier-league":
             sport_markets = ["player_shots", "player_shots_on_target", "player_goals"]
 
-        for event in today_events:
+        # Use UK region for EPL to get broader bookmaker coverage
+        regions = "uk" if league_slug == "premier-league" else "us"
+
+        for event in target_events:
             eid = event["id"]
             game_date = event.get("commence_time", "")[:10]
-            odds = fetch_props(sport_key, eid, sport_markets)
+            odds = fetch_props(sport_key, eid, sport_markets, regions=regions)
             if not odds:
                 continue
 
             rows = extract_props_from_odds(odds, eid, game_date, league_slug)
             if rows:
-                # Delete old props for this event + today to avoid duplicates
-                supabase.table("back_in_play_player_props").delete().eq(
-                    "event_id", eid
-                ).eq("game_date", today).execute()
-
-                # Insert in batches
+                # Upsert to preserve historical props while updating current ones
                 for i in range(0, len(rows), 100):
                     batch = rows[i:i+100]
-                    supabase.table("back_in_play_player_props").insert(batch).execute()
+                    supabase.table("back_in_play_player_props").upsert(
+                        batch,
+                        on_conflict="event_id,player_name,market,source"
+                    ).execute()
 
                 total_props += len(rows)
                 total_events += 1
-                print(f"    {event.get('home_team', '?')} vs {event.get('away_team', '?')}: {len(rows)} props")
+                print(f"    {event.get('home_team', '?')} vs {event.get('away_team', '?')} ({game_date}): {len(rows)} props")
 
     print(f"Done: {total_props} props across {total_events} events")
 
