@@ -2233,6 +2233,10 @@ export default function PropsPage() {
                     if (!bestProp && filteredPlayerProps.length > 0) {
                       bestProp = filteredPlayerProps[0];
                     }
+                    // Ultimate fallback: show any prop if filters excluded everything
+                    if (!bestProp && p.props.length > 0) {
+                      bestProp = p.props[0];
+                    }
                     return (
                       <CompactPlayerRow
                         key={p.player_id}
