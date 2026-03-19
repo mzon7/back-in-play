@@ -1,6 +1,6 @@
 // @refresh reset
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "@mzon7/zon-incubator-sdk/auth";
 import { supabase } from "../lib/supabase";
 import { trackSignupSuccess, trackGoogleOAuthClick } from "../lib/analytics";
@@ -9,6 +9,8 @@ const SITE_URL = typeof window !== "undefined" ? window.location.origin : "https
 
 export default function SignupPage() {
   const { signUp } = useAuth();
+  const [searchParams] = useSearchParams();
+  const redirectTo = searchParams.get("redirect") || "/";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -23,7 +25,7 @@ export default function SignupPage() {
     const { error: err } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${SITE_URL}/auth/callback`,
+        redirectTo: `${SITE_URL}/auth/callback?redirect=${encodeURIComponent(redirectTo)}`,
       },
     });
     if (err) {

@@ -145,14 +145,14 @@ function SignupPromptInline({ onClose }: { onClose: () => void }) {
         </div>
         <div className="flex gap-2 mt-4">
           <Link
-            to="/signup"
+            to={`/signup?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`}
             onClick={() => trackSignupCtaClick("props", "premium_gate_modal")}
             className="flex-1 rounded-lg bg-purple-500/20 border border-purple-500/25 px-3 py-2 text-[11px] font-medium text-purple-300/80 hover:bg-purple-500/30 hover:text-purple-200 transition-colors text-center"
           >
             Create Free Account
           </Link>
           <Link
-            to="/login"
+            to={`/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search)}`}
             className="rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-[11px] text-white/40 hover:text-white/60 transition-colors text-center"
           >
             Sign in

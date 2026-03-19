@@ -3,53 +3,58 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 /**
- * Handles both OAuth (hash fragment tokens) and email confirmation (code param).
- * Supabase OAuth implicit flow returns tokens in the URL hash (#access_token=...).
- * The Supabase JS client auto-detects the hash and sets the session via onAuthStateChange.
+ * Handles OAuth callback for both PKCE (?code=) and implicit (#access_token=) flows.
+ * Supabase JS v2 defaults to PKCE — Google redirects back with ?code= in the query string.
+ * The SDK's onAuthStateChange fires SIGNED_IN once the code is exchanged for a session.
  */
 export function OAuthCallback() {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check for PKCE code param (email confirmation)
     const params = new URLSearchParams(window.location.search);
-    const code = params.get("code");
+    const redirectTo = params.get("redirect") || "/";
 
-    if (code) {
-      // Email confirmation flow
-      supabase.auth.exchangeCodeForSession(code).then(({ error: err }) => {
-        if (err) setError(err.message);
-        else navigate("/", { replace: true });
-      });
-      return;
-    }
-
-    // OAuth implicit flow — tokens are in the hash fragment.
-    // Supabase JS client auto-detects and sets session via onAuthStateChange.
-    // Just wait for session to be set.
+    // Listen for auth state changes — works for both PKCE and implicit flows.
+    // Supabase JS v2 auto-detects ?code= or #access_token= and exchanges them.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_IN" && session) {
-        navigate("/", { replace: true });
+      if ((event === "SIGNED_IN" || event === "TOKEN_REFRESHED") && session) {
+        navigate(redirectTo, { replace: true });
       }
     });
 
-    // Also check if session is already set (e.g. hash was processed before this mounted)
+    // Also check if session is already set (e.g., the SDK processed tokens before mount)
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        navigate("/", { replace: true });
-      } else if (!window.location.hash) {
-        // No hash and no code — invalid callback
-        setError("Authentication failed. Please try again.");
+        navigate(redirectTo, { replace: true });
       }
     });
+
+    // If there's a code param, explicitly exchange it (handles email confirmation
+    // and cases where the SDK didn't auto-process it)
+    const code = params.get("code");
+    if (code) {
+      supabase.auth.exchangeCodeForSession(code).then(({ error: err }) => {
+        if (err) {
+          // "code already used" means the SDK already processed it — check session
+          if (err.message.includes("already") || err.message.includes("expired")) {
+            supabase.auth.getSession().then(({ data: { session } }) => {
+              if (session) navigate(redirectTo, { replace: true });
+              else setError("Authentication link expired. Please try again.");
+            });
+          } else {
+            setError(err.message);
+          }
+        }
+      });
+    }
 
     // Timeout fallback
     const timeout = setTimeout(() => {
       supabase.auth.getSession().then(({ data: { session } }) => {
         if (!session) setError("Authentication timed out. Please try again.");
       });
-    }, 10000);
+    }, 15000);
 
     return () => {
       subscription.unsubscribe();

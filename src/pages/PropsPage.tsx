@@ -279,6 +279,61 @@ function computeAvg(games: any[], n: number): PreInjuryAvg | null {
   }
 }
 
+/** ML model prediction for a single prop */
+interface MLPrediction {
+  player_name: string;
+  market: string;
+  game_date: string;
+  prop_line: number;
+  recommendation: "OVER" | "UNDER";
+  ev: number;
+  p_over: number;
+  baseline: number;
+  recent_avg: number | null;
+  model: string;
+  kelly_fraction: number;
+}
+
+/** Fetch today's/tomorrow's ML predictions from backtest_results */
+function useMLPredictions() {
+  return useQuery<Map<string, MLPrediction>>({
+    queryKey: ["ml-predictions-props"],
+    queryFn: async () => {
+      const LEAGUES = ["nba", "nhl", "mlb", "nfl", "premier-league"];
+      // Try model_e first (user preference), fall back to model_d, model_f, model_c
+      const MODEL_PRIORITY = ["model_e", "model_d", "model_f", "model_c"];
+      const predKeys = LEAGUES.flatMap((l) => MODEL_PRIORITY.map((m) => `${l}_${m}_predictions`));
+      const { data } = await supabase
+        .from("back_in_play_backtest_results")
+        .select("league, results")
+        .in("league", predKeys);
+      if (!data) return new Map();
+
+      // Group by base league, pick best model per league
+      const byLeague = new Map<string, MLPrediction[]>();
+      for (const row of data) {
+        const parsed = typeof row.results === "string" ? JSON.parse(row.results) : row.results;
+        const preds: MLPrediction[] = parsed.predictions ?? [];
+        // Extract base league (e.g., "nba" from "nba_model_d_predictions")
+        const baseLeague = row.league.replace(/_model_[a-z]_predictions$/, "");
+        if (!byLeague.has(baseLeague)) byLeague.set(baseLeague, preds);
+        // model_d takes priority (loaded first due to key order)
+      }
+
+      // Build lookup: player_name|market|game_date → prediction
+      const map = new Map<string, MLPrediction>();
+      for (const preds of byLeague.values()) {
+        for (const p of preds) {
+          const key = `${p.player_name}|${p.market}|${p.game_date}`;
+          if (!map.has(key)) map.set(key, p);
+        }
+      }
+      return map;
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 function usePropsWithPlayers() {
   // Use local date (not UTC) so 9pm ET on March 18 stays March 18
   const today = localToday();
@@ -463,6 +518,25 @@ function usePropsWithPlayers() {
           home_team: playerProps[0]?.home_team ?? null,
           away_team: playerProps[0]?.away_team ?? null,
         });
+      }
+
+      // Enrich missing commence_time/teams from other props on the same game_date
+      // Build a map: game_date+team_name → { commence_time, home_team, away_team }
+      const gameTimeMap = new Map<string, { commence_time: string; home_team: string | null; away_team: string | null }>();
+      for (const p of props ?? []) {
+        if (!p.commence_time || !p.game_date) continue;
+        if (p.home_team) gameTimeMap.set(`${p.game_date}|${p.home_team}`, { commence_time: p.commence_time, home_team: p.home_team, away_team: p.away_team });
+        if (p.away_team) gameTimeMap.set(`${p.game_date}|${p.away_team}`, { commence_time: p.commence_time, home_team: p.home_team, away_team: p.away_team });
+      }
+      for (const r of result) {
+        if (!r.commence_time && r.team_name && r.game_date) {
+          const match = gameTimeMap.get(`${r.game_date}|${r.team_name}`);
+          if (match) {
+            r.commence_time = match.commence_time;
+            if (!r.home_team) r.home_team = match.home_team;
+            if (!r.away_team) r.away_team = match.away_team;
+          }
+        }
       }
 
       // Sort: stars first, then starters, then by name
@@ -987,35 +1061,31 @@ export function PlayerPropCard({ player, sourceFilter, curve, highlighted, statF
                           playerName={player.player_name}
                           section="prop_model"
                           placeholder={
+                            <div className="flex items-baseline gap-3">
+                              <div className="text-right">
+                                <p className="text-[9px] text-white/30">Model</p>
+                                <p className={`${isPrimary ? "text-xl" : "text-base"} font-bold text-white/70 tabular-nums`}>24.5</p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-[9px] text-white/30">Gap</p>
+                                <p className={`${isPrimary ? "text-lg" : "text-sm"} font-bold tabular-nums text-green-400/80`}>+8%</p>
+                              </div>
+                            </div>
+                          }
+                        >
+                          <div className="flex items-baseline gap-3">
                             <div className="text-right">
                               <p className="text-[9px] text-white/30">Model</p>
-                              <p className={`${isPrimary ? "text-xl" : "text-base"} font-bold text-white/70 tabular-nums`}>24.5</p>
+                              <p className={`${isPrimary ? "text-xl" : "text-base"} font-bold text-white/70 tabular-nums`}>{ev.expectedCombined.toFixed(1)}</p>
                             </div>
-                          }
-                        >
-                          <div className="text-right">
-                            <p className="text-[9px] text-white/30">Model</p>
-                            <p className={`${isPrimary ? "text-xl" : "text-base"} font-bold text-white/70 tabular-nums`}>{ev.expectedCombined.toFixed(1)}</p>
-                          </div>
-                        </PremiumGate>
-                      )}
-                      {projDiffPct != null && projDiffPct !== 0 && (
-                        <PremiumGate
-                          contentId={`player-${player.player_id}`}
-                          playerName={player.player_name}
-                          section="prop_gap"
-                          placeholder={
-                            <div className="text-right">
-                              <p className="text-[9px] text-white/30">Gap</p>
-                              <p className={`${isPrimary ? "text-lg" : "text-sm"} font-bold tabular-nums text-green-400/80`}>+8%</p>
-                            </div>
-                          }
-                        >
-                          <div className="text-right">
-                            <p className="text-[9px] text-white/30">Gap</p>
-                            <p className={`${isPrimary ? "text-lg" : "text-sm"} font-bold tabular-nums ${projDiffPct < 0 ? "text-red-400/80" : "text-green-400/80"}`}>
-                              {projDiffPct > 0 ? "+" : ""}{projDiffPct}%
-                            </p>
+                            {projDiffPct != null && projDiffPct !== 0 && (
+                              <div className="text-right">
+                                <p className="text-[9px] text-white/30">Gap</p>
+                                <p className={`${isPrimary ? "text-lg" : "text-sm"} font-bold tabular-nums ${projDiffPct < 0 ? "text-red-400/80" : "text-green-400/80"}`}>
+                                  {projDiffPct > 0 ? "+" : ""}{projDiffPct}%
+                                </p>
+                              </div>
+                            )}
                           </div>
                         </PremiumGate>
                       )}
@@ -1612,6 +1682,7 @@ export default function PropsPage() {
   const { data: players = [], isLoading } = usePropsWithPlayers();
   const { data: curves = [], isLoading: curvesIsLoading } = usePerformanceCurves();
   const { data: backtestProfiles = {} } = useBacktestProfiles();
+  const { data: mlPredictions } = useMLPredictions();
 
   const [leagueFilter, setLeagueFilter] = useState<string>(
     qLeague && LEAGUE_ORDER.includes(qLeague) ? qLeague : "all"
@@ -2017,38 +2088,8 @@ export default function PropsPage() {
           </div>
         )}
 
-        {/* Source tabs — only show when multiple sources have data for filtered players */}
-        {(() => {
-          const MIN_SOURCE_PLAYERS = 3;
-          const sourcesWithData = activeSources.filter((src) => {
-            const playerCount = filtered.filter((p) => p.props.some((pr) => pr.source === src)).length;
-            return playerCount >= MIN_SOURCE_PLAYERS;
-          });
-          if (sourcesWithData.length <= 1) return null;
-          return (
-            <div className="flex gap-1 mb-3">
-              <button
-                onClick={() => setSourceFilter("all")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  sourceFilter === "all" ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
-                }`}
-              >
-                All
-              </button>
-              {sourcesWithData.map((src) => (
-                <button
-                  key={src}
-                  onClick={() => setSourceFilter(src)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    sourceFilter === src ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
-                  }`}
-                >
-                  {SOURCE_LABELS[src] ?? src}
-                </button>
-              ))}
-            </div>
-          );
-        })()}
+        {/* Source label */}
+        <p className="text-[10px] text-white/20 mb-3">Odds via FanDuel</p>
 
 
         {isLoading ? (
@@ -2228,26 +2269,52 @@ export default function PropsPage() {
                 <div className="space-y-2">
                   {recentlyReturned.map((p) => {
                     const curve = findCurve(p);
-                    // Get best EV for this player
+                    // Get best EV for this player — prefer ML model prediction, fall back to heuristic
                     let bestEv: EVResult | null = null;
                     let bestProp: PropItem | null = null;
-                    for (const prop of filterProps(p.props)) {
-                      const statKey = MARKET_TO_STAT[prop.market];
-                      const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
-                      const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
-                      if (!curve || !statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack < 0) continue;
-                      const ev = computeEV({
-                        baseline, propLine: prop.line,
-                        overOdds: parseOdds(prop.over_price), underOdds: parseOdds(prop.under_price),
-                        gamesSinceReturn: p.gamesBack, recentAvg: recent, curve,
-                        leagueSlug: p.league_slug, statKey,
-                        preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
-                      });
-                      if (ev && ev.bestEv != null && ev.recommendation && (!bestEv || ev.bestEv > (bestEv.bestEv ?? 0))) {
-                        bestEv = ev;
-                        bestProp = prop;
+
+                    // 1. Try ML model predictions first
+                    if (mlPredictions && mlPredictions.size > 0) {
+                      for (const prop of filterProps(p.props)) {
+                        const mlKey = `${p.player_name}|${prop.market}|${prop.game_date}`;
+                        const ml = mlPredictions.get(mlKey);
+                        if (ml && ml.recommendation) {
+                          // Convert ML prediction to EVResult format
+                          const mlEv: EVResult = {
+                            recommendation: ml.recommendation,
+                            bestEv: ml.ev / 100,
+                            expectedCombined: ml.baseline * (ml.recent_avg && ml.baseline > 0 ? ml.recent_avg / ml.baseline : 1),
+                            confidence: ml.ev >= 20 ? "High" : ml.ev >= 10 ? "Medium" : "Low",
+                          } as EVResult;
+                          if (!bestEv || ml.ev > (bestEv.bestEv ?? 0) * 100) {
+                            bestEv = mlEv;
+                            bestProp = prop;
+                          }
+                        }
                       }
                     }
+
+                    // 2. Fall back to heuristic EV if no ML prediction
+                    if (!bestEv) {
+                      for (const prop of filterProps(p.props)) {
+                        const statKey = MARKET_TO_STAT[prop.market];
+                        const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
+                        const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
+                        if (!curve || !statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack < 0) continue;
+                        const ev = computeEV({
+                          baseline, propLine: prop.line,
+                          overOdds: parseOdds(prop.over_price), underOdds: parseOdds(prop.under_price),
+                          gamesSinceReturn: p.gamesBack, recentAvg: recent, curve,
+                          leagueSlug: p.league_slug, statKey,
+                          preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
+                        });
+                        if (ev && ev.bestEv != null && ev.recommendation && (!bestEv || ev.bestEv > (bestEv.bestEv ?? 0))) {
+                          bestEv = ev;
+                          bestProp = prop;
+                        }
+                      }
+                    }
+
                     // Fallback: show the first filtered prop even without EV signal
                     const filteredPlayerProps = filterProps(p.props);
                     if (!bestProp && filteredPlayerProps.length > 0) {

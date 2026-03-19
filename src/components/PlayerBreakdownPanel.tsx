@@ -21,7 +21,7 @@ const MARKET_TO_STAT: Record<string, string> = {
   player_reception_yds: "stat_rec_yds", player_receptions: "stat_rec",
   player_goals: "stat_goals", player_shots_on_goal: "stat_sog",
   player_shots: "stat_sog", player_shots_on_target: "stat_sog",
-  batter_hits: "stat_h", batter_total_bases: "stat_h", batter_rbis: "stat_rbi",
+  batter_hits: "stat_h", batter_total_bases: "stat_stl", batter_rbis: "stat_rbi",
 };
 
 const PRIMARY_STAT: Record<string, { key: string; label: string }> = {
@@ -227,45 +227,58 @@ export function PlayerBreakdownPanel({
                   <div key={p.id} className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-[11px] text-emerald-400/70 font-semibold shrink-0">{MARKET_LABELS[p.market] ?? p.market}</span>
-                      {/* Signal direction — FREE */}
-                      {ev?.recommendation && (
+                      {/* Signal direction — PREMIUM (same unlock as model) */}
+                      {ev?.recommendation && (forceFree ? (
                         <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
                           {ev.recommendation}
                         </span>
+                      ) : (
+                        <PremiumGate
+                          contentId={`player-${player.player_id}`}
+                          playerName={player.player_name}
+                          section="breakdown_direction"
+                          inline
+                          placeholder={<span className="text-[11px] font-bold text-white/40">OVER</span>}
+                        >
+                          <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
+                            {ev.recommendation}
+                          </span>
+                        </PremiumGate>
                       )}
                     </div>
                     <div className="flex items-center gap-3 text-right">
                       {/* Market line — FREE */}
                       <span className="text-sm font-bold text-white tabular-nums">{p.line}</span>
-                      {/* Model — PREMIUM (free for top 4) */}
+                      {/* Model + Gap — PREMIUM (one unlock per player) */}
                       {ev && (forceFree ? (
-                        <span className="text-sm text-white/60 tabular-nums">{ev.expectedCombined.toFixed(1)}</span>
-                      ) : (
-                        <PremiumGate
-                          contentId={`bp-${p.id}-model`}
-                          playerName={player.player_name}
-                          section="breakdown_model"
-                          inline
-                          placeholder={<span className="text-sm text-white/40 tabular-nums">—</span>}
-                        >
+                        <span className="flex items-center gap-2">
                           <span className="text-sm text-white/60 tabular-nums">{ev.expectedCombined.toFixed(1)}</span>
-                        </PremiumGate>
-                      ))}
-                      {/* Gap — PREMIUM (free for top 4) */}
-                      {gapPct != null && gapPct !== 0 && (forceFree ? (
-                        <span className={`text-xs font-bold tabular-nums ${gapPct < 0 ? "text-red-400/80" : "text-green-400/80"}`}>
-                          {gapPct > 0 ? "+" : ""}{gapPct}%
+                          {gapPct != null && gapPct !== 0 && (
+                            <span className={`text-xs font-bold tabular-nums ${gapPct < 0 ? "text-red-400/80" : "text-green-400/80"}`}>
+                              {gapPct > 0 ? "+" : ""}{gapPct}%
+                            </span>
+                          )}
                         </span>
                       ) : (
                         <PremiumGate
-                          contentId={`bp-${p.id}-gap`}
+                          contentId={`player-${player.player_id}`}
                           playerName={player.player_name}
-                          section="breakdown_gap"
+                          section="breakdown_model"
                           inline
-                          placeholder={<span className="text-xs text-white/30 tabular-nums">+?%</span>}
+                          placeholder={
+                            <span className="flex items-center gap-2">
+                              <span className="text-sm text-white/40 tabular-nums">—</span>
+                              <span className="text-xs text-white/30 tabular-nums">+?%</span>
+                            </span>
+                          }
                         >
-                          <span className={`text-xs font-bold tabular-nums ${gapPct < 0 ? "text-red-400/80" : "text-green-400/80"}`}>
-                            {gapPct > 0 ? "+" : ""}{gapPct}%
+                          <span className="flex items-center gap-2">
+                            <span className="text-sm text-white/60 tabular-nums">{ev.expectedCombined.toFixed(1)}</span>
+                            {gapPct != null && gapPct !== 0 && (
+                              <span className={`text-xs font-bold tabular-nums ${gapPct < 0 ? "text-red-400/80" : "text-green-400/80"}`}>
+                                {gapPct > 0 ? "+" : ""}{gapPct}%
+                              </span>
+                            )}
                           </span>
                         </PremiumGate>
                       ))}
@@ -312,7 +325,7 @@ export function PlayerBreakdownPanel({
               );
               return forceFree ? content : (
                 <PremiumGate
-                  contentId={`bp-${player.player_id}-full`}
+                  contentId={`player-${player.player_id}`}
                   playerName={player.player_name}
                   section="full_breakdown"
                   placeholder={
@@ -593,7 +606,7 @@ export function PlayerBreakdownPanel({
               );
               return forceFree ? precisionContent : (
                 <PremiumGate
-                  contentId={`deep-${player.player_id}-precision`}
+                  contentId={`player-${player.player_id}`}
                   playerName={player.player_name}
                   section="deep_dive_precision"
                   placeholder={
