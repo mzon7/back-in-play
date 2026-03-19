@@ -244,7 +244,7 @@ export function PlayerBreakdownPanel({
                             {ev.recommendation}
                           </span>
                         </PremiumGate>
-                      )}
+                      ))}
                     </div>
                     <div className="flex items-center gap-3 text-right">
                       {/* Market line — FREE */}
