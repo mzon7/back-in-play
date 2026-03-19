@@ -90,7 +90,7 @@ export default function TeamInjuryPage() {
     league: leagueLabel,
     injuredCount: activeInjuries.length,
     dateModified: now,
-    url: `https://backinplay.app/${team.league_slug}/${cleanTeamSlug}-injuries`,
+    url: `https://backinplay.ai/${team.league_slug}/${cleanTeamSlug}-injuries`,
   });
 
   return (

@@ -368,8 +368,8 @@ def scrape_espn(league_key):
 
     for team_entry in teams_data:
         team_info = team_entry.get("team", {})
-        team_name = team_info.get("displayName") or team_info.get("name", "Unknown")
-        team_abbr = team_info.get("abbreviation", "")
+        team_name = team_info.get("displayName") or team_info.get("name") or team_entry.get("displayName") or team_entry.get("name", "Unknown")
+        team_abbr = team_info.get("abbreviation", team_entry.get("abbreviation", ""))
         team_logo = team_info.get("logo", team_info.get("logos", [{}])[0].get("href", "") if team_info.get("logos") else "")
 
         team_id = get_or_create_team(team_name, league_id)
@@ -394,59 +394,94 @@ def scrape_espn(league_key):
             athlete_links = athlete.get("links", [])
             espn_profile_url = athlete_links[0].get("href", "") if athlete_links else ""
 
-            # Injury type details
+            # --- Details object (richest source: details.type = body part, details.detail = specifics) ---
+            details = inj.get("details", {})
+            if not isinstance(details, dict):
+                details = {}
+            detail_body_part = details.get("type", "")        # e.g. "Knee", "Shoulder"
+            detail_specifics = details.get("detail", "")      # e.g. "Strain", "Sprain"
+            detail_side = details.get("side", "")
+            detail_returnDate = details.get("returnDate", "")
+
+            # --- Type object (often just status echo like "out") ---
             inj_type_obj = inj.get("type", {})
             if isinstance(inj_type_obj, dict):
-                inj_desc = inj_type_obj.get("description", inj_type_obj.get("detail", ""))
+                type_desc = inj_type_obj.get("description", "")
                 inj_abbreviation = inj_type_obj.get("abbreviation", "")
             else:
-                inj_desc = str(inj_type_obj) if inj_type_obj else ""
+                type_desc = str(inj_type_obj) if inj_type_obj else ""
                 inj_abbreviation = ""
 
-            # Details object
-            details = inj.get("details", {})
-            if isinstance(details, dict):
-                detail_text = details.get("detail", details.get("type", ""))
-                detail_side = details.get("side", "")
-                detail_returnDate = details.get("returnDate", "")
-                if detail_text and not inj_desc:
-                    inj_desc = detail_text
-            else:
-                detail_side = ""
-                detail_returnDate = ""
-                detail_text = ""
+            # --- Athlete notes (RotoWire narratives — most descriptive) ---
+            notes = athlete.get("notes", {})
+            note_items = notes.get("items", []) if isinstance(notes, dict) else []
+            best_narrative = ""
+            for note in note_items:
+                note_text = note.get("text", "")
+                # Pick the longest note — it has the real description
+                if len(note_text) > len(best_narrative):
+                    best_narrative = note_text
 
-            # Status
+            # --- Athlete-level team (fallback if parent team_entry has no team info) ---
+            athlete_team = athlete.get("team", {})
+            if isinstance(athlete_team, dict) and athlete_team.get("displayName"):
+                athlete_team_name = athlete_team["displayName"]
+                # Re-resolve team if parent was "Unknown"
+                if team_name == "Unknown" and athlete_team_name != "Unknown":
+                    resolved_tid = get_or_create_team(athlete_team_name, league_id)
+                    if resolved_tid:
+                        team_id = resolved_tid
+
+            # --- Status ---
             status_raw = inj.get("status", "")
             if isinstance(status_raw, dict):
                 status_type = status_raw.get("type", "")
                 status_desc = status_raw.get("description", "")
-                status_detail = status_raw.get("detail", "")
                 status_raw = status_type or status_desc
             else:
                 status_desc = ""
-                status_detail = ""
             status = normalize_status(str(status_raw))
 
-            # Comments
+            # --- Comments ---
             long_comment = inj.get("longComment", "")
             short_comment = inj.get("shortComment", "")
 
-            # Determine date of injury if available
+            # --- Date ---
             inj_date = inj.get("date", "")
             if inj_date:
-                inj_date = inj_date[:10]  # YYYY-MM-DD
+                inj_date = inj_date[:10]
             else:
                 inj_date = today
 
-            # Extract side from description if not in details
+            # --- Build rich description ---
+            # Prefer: narrative > detail_body_part + detail_specifics > type_desc > comments
+            inj_desc = ""
+            if detail_body_part and detail_specifics:
+                inj_desc = "%s — %s" % (detail_body_part, detail_specifics)
+            elif detail_body_part:
+                inj_desc = detail_body_part
+            elif detail_specifics:
+                inj_desc = detail_specifics
+            elif type_desc and type_desc.lower() not in ("out", "day-to-day", "d2d", "questionable", "doubtful", "probable"):
+                inj_desc = type_desc
+
+            # Use narrative as long_comment if it's richer
+            if best_narrative and len(best_narrative) > len(long_comment):
+                long_comment = best_narrative
+
+            # Build full description: body part + specifics + short_comment (deduped)
+            desc_parts = [d for d in [inj_desc, short_comment] if d and d.lower() not in ("out", "day-to-day")]
+            full_desc = " — ".join(dict.fromkeys(desc_parts))
+
             side = detail_side or extract_side(inj_desc) or extract_side(long_comment)
 
-            # Build full description
-            desc_parts = [d for d in [inj_desc, detail_text, short_comment] if d]
-            full_desc = " — ".join(dict.fromkeys(desc_parts))  # dedup while preserving order
-
-            injury_type, injury_slug = classify_injury(full_desc or long_comment)
+            # Classify injury from the richest source
+            classify_input = detail_body_part or full_desc or long_comment
+            injury_type, injury_slug = classify_injury(classify_input)
+            # Override with detail_body_part if classify gave generic result
+            if detail_body_part and injury_type in ("Other", "Unknown", "Unspecified"):
+                injury_type = detail_body_part.title()
+                injury_slug = slugify(detail_body_part)
 
             player_id = get_or_create_player(pname, team_id, pos_abbr, league_id)
             if not player_id:
@@ -456,7 +491,7 @@ def scrape_espn(league_key):
                 "player_id": player_id,
                 "injury_type": injury_type,
                 "injury_type_slug": injury_slug,
-                "injury_description": full_desc[:500],
+                "injury_description": full_desc[:500] if full_desc else (inj_desc[:500] or None),
                 "date_injured": inj_date,
                 "status": status.lower(),
                 "source": "espn.com/%s" % cfg["league"],
@@ -464,7 +499,7 @@ def scrape_espn(league_key):
                 "side": side or None,
                 "long_comment": long_comment[:1000] if long_comment else None,
                 "short_comment": short_comment[:500] if short_comment else None,
-                "injury_location": inj_desc[:200] if inj_desc else None,
+                "injury_location": (detail_body_part or inj_desc)[:200] or None,
             })
 
     print("    ESPN %s: %d injured players" % (cfg["name"], len(injuries)), flush=True)

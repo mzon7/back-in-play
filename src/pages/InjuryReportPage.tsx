@@ -348,7 +348,7 @@ export default function InjuryReportPage() {
           className="pointer-events-none absolute -top-32 -left-32 w-96 h-96 rounded-full opacity-10 blur-3xl"
           style={{ backgroundColor: accent }}
         />
-        <div className="relative max-w-4xl mx-auto px-4 sm:px-6 py-10">
+        <div className="relative max-w-4xl lg:max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-10">
           {/* Breadcrumb */}
           <nav className="text-sm text-white/40 mb-4">
             <Link to="/" className="hover:text-white/60">Home</Link>
@@ -398,7 +398,7 @@ export default function InjuryReportPage() {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+      <div className="max-w-4xl lg:max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-8">
         {isLoading ? (
           <div className="space-y-3">
             {[1, 2, 3, 4, 5].map((i) => (

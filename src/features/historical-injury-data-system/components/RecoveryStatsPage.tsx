@@ -720,7 +720,7 @@ export function RecoveryStatsPage() {
         <div className="pointer-events-none absolute -top-32 -left-32 w-96 h-96 rounded-full bg-[#1C7CFF] opacity-10 blur-3xl" />
         <div className="pointer-events-none absolute -top-32 -right-32 w-96 h-96 rounded-full bg-[#3DFF8F] opacity-8 blur-3xl" />
 
-        <div className="relative max-w-4xl mx-auto px-4 sm:px-6 py-10">
+        <div className="relative max-w-4xl lg:max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-10">
           <nav className="text-sm text-white/40 mb-4">
             <Link to="/" className="hover:text-white/60">Home</Link>
             {injurySlug && (
@@ -795,7 +795,7 @@ export function RecoveryStatsPage() {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+      <div className="max-w-4xl lg:max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-8">
         {/* Filter bar */}
         <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">
           <LeagueFilterBar value={leagueFilter} onChange={handleLeagueChange} />

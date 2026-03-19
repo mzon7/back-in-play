@@ -311,7 +311,7 @@ export default function PlayerInjuryPage() {
     status: currentInjury?.status ?? "active",
     injury: currentInjury?.injury_type ?? "None",
     dateModified: now,
-    url: `https://backinplay.app/player/${player.slug}`,
+    url: `https://backinplay.ai/player/${player.slug}`,
   });
 
   // Group injuries by season for compact display

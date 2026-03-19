@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { ResponsiveContainer, ComposedChart, Area, Line, XAxis, YAxis, Tooltip, ReferenceLine } from "recharts";
 import { PremiumGate } from "./PremiumGate";
-import { PremiumUnlockCounter } from "./PremiumUnlockCounter";
 import type { PerformanceCurve } from "../features/performance-curves/lib/types";
 import { computeEV, parseOdds, type EVResult } from "../lib/evModel";
 
@@ -221,7 +221,7 @@ export function PlayerBreakdownPanel({
           <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3">
             <p className="text-[10px] font-bold text-white/40 uppercase tracking-wider mb-2">Key stats</p>
             <div className="space-y-2">
-              {propData.slice(0, 3).map(({ prop: p, ev, avg10Val, sinceReturnVal, gapPct }) => {
+              {propData.slice(0, 3).map(({ prop: p, ev, gapPct }) => {
                 const isOver = ev?.recommendation === "OVER";
                 return (
                   <div key={p.id} className="flex items-center justify-between gap-2">
@@ -291,13 +291,15 @@ export function PlayerBreakdownPanel({
                   {bestProp?.ev && (
                     <>
                       <p className="text-white/50">
-                        <span className={`font-medium ${bestProp.ev.confidence === "high" ? "text-green-400/70" : bestProp.ev.confidence === "medium" ? "text-amber-400/70" : "text-white/40"}`}>
+                        <span className={`font-medium ${bestProp.ev.confidence === "High" ? "text-green-400/70" : bestProp.ev.confidence === "Medium" ? "text-amber-400/70" : "text-white/40"}`}>
                           {bestProp.ev.confidence} confidence
                         </span>
-                        {" · "}P({bestProp.ev.recommendation?.toLowerCase()}) {Math.round((bestProp.ev.recommendation === "OVER" ? bestProp.ev.probOver : bestProp.ev.probUnder) * 100)}%
+                        {bestProp.ev.recommendation && (
+                          <span className="text-white/40">{" · "}Historical trend supports {bestProp.ev.recommendation}</span>
+                        )}
                       </p>
-                      {impG1 && <p className="text-white/40">G1 impact: {impG1.diff >= 0 ? "+" : ""}{impG1.diff.toFixed(1)} {impG1.label}</p>}
-                      {impG3 && <p className="text-white/40">G3 impact: {impG3.diff >= 0 ? "+" : ""}{impG3.diff.toFixed(1)} {impG3.label}</p>}
+                      {impG1 && <p className="text-white/40">G1 historical impact: {impG1.diff >= 0 ? "+" : ""}{impG1.diff.toFixed(1)} {impG1.label}</p>}
+                      {impG3 && <p className="text-white/40">G3 historical impact: {impG3.diff >= 0 ? "+" : ""}{impG3.diff.toFixed(1)} {impG3.label}</p>}
                     </>
                   )}
                   {player.avg10?.minutes && player.avgSinceReturn?.minutes && player.gamesBack > 0 && (
@@ -315,10 +317,10 @@ export function PlayerBreakdownPanel({
                   section="full_breakdown"
                   placeholder={
                     <div className="space-y-2 text-[11px] text-white/40">
-                      <p>Confidence: High · P(over) 68%</p>
+                      <p>High confidence · Strong UNDER signal</p>
                       <p>G1–G3 trend: −2.1 PTS vs baseline</p>
                       <p>Comparable cases: 1,200 returns</p>
-                      <p className="text-[10px] text-white/25 mt-1">Minutes context · Usage rate · Full model</p>
+                      <p className="text-[10px] text-white/25 mt-1">Minutes context · Full analysis</p>
                     </div>
                   }
                 >
@@ -379,52 +381,82 @@ export function PlayerBreakdownPanel({
                   }
                 </p>
 
-                {/* Recovery curve visualization */}
+                {/* Recovery curve visualization — interactive */}
                 {(() => {
                   const ps = PRIMARY_STAT[player.league_slug];
                   const pcts = ps ? (curve.stat_median_pct?.[ps.key] as number[] | undefined) : null;
                   if (!pcts || pcts.length === 0) return null;
-                  const points = pcts.slice(0, 10);
-                  const minPct = Math.min(...points, 0.6);
-                  const maxPct = Math.max(...points, 1.15);
-                  const range = maxPct - minPct || 0.1;
-                  const w = 500;
-                  const h = 64;
-                  const step = w / (points.length - 1 || 1);
-                  const baselineY = h - ((1.0 - minPct) / range) * h;
-                  const curIdx = Math.min(Math.max(player.gamesBack - 1, 0), points.length - 1);
-                  const curX = curIdx * step;
-                  const curY = h - ((points[curIdx] - minPct) / range) * h;
-                  const pathPoints = points.map((p, i) => `${i * step},${h - ((p - minPct) / range) * h}`);
-                  // Area fill
-                  const areaPath = `M0,${h} L${pathPoints.join(" L")} L${w},${h} Z`;
+                  const curIdx = Math.min(Math.max(player.gamesBack - 1, 0), pcts.length - 1);
+                  const chartData = pcts.slice(0, 10).map((p, i) => ({
+                    label: `G${i + 1}`,
+                    pct: Math.round(p * 100),
+                    current: i === curIdx ? Math.round(p * 100) : null,
+                  }));
+                  const allVals = chartData.map((d) => d.pct);
+                  const yMin = Math.min(...allVals, 60);
+                  const yMax = Math.max(...allVals, 115);
 
                   return (
-                    <div className="mb-2">
-                      <svg className="overflow-visible w-full" viewBox={`0 0 ${w} ${h + 16}`} preserveAspectRatio="xMidYMid meet" style={{ height: "auto", maxHeight: "80px" }}>
-                        {/* Baseline */}
-                        <line x1={0} y1={baselineY} x2={w} y2={baselineY} stroke="rgba(255,255,255,0.12)" strokeDasharray="4,4" />
-                        <text x={w + 4} y={baselineY + 3} fill="rgba(255,255,255,0.2)" fontSize="8" fontFamily="monospace">baseline</text>
-                        {/* Area fill */}
-                        <path d={areaPath} fill="rgba(59,130,246,0.08)" />
-                        {/* Curve line */}
-                        <path d={`M${pathPoints.join(" L")}`} fill="none" stroke="rgba(59,130,246,0.5)" strokeWidth={2} />
-                        {/* Game markers */}
-                        {points.map((p, i) => {
-                          const x = i * step;
-                          const y = h - ((p - minPct) / range) * h;
-                          const isCurrent = i === curIdx;
-                          return (
-                            <g key={i}>
-                              <circle cx={x} cy={y} r={isCurrent ? 4 : 2} fill={isCurrent ? "#3b82f6" : "rgba(59,130,246,0.3)"} stroke={isCurrent ? "#0a0f1a" : "none"} strokeWidth={isCurrent ? 2 : 0} />
-                              <text x={x} y={h + 12} fill="rgba(255,255,255,0.2)" fontSize="7" textAnchor="middle" fontFamily="monospace">G{i + 1}</text>
-                            </g>
-                          );
-                        })}
-                      </svg>
-                      <div className="flex items-center gap-3 mt-1 text-[9px] text-white/25">
-                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" /> Current position (G{player.gamesBack})</span>
-                        <span>--- Baseline (pre-injury)</span>
+                    <div className="mb-2" style={{ height: 120 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart data={chartData} margin={{ top: 5, right: 5, bottom: 0, left: -20 }}>
+                          <XAxis
+                            dataKey="label"
+                            tick={{ fill: "rgba(255,255,255,0.3)", fontSize: 9 }}
+                            axisLine={{ stroke: "rgba(255,255,255,0.08)" }}
+                            tickLine={false}
+                          />
+                          <YAxis
+                            domain={[yMin - 5, yMax + 5]}
+                            tick={{ fill: "rgba(255,255,255,0.25)", fontSize: 9 }}
+                            axisLine={false}
+                            tickLine={false}
+                            tickFormatter={(v) => `${v}%`}
+                          />
+                          <Tooltip
+                            content={({ active, payload, label }) => {
+                              if (!active || !payload?.length) return null;
+                              const pct = payload.find((p) => p.dataKey === "pct");
+                              const isCurrent = payload.find((p) => p.dataKey === "current" && p.value != null);
+                              return (
+                                <div style={{ background: "#0F1320", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8, padding: "6px 10px", boxShadow: "0 4px 12px rgba(0,0,0,0.5)" }}>
+                                  <p style={{ color: "rgba(255,255,255,0.8)", fontWeight: 600, fontSize: 12, marginBottom: 2 }}>{label}</p>
+                                  {pct && (
+                                    <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
+                                      <span style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#3b82f6", flexShrink: 0 }} />
+                                      <span style={{ color: "rgba(255,255,255,0.5)" }}>vs baseline:</span>
+                                      <span style={{ color: Number(pct.value) >= 100 ? "#4ade80" : "#f87171", fontWeight: 600 }}>{pct.value}%</span>
+                                    </div>
+                                  )}
+                                  {isCurrent && (
+                                    <p style={{ color: "#3b82f6", fontSize: 9, marginTop: 2 }}>Current position</p>
+                                  )}
+                                </div>
+                              );
+                            }}
+                          />
+                          <ReferenceLine y={100} stroke="rgba(61,255,143,0.3)" strokeDasharray="6 4" />
+                          <Area type="monotone" dataKey="pct" stroke="none" fill="rgba(59,130,246,0.08)" />
+                          <Line
+                            type="monotone"
+                            dataKey="pct"
+                            stroke="rgba(59,130,246,0.6)"
+                            strokeWidth={2}
+                            dot={{ fill: "rgba(59,130,246,0.4)", r: 2.5 }}
+                            activeDot={{ fill: "#3b82f6", r: 4, stroke: "#0a0f1a", strokeWidth: 2 }}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="current"
+                            stroke="none"
+                            dot={{ fill: "#3b82f6", r: 5, stroke: "#0a0f1a", strokeWidth: 2 }}
+                            activeDot={false}
+                          />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                      <div className="flex items-center gap-3 mt-0.5 text-[9px] text-white/25">
+                        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" /> Current (G{player.gamesBack})</span>
+                        <span className="flex items-center gap-1"><span className="w-4 border-t border-dashed border-green-400/40" /> Baseline</span>
                       </div>
                     </div>
                   );
@@ -538,8 +570,11 @@ export function PlayerBreakdownPanel({
                             )}
                           </div>
                           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-white/35">
-                            {ev && <span>P({ev.recommendation?.toLowerCase()}) {Math.round((isOver ? ev.probOver : ev.probUnder) * 100)}%</span>}
-                            {ev && <span>{ev.confidence} confidence</span>}
+                            {ev && (
+                              <span className={`font-medium ${ev.confidence === "High" ? "text-green-400/60" : ev.confidence === "Medium" ? "text-amber-400/60" : "text-white/35"}`}>
+                                {ev.confidence} confidence
+                              </span>
+                            )}
                             {avg10Val != null && <span>Pre-injury avg: {avg10Val.toFixed(1)}</span>}
                             {sinceReturnVal != null && <span>Since return: {sinceReturnVal.toFixed(1)}</span>}
                           </div>
@@ -565,8 +600,8 @@ export function PlayerBreakdownPanel({
                     <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3.5">
                       <p className="text-[11px] font-bold text-white/50 uppercase tracking-wider mb-2">Precision Edge</p>
                       <div className="space-y-2 text-[11px] text-white/30">
-                        <p>Exact model projections for {propData.length} prop{propData.length !== 1 ? "s" : ""}</p>
-                        <p>Gap % · Confidence % · P(over/under)</p>
+                        <p>Full signal analysis for {propData.length} prop{propData.length !== 1 ? "s" : ""}</p>
+                        <p>Gap % · Confidence level · Direction</p>
                         <p>Multi-stat breakdown · Comparable case depth</p>
                       </div>
                     </div>

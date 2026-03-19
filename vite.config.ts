@@ -13,9 +13,9 @@ export default defineConfig({
       manifest: {
         name: "Back In Play",
         short_name: "Back In Play",
-        description: "Back In Play — built with Zon Incubator",
-        theme_color: "#2563eb",
-        background_color: "#f9fafb",
+        description: "Track how players perform after injury across NBA, NFL, NHL, MLB, and EPL.",
+        theme_color: "#0A0E1A",
+        background_color: "#0A0E1A",
         display: "standalone",
         start_url: "/",
         icons: [

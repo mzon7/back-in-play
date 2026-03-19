@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#0f172a"/>
-  <!-- Green play/return arrow -->
-  <path d="M10 8 L24 16 L10 24 Z" fill="#22c55e" opacity="0.9"/>
-  <!-- Medical cross overlay -->
-  <rect x="14" y="10" width="4" height="12" rx="1" fill="white" opacity="0.85"/>
-  <rect x="10" y="14" width="12" height="4" rx="1" fill="white" opacity="0.85"/>
+  <rect width="32" height="32" rx="6" fill="#0A0E1A"/>
+  <!-- Play triangle — left half, bright green -->
+  <path d="M7 8 L19 16 L7 24 Z" fill="#3DFF8F"/>
+  <!-- Medical cross — right half, bold white -->
+  <rect x="22" y="10" width="4" height="12" rx="1" fill="white"/>
+  <rect x="18" y="14" width="12" height="4" rx="1" fill="white"/>
 </svg>

@@ -105,7 +105,7 @@ export default function TrackedPlayersPage() {
       <SEO title="Tracked Players | Back In Play" description="Your tracked players for injury updates and return analysis." path="/tracked-players" />
       <SiteHeader />
 
-      <main className="max-w-3xl mx-auto px-4 py-8">
+      <main className="max-w-3xl lg:max-w-[1400px] mx-auto px-4 lg:px-10 py-8">
         <h1 className="text-xl font-bold mb-1">Tracked Players</h1>
         <p className="text-sm text-white/40 mb-6">Players you're monitoring for injury updates and return analysis.</p>
 

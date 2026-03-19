@@ -155,7 +155,7 @@ export default function MinutesRestrictionPage() {
       <SEO title={seoTitle} description={seoDesc} path={path} jsonLd={jsonLd} />
       <SiteHeader />
 
-      <main className="max-w-5xl mx-auto px-4 py-8">
+      <main className="max-w-5xl lg:max-w-[1400px] mx-auto px-4 lg:px-10 py-8">
         {/* Breadcrumbs */}
         <nav className="flex items-center gap-1.5 text-xs text-white/40 mb-6">
           {breadcrumbs.map((b, i) => (

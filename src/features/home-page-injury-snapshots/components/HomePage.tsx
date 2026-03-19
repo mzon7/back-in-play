@@ -24,6 +24,7 @@ import { isRealInjury } from "../../../lib/injuryFilters";
 import { computeEV, formatEV, parseOdds, type EVResult } from "../../../lib/evModel";
 import { EarlyAccessCTA } from "../../../components/PremiumTease";
 import { WaitlistModal, useWaitlistModal } from "../../../components/WaitlistModal";
+import { SiteHeader } from "../../../components/SiteHeader";
 import { trackPlayerAnalysisView } from "../../../lib/analytics";
 import { useQuery } from "@tanstack/react-query";
 
@@ -490,10 +491,10 @@ function HeroSection() {
       {/* Hero */}
       <div className="text-center py-5">
         <h1 className="text-xl sm:text-2xl font-bold text-white leading-tight mb-2">
-          Find where returning players are mispriced<br className="hidden sm:inline" /> before the market adjusts
+          Understand how players perform after injury<br className="hidden sm:inline" /> — and where expectations are wrong
         </h1>
         <p className="text-sm text-white/40 leading-relaxed max-w-lg mx-auto">
-          Track injuries, recovery trends, and post-return performance across NBA, NFL, NHL, MLB, and EPL.
+          Track injuries, recovery trends, and post-return performance across NBA, NFL, NHL, MLB, and EPL — with insights into where actual output diverges from expectations.
         </p>
         <div className="flex items-center justify-center gap-3 mt-4">
           <a
@@ -514,9 +515,9 @@ function HeroSection() {
       {/* How it works — clickable 3-step strip */}
       <div className="grid grid-cols-3 gap-3 mt-1">
         {([
-          { step: "1", label: "Track injuries and return timelines", sub: "See who just returned", icon: "📋", href: "/returning-today", accent: false },
-          { step: "2", label: "Model performance after return", sub: "Understand post-injury trends", icon: "📊", href: "/performance-curves", accent: false },
-          { step: "3", label: "Compare to current lines", sub: "Find model vs market gaps", icon: "⚖️", href: "/props", accent: true },
+          { step: "1", label: "Track injury timelines", sub: "See who just returned and how long they were out", icon: "📋", href: "/returning-today", accent: false },
+          { step: "2", label: "Analyze post-return performance", sub: "Understand how players perform in the first games back", icon: "📊", href: "/performance-curves", accent: false },
+          { step: "3", label: "Compare to expectations", sub: "Identify where performance differs from market lines and projections", icon: "⚖️", href: "/props", accent: true },
         ] as const).map((s) => (
           <Link
             key={s.step}
@@ -535,6 +536,7 @@ function HeroSection() {
           </Link>
         ))}
       </div>
+      <p className="text-[11px] text-white/30 text-center mt-3">Used by bettors, fantasy players, and analysts to understand post-injury performance</p>
       <WaitlistModal open={heroWaitlist.open} onClose={heroWaitlist.closeModal} source={heroWaitlist.source} page={heroWaitlist.page} />
     </div>
   );
@@ -1480,15 +1482,18 @@ interface PropOpportunity {
 }
 
 function useReturningPlayerProps() {
-  const today = new Date().toISOString().slice(0, 10);
+  const n = new Date();
+  const today = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
+  const tmrw = new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1);
+  const tomorrow = `${tmrw.getFullYear()}-${String(tmrw.getMonth() + 1).padStart(2, "0")}-${String(tmrw.getDate()).padStart(2, "0")}`;
   return useQuery<PropOpportunity[]>({
     queryKey: ["bip-home-prop-opps", today],
     queryFn: async () => {
-      // 1. Today's props (include odds for EV model); fall back to most recent
+      // 1. Today's + tomorrow's props (include odds for EV model); fall back to most recent
       let { data: props } = await supabase
         .from("back_in_play_player_props")
         .select("player_id, player_name, market, line, over_price, under_price, source")
-        .eq("game_date", today);
+        .in("game_date", [today, tomorrow]);
       if (!props?.length) {
         const { data: recent } = await supabase
           .from("back_in_play_player_props")
@@ -1522,7 +1527,7 @@ function useReturningPlayerProps() {
         ...Array.from({ length: Math.ceil(playerIds.length / 200) }, (_, i) =>
           supabase
             .from("back_in_play_injuries")
-            .select("player_id, status, injury_type, date_injured")
+            .select("player_id, status, injury_type, date_injured, return_date")
             .in("player_id", playerIds.slice(i * 200, (i + 1) * 200))
             .order("date_injured", { ascending: false })
         ),
@@ -1539,10 +1544,10 @@ function useReturningPlayerProps() {
       }
 
       // 3. Game log counts for recently returned
-      const returned: { pid: string; injDate: string }[] = [];
+      const returned: { pid: string; injDate: string; returnDate: string }[] = [];
       for (const [pid] of byPlayer) {
         const inj = injuryMap.get(pid);
-        if (inj?.date_injured) returned.push({ pid, injDate: inj.date_injured });
+        if (inj?.date_injured) returned.push({ pid, injDate: inj.date_injured, returnDate: inj.return_date ?? inj.date_injured });
       }
       if (returned.length === 0) return [];
 
@@ -1577,7 +1582,7 @@ function useReturningPlayerProps() {
 
       for (const r of returned) {
         const allGames = (logRes.data ?? []).filter((g: any) => g.player_id === r.pid);
-        const postGames = allGames.filter((g: any) => g.game_date > r.injDate);
+        const postGames = allGames.filter((g: any) => g.game_date > r.returnDate);
         const preGames = allGames.filter((g: any) => g.game_date <= r.injDate);
         const count = postGames.length;
         if (count > 0 && count <= 10) {
@@ -1806,22 +1811,22 @@ function MispricedReturnTable() {
         <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-2">
             <span className="text-sm">📊</span>
-            <span className="text-[13px] font-bold uppercase tracking-[0.1em] text-blue-400">
+            <span className="text-sm font-bold uppercase tracking-[0.1em] text-blue-400">
               Top Return-Based Model Signals <span className="text-blue-300">Today</span>
             </span>
-            <span className="text-[8px] text-white/20 font-medium">Updated today</span>
+            <span className="text-[9px] text-white/20 font-medium">Updated today</span>
           </div>
           <Link
             to="/props?sort=best"
-            className="text-[11px] text-white/30 hover:text-white/50 transition-colors"
+            className="text-xs text-white/30 hover:text-white/50 transition-colors"
           >
             View all projections →
           </Link>
         </div>
-        <p className="text-[11px] text-white/30 mb-2">
+        <p className="text-[13px] text-white/35 mb-2 leading-relaxed">
           Top signals based on largest model vs market differences
         </p>
-        <p className="text-[11px] text-white/35 mb-5">
+        <p className="text-[13px] text-white/40 mb-5 leading-relaxed">
           Players where the model sees the largest differences between expected post-injury performance and current lines
         </p>
 
@@ -1845,13 +1850,13 @@ function MispricedReturnTable() {
                 >
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <span className={`text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full mb-1.5 inline-block ${
+                      <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full mb-1.5 inline-block ${
                         idx === 0 ? "bg-amber-500/15 text-amber-400/80 border border-amber-500/20" : "bg-blue-500/15 text-blue-400/70 border border-blue-500/20"
                       }`}>
                         {idx === 0 ? "Largest gap today" : "Top signal"}
                       </span>
-                      <p className="text-[13px] font-bold text-white">{opp.playerName}</p>
-                      <div className="flex items-center gap-1.5 text-[9px] text-white/30 mt-0.5">
+                      <p className="text-[15px] font-bold text-white">{opp.playerName}</p>
+                      <div className="flex items-center gap-1.5 text-[10px] text-white/30 mt-0.5">
                         <span style={{ color: `${lc}aa` }}>{LEAGUE_LABELS[opp.leagueSlug]}</span>
                         <span>·</span>
                         <span>{opp.injuryType}</span>
@@ -1863,7 +1868,7 @@ function MispricedReturnTable() {
                       {opp.ev?.recommendation}
                     </span>
                   </div>
-                  <div className="flex items-center gap-4 text-[11px]">
+                  <div className="flex items-center gap-4 text-xs">
                     <span className="text-white/40">{PROP_MARKET_LABELS[opp.propMarket] ?? opp.propMarket}</span>
                     <span className="text-white/60 tabular-nums">Market: {opp.propLine}</span>
                     <span className="text-white/40 tabular-nums">Model: {opp.projection?.toFixed(1)}</span>
@@ -1873,27 +1878,27 @@ function MispricedReturnTable() {
                       </span>
                     )}
                   </div>
-                  <p className="text-[9px] text-white/25 mt-2 italic">{getSignalReason(opp)}</p>
+                  <p className="text-[10px] text-white/25 mt-2 italic">{getSignalReason(opp)}</p>
                 </div>
               );
             })}
           </div>
         )}
 
-        <p className="text-[10px] text-white/25 font-medium uppercase tracking-wider mb-2">More signals</p>
+        <p className="text-[11px] text-white/25 font-medium uppercase tracking-wider mb-2">More signals</p>
         <div className="rounded-xl border border-white/5 overflow-hidden opacity-90">
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
-                <tr className="text-[9px] text-white/20 uppercase tracking-wider border-b border-white/5 bg-white/[0.02]">
-                  <th className="px-3 py-2 font-medium">Player</th>
-                  <th className="px-3 py-2 font-medium">Injury</th>
-                  <th className="px-3 py-2 font-medium">Return Status</th>
-                  <th className="px-3 py-2 font-medium">Stat</th>
-                  <th className="px-3 py-2 font-medium text-right">Market</th>
-                  <th className="px-3 py-2 font-medium text-right">Model</th>
-                  <th className="px-3 py-2 font-medium text-right">Signal</th>
-                  <th className="px-3 py-2 font-medium">Why</th>
+                <tr className="text-[11px] text-white/35 uppercase tracking-wider border-b border-white/5 bg-white/[0.02]">
+                  <th className="px-3 py-3 font-medium">Player</th>
+                  <th className="px-3 py-3 font-medium">Injury</th>
+                  <th className="px-3 py-3 font-medium">Return Status</th>
+                  <th className="px-3 py-3 font-medium">Stat</th>
+                  <th className="px-3 py-3 font-medium text-right">Market</th>
+                  <th className="px-3 py-3 font-medium text-right">Model</th>
+                  <th className="px-3 py-3 font-medium text-right">Signal</th>
+                  <th className="px-3 py-3 font-medium">Why</th>
                 </tr>
               </thead>
               <tbody>
@@ -1920,38 +1925,38 @@ function MispricedReturnTable() {
                         window.location.href = `/props?player=${encodeURIComponent(opp.playerName)}`;
                       }}
                     >
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-3">
                         <div>
-                          <p className="text-[11px] font-medium text-white truncate max-w-[110px] group-hover:text-blue-400 transition-colors">{opp.playerName}</p>
-                          <p className="text-[9px]" style={{ color: `${lc}88` }}>{LEAGUE_LABELS[opp.leagueSlug]}</p>
+                          <p className="text-[13px] font-medium text-white truncate max-w-[130px] group-hover:text-blue-400 transition-colors">{opp.playerName}</p>
+                          <p className="text-[10px]" style={{ color: `${lc}88` }}>{LEAGUE_LABELS[opp.leagueSlug]}</p>
                         </div>
                       </td>
-                      <td className="px-3 py-2.5">
-                        <span className="text-[10px] text-white/50">{opp.injuryType}</span>
+                      <td className="px-3 py-3">
+                        <span className="text-[11px] text-white/50">{opp.injuryType}</span>
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-3">
                         {gamesBackBadge(opp.gamesBack)}
                       </td>
-                      <td className="px-3 py-2.5 text-[10px] text-white/50">{PROP_MARKET_LABELS[opp.propMarket] ?? opp.propMarket}</td>
-                      <td className="px-3 py-2.5 text-[11px] text-white/70 text-right tabular-nums font-medium">{opp.propLine}</td>
-                      <td className="px-3 py-2.5 text-right">
-                        <span className="text-[11px] text-white/50 tabular-nums">{opp.projection?.toFixed(1) ?? "—"}</span>
+                      <td className="px-3 py-3 text-[11px] text-white/50">{PROP_MARKET_LABELS[opp.propMarket] ?? opp.propMarket}</td>
+                      <td className="px-3 py-3 text-xs text-white/70 text-right tabular-nums font-medium">{opp.propLine}</td>
+                      <td className="px-3 py-3 text-right">
+                        <span className="text-xs text-white/50 tabular-nums">{opp.projection?.toFixed(1) ?? "—"}</span>
                         {gapPct != null && (
-                          <p className="text-[9px] text-white/30 mt-0.5 tabular-nums">
+                          <p className="text-[10px] text-white/30 mt-0.5 tabular-nums">
                             {gapPct > 0 ? "+" : ""}{gapPct.toFixed(0)}% vs market
                           </p>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-right">
+                      <td className="px-3 py-3 text-right">
                         {opp.ev && opp.ev.recommendation && opp.ev.bestEv != null && (
-                          <span className={`text-[11px] font-bold tabular-nums ${isOver ? "text-green-400" : "text-red-400"}`}>
+                          <span className={`text-xs font-bold tabular-nums ${isOver ? "text-green-400" : "text-red-400"}`}>
                             {opp.ev.recommendation}
                           </span>
                         )}
                       </td>
-                      <td className="px-3 py-2.5">
-                        <span className="text-[9px] text-white/35 italic">{getSignalReason(opp)}</span>
-                        <span className="text-[9px] text-blue-400/50 ml-1.5 opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
+                      <td className="px-3 py-3">
+                        <span className="text-xs text-white/40 italic">{getSignalReason(opp)}</span>
+                        <span className="text-[10px] text-blue-400/50 ml-1.5 opacity-0 group-hover:opacity-100 transition-opacity">View →</span>
                       </td>
                     </tr>
                   );
@@ -1960,7 +1965,7 @@ function MispricedReturnTable() {
             </table>
           </div>
         </div>
-        <p className="text-[10px] text-white/20 mt-3 text-center italic">
+        <p className="text-[11px] text-white/20 mt-3 text-center italic">
           Early return performance often lags expectations — these are the biggest current gaps
         </p>
         <EarlyAccessCTA className="mt-1" page="homepage" location="mispriced_table_footer" />
@@ -2143,7 +2148,9 @@ function ReturningPlayerPropOpportunities() {
                     </div>
                     <div className="flex items-center gap-3 text-[9px] text-white/30">
                       <span>Line: <span className="text-white/50 font-medium">{opp.propLine} {PROP_MARKET_LABELS[opp.propMarket] ?? opp.propMarket}</span></span>
-                      <span>P({opp.ev.recommendation.toLowerCase()}): <span className="text-white/50 font-medium tabular-nums">{Math.round((opp.ev.recommendation === "OVER" ? opp.ev.probOver : opp.ev.probUnder) * 100)}%</span></span>
+                      <span className={`font-medium ${opp.ev.confidence === "High" ? "text-green-400/50" : opp.ev.confidence === "Medium" ? "text-amber-400/50" : "text-white/30"}`}>
+                        {opp.ev.confidence} confidence
+                      </span>
                     </div>
                   </div>
                 ) : opp.propLine != null ? (
@@ -2215,33 +2222,12 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
   return (
     <div className="min-h-screen bg-[#0A0E1A] text-white overflow-x-hidden">
       <SEO title={seoTitle} description={seoDesc} path={activeTab === "top" ? "/" : `/league/${activeTab}`} />
-      {/* Top Nav */}
-      <nav className="sticky top-0 z-50 border-b border-white/10 bg-[#0A0E1A]/90 backdrop-blur-md">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
-          <Link to="/" className="flex items-center gap-2 shrink-0">
-            <span className="text-xl font-black tracking-tight">
-              <span className="text-[#1C7CFF]">BACK</span>
-              <span className="text-white/50 mx-1">IN</span>
-              <span className="text-[#3DFF8F]">PLAY</span>
-            </span>
-            <span className="text-[9px] font-semibold tracking-wide rounded-full px-2 py-0.5 bg-[#1C7CFF]/10 text-[#1C7CFF]/60 border border-[#1C7CFF]/15">Early Access</span>
-          </Link>
+      {/* Shared site header */}
+      <SiteHeader />
 
-          <div className="hidden md:flex items-center gap-1 sm:gap-4 text-[13px] sm:text-[15px] font-medium overflow-x-auto">
-            <Link to="/" className="px-2 py-1 text-[#1C7CFF] shrink-0">Home</Link>
-            {(typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) && (<>
-              <Link to="/recovery-stats" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Recovery Stats</Link>
-              <Link to="/returning-today" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Returning Today</Link>
-            </>)}
-            <Link to="/props" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Props</Link>
-            <Link to="/performance-curves" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0">Performance Curves</Link>
-            <Link to="/tracked-players" className="px-2 py-1 text-white/50 hover:text-white transition-colors shrink-0" title="Tracked Players">&#9733; <span className="hidden sm:inline">Tracked</span></Link>
-          </div>
-
-        </div>
-
-        {/* League filter — scrollable chips */}
-        <div className="relative max-w-5xl mx-auto">
+      {/* League filter — scrollable chips */}
+      <nav className="sticky top-[73px] z-40 border-b border-white/10 bg-[#0A0E1A]/90 backdrop-blur-md">
+        <div className="relative max-w-5xl lg:max-w-[1400px] mx-auto">
           <div className="flex items-center gap-2 px-4 py-2.5 overflow-x-auto scrollbar-hide" style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
             {/* "Top Players" — distinct style */}
             <button
@@ -2287,7 +2273,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
         </div>
 
         {/* Section tabs — mobile only */}
-        <div className="max-w-5xl mx-auto px-4 md:hidden">
+        <div className="max-w-5xl lg:max-w-[1400px] mx-auto px-4 lg:px-10 md:hidden">
           <div className="flex border-t border-white/8">
             {([
               { key: "injuries" as HomeSection, label: "Injuries" },
@@ -2312,7 +2298,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
       </nav>
 
       {/* Content */}
-      <main className="max-w-5xl mx-auto px-4 py-8 pb-16">
+      <main className="max-w-5xl lg:max-w-[1400px] mx-auto px-4 lg:px-10 py-8 pb-16">
         {/* Desktop always shows injuries; mobile switches via tabs */}
         <div className={section === "injuries" ? "" : "hidden md:block"}>
           <InjuriesView activeTab={activeTab} />
@@ -2335,7 +2321,7 @@ export default function HomePage({ initialLeague }: { initialLeague?: string }) 
 
       {/* SEO intro — homepage injuries tab only */}
       {activeTab === "top" && section === "injuries" && (
-        <section className="max-w-5xl mx-auto px-4 pb-8">
+        <section className="max-w-5xl lg:max-w-[1400px] mx-auto px-4 lg:px-10 pb-8">
           <div className="border-t border-white/5 pt-8">
             <h2 className="text-base font-semibold text-white/60 mb-2">Sports Injury Tracker and Recovery Analysis</h2>
             <p className="text-sm text-white/40 leading-relaxed mb-2">

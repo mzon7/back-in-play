@@ -1,4 +1,4 @@
-const SITE_URL = "https://backinplay.app";
+const SITE_URL = "https://backinplay.ai";
 
 /** Build JSON-LD for a player injury page */
 export function playerJsonLd(player: {

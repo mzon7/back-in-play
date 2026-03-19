@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../lib/supabase";
@@ -16,7 +16,7 @@ import { WhyThisSignal } from "../components/WhyThisSignal";
 import { PremiumGate } from "../components/PremiumGate";
 import { PremiumUnlockCounter } from "../components/PremiumUnlockCounter";
 import { PlayerBreakdownPanel } from "../components/PlayerBreakdownPanel";
-import { trackFilterChange, trackTableSort, trackOpportunityRowClick, trackDateFilterChange } from "../lib/analytics";
+
 
 const LEAGUE_ORDER = ["nba", "nfl", "mlb", "nhl", "premier-league"];
 const LEAGUE_LABELS: Record<string, string> = {
@@ -122,32 +122,39 @@ const STAT_FILTERS: { value: string; label: string; markets: string[] }[] = [
 ];
 
 /** Format game status from commence_time */
-function gameStatus(commenceTime: string | null | undefined, gameDate: string | undefined): { label: string; started: boolean; tomorrow: boolean } {
-  const today = new Date().toISOString().slice(0, 10);
+function localToday(): string {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
+}
+
+function gameStatus(commenceTime: string | null | undefined, gameDate: string | undefined): { label: string; started: boolean; soon: boolean; tomorrow: boolean } {
+  const today = localToday();
   const isTomorrow = gameDate != null && gameDate > today;
 
   if (!commenceTime) {
-    return { label: isTomorrow ? "Tomorrow" : "Today", started: false, tomorrow: isTomorrow };
+    return { label: isTomorrow ? "Tomorrow" : "Today", started: false, soon: false, tomorrow: isTomorrow };
   }
   const ct = new Date(commenceTime);
   const now = new Date();
   if (now >= ct) {
-    return { label: "Live", started: true, tomorrow: false };
+    return { label: "Live", started: true, soon: false, tomorrow: false };
   }
-  // Format time in user's locale
+  const minsUntil = (ct.getTime() - now.getTime()) / 60000;
   const timeStr = ct.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return { label: isTomorrow ? `Tomorrow ${timeStr}` : timeStr, started: false, tomorrow: isTomorrow };
+  return { label: isTomorrow ? `Tomorrow ${timeStr}` : timeStr, started: false, soon: minsUntil <= 30, tomorrow: isTomorrow };
 }
 
 function GameTimeBadge({ commenceTime, gameDate }: { commenceTime?: string | null; gameDate?: string }) {
-  const { label, started, tomorrow } = gameStatus(commenceTime, gameDate);
+  const { label, started, soon, tomorrow } = gameStatus(commenceTime, gameDate);
   return (
     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold ${
       started ? "bg-green-500/20 text-green-400" :
+      soon ? "bg-amber-500/20 text-amber-400" :
       tomorrow ? "bg-blue-500/10 text-blue-400/60" :
       "bg-white/5 text-white/40"
     }`}>
       {started && <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />}
+      {soon && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />}
       {label}
     </span>
   );
@@ -211,49 +218,66 @@ function arrMedian(arr: number[]): number {
  * 4. Multiply by median minutes -> per-game expected value
  */
 function computeAvg(games: any[], n: number): PreInjuryAvg | null {
-  // First pass: get all games with any minutes to compute typical minutes
-  const withMinutes = games.filter((g: any) => g.minutes != null && g.minutes > 0);
-  if (withMinutes.length === 0) return null;
-
-  // Compute median minutes from ALL available games to determine threshold
-  const allMinutes = withMinutes.map((g: any) => g.minutes as number);
-  const typicalMinutes = arrMedian(allMinutes);
-  const minThreshold = typicalMinutes * 0.25; // 25% of typical = injury exit cutoff
-
-  // Filter to real games (above threshold), then take top n
-  const realGames = withMinutes.filter((g: any) => g.minutes >= minThreshold);
-  const slice = realGames.slice(0, n);
-  if (slice.length === 0) return null;
+  if (games.length === 0) return null;
 
   const statKeys = ["stat_pts", "stat_reb", "stat_ast", "stat_stl", "stat_blk",
     "stat_sog", "stat_rush_yds", "stat_pass_yds", "stat_rec", "stat_rec_yds",
     "stat_goals", "stat_h", "stat_rbi"];
-  const result: PreInjuryAvg = { minutes: null };
 
-  // Median minutes of real games
-  const minuteVals = slice.map((g: any) => g.minutes as number);
-  const medMinutes = arrMedian(minuteVals);
-  result.minutes = Math.round(medMinutes * 10) / 10;
+  // Check if this league has minutes data
+  const withMinutes = games.filter((g: any) => g.minutes != null && g.minutes > 0);
+  const hasMinutes = withMinutes.length > 0;
 
-  for (const key of statKeys) {
-    const rates: number[] = [];
-    for (const g of slice) {
-      const val = g[key];
-      if (val != null) {
-        rates.push(val / g.minutes);
+  if (hasMinutes) {
+    // Minutes-adjusted: filter out injury exits, use per-minute rates
+    const allMinutes = withMinutes.map((g: any) => g.minutes as number);
+    const typicalMinutes = arrMedian(allMinutes);
+    const minThreshold = typicalMinutes * 0.25;
+    const realGames = withMinutes.filter((g: any) => g.minutes >= minThreshold);
+    const slice = realGames.slice(0, n);
+    if (slice.length === 0) return null;
+
+    const result: PreInjuryAvg = { minutes: null };
+    const minuteVals = slice.map((g: any) => g.minutes as number);
+    const medMinutes = arrMedian(minuteVals);
+    result.minutes = Math.round(medMinutes * 10) / 10;
+
+    for (const key of statKeys) {
+      const rates: number[] = [];
+      for (const g of slice) {
+        const val = g[key];
+        if (val != null) rates.push(val / g.minutes);
       }
+      result[key] = rates.length > 0
+        ? Math.round(arrMedian(rates) * medMinutes * 10) / 10
+        : null;
     }
-    // Median per-minute rate x median minutes = expected per-game stat
-    result[key] = rates.length > 0
-      ? Math.round(arrMedian(rates) * medMinutes * 10) / 10
-      : null;
+    return result;
+  } else {
+    // No minutes data (NHL, EPL, MLB) — use simple median of raw stats
+    const slice = games.slice(0, n);
+    if (slice.length === 0) return null;
+
+    const result: PreInjuryAvg = { minutes: null };
+    for (const key of statKeys) {
+      const vals: number[] = [];
+      for (const g of slice) {
+        const val = g[key];
+        if (val != null) vals.push(val);
+      }
+      result[key] = vals.length > 0
+        ? Math.round(arrMedian(vals) * 10) / 10
+        : null;
+    }
+    return result;
   }
-  return result;
 }
 
 function usePropsWithPlayers() {
-  const today = new Date().toISOString().slice(0, 10);
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  // Use local date (not UTC) so 9pm ET on March 18 stays March 18
+  const today = localToday();
+  const tmrw = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() + 1);
+  const tomorrow = `${tmrw.getFullYear()}-${String(tmrw.getMonth() + 1).padStart(2, "0")}-${String(tmrw.getDate()).padStart(2, "0")}`;
   return useQuery<PropsPlayer[]>({
     queryKey: ["bip-props-page", today],
     queryFn: async () => {
@@ -264,15 +288,21 @@ function usePropsWithPlayers() {
         .in("game_date", [today, tomorrow])
         .order("game_date", { ascending: true });
       if (propsErr) throw propsErr;
-
       // If no props for today/tomorrow, get the most recent day that has data
       if (!props || props.length === 0) {
-        const { data: recent } = await supabase
+        // First find the most recent game_date
+        const { data: latestRow } = await supabase
           .from("back_in_play_player_props")
-          .select("id, player_id, player_name, market, line, over_price, under_price, source, game_date, commence_time, home_team, away_team")
+          .select("game_date")
           .order("game_date", { ascending: false })
-          .limit(1000);
-        props = recent ?? [];
+          .limit(1);
+        if (latestRow && latestRow.length > 0) {
+          const { data: recent } = await supabase
+            .from("back_in_play_player_props")
+            .select("id, player_id, player_name, market, line, over_price, under_price, source, game_date, commence_time, home_team, away_team")
+            .eq("game_date", latestRow[0].game_date);
+          props = recent ?? [];
+        }
       }
       if (!props || props.length === 0) return [];
 
@@ -297,7 +327,7 @@ function usePropsWithPlayers() {
         ...Array.from({ length: Math.ceil(playerIds.length / 200) }, (_, i) =>
           supabase
             .from("back_in_play_injuries")
-            .select("player_id, status, injury_type, expected_return, date_injured")
+            .select("player_id, status, injury_type, expected_return, date_injured, return_date")
             .in("player_id", playerIds.slice(i * 200, (i + 1) * 200))
             .neq("status", "cleared")
             .order("date_injured", { ascending: false })
@@ -347,7 +377,16 @@ function usePropsWithPlayers() {
         if (!player) continue;
         const team = (player as any).team;
         const leagueSlug = (player as any).league?.slug ?? leagueMap.get(player.league_id) ?? "";
-        const injury = injuryMap.get(pid);
+        let injury = injuryMap.get(pid);
+
+        // Skip stale "returned" injuries — if return was >45 days ago, player is fully healthy
+        if (injury) {
+          const rd = injury.return_date ?? injury.date_injured;
+          const daysSinceReturn = rd ? (Date.now() - new Date(rd + "T00:00:00").getTime()) / 86400000 : 999;
+          if (injury.status === "returned" && daysSinceReturn > 45) {
+            injury = undefined; // treat as no injury
+          }
+        }
 
         // Compute pre-injury averages from game logs
         const allGames = gameLogMap.get(pid) ?? [];
@@ -361,11 +400,12 @@ function usePropsWithPlayers() {
         const avg5 = computeAvg(preInjuryGames, 5);
         const avg10 = computeAvg(preInjuryGames, 10);
 
-        // Post-return games (after injury date)
+        // Post-return games (after return date, fallback to injury date)
         let postReturnGames: any[] = [];
-        if (injuryDate) {
+        const returnDate = injury?.return_date ?? injuryDate;
+        if (returnDate) {
           postReturnGames = allGames
-            .filter((g: any) => g.game_date > injuryDate)
+            .filter((g: any) => g.game_date > returnDate)
             .sort((a: any, b: any) => b.game_date.localeCompare(a.game_date));
         }
         const gamesBack = postReturnGames.length;
@@ -568,14 +608,14 @@ function edgeLabel(evPct: number, _leagueProfile?: LeagueModelProfile | null, pe
     if (percentile >= 0.4) {
       return { text: "Moderate signal", color: evPct > 0 ? "text-green-400/80" : "text-red-400/80" };
     }
-    return { text: "Lower confidence", color: "text-white/40" };
+    return { text: "Lean signal", color: "text-white/40" };
   }
 
   // Fallback: pure EV-based (no percentile data available)
   const abs = Math.abs(evPct);
   if (abs >= 15) return { text: "Strong signal", color: evPct > 0 ? "text-green-400" : "text-red-400" };
   if (abs >= 7) return { text: "Moderate signal", color: evPct > 0 ? "text-green-400/80" : "text-red-400/80" };
-  return { text: "Lower confidence", color: "text-white/40" };
+  return { text: "Lean signal", color: "text-white/40" };
 }
 
 /**
@@ -589,7 +629,7 @@ function computePercentiles(
   // Score each player by their best EV
   const scores: { playerId: string; ev: number }[] = [];
   for (const p of players) {
-    if (p.gamesBack <= 0) continue;
+    if (p.gamesBack < 0) continue;
     const curve = findCurve(p);
     if (!curve) continue;
     let bestEv = 0;
@@ -654,28 +694,28 @@ function generatePropExplanation(
   if (preVal != null && returnVal != null && line != null) {
     const diff = returnVal - preVal;
     if (Math.abs(diff) > 0.3) {
-      const dir = diff < 0 ? "lower" : "higher";
-      reasons.push(`${dir} post-injury ${statLabel.toLowerCase()} (${returnVal.toFixed(1)} vs ${preVal.toFixed(1)} pre-injury)`);
+      const dir = diff < 0 ? "Reduced" : "Elevated";
+      reasons.push(`${dir} ${statLabel.toLowerCase()} since return (${returnVal.toFixed(1)} vs ${preVal.toFixed(1)} pre-injury)`);
     }
   }
 
   // Historical trend
   if (impDiff != null && impDiff < -0.3) {
-    reasons.push("historical return trend suppression");
+    reasons.push("comparable cases show reduced output");
   }
 
   // Early return
   if (gamesBack <= 3) {
-    reasons.push("early return window uncertainty");
+    reasons.push("early return suppression signal");
   }
 
   if (reasons.length === 0) return null;
-  return reasons.join(" + ");
+  return reasons.join(" · ");
 }
 
 // ─── PlayerPropCard (Redesigned with Signal → Explanation → Context) ─────────
 
-function PlayerPropCard({ player, sourceFilter, curve, highlighted, statFilter }: {
+export function PlayerPropCard({ player, sourceFilter, curve, highlighted, statFilter }: {
   player: PropsPlayer;
   sourceFilter: string;
   curve?: PerformanceCurve | null;
@@ -867,8 +907,8 @@ function PlayerPropCard({ player, sourceFilter, curve, highlighted, statFilter }
           });
 
           function confidenceLabel(conf: string | undefined): { text: string; color: string } {
-            if (conf === "high") return { text: "High confidence", color: "text-green-400/70" };
-            if (conf === "medium") return { text: "Medium confidence", color: "text-amber-400/70" };
+            if (conf === "High") return { text: "High confidence", color: "text-green-400/70" };
+            if (conf === "Medium") return { text: "Medium confidence", color: "text-amber-400/70" };
             return { text: "Low confidence", color: "text-white/35" };
           }
 
@@ -1114,19 +1154,17 @@ function generateTeaser(
 ): string {
   const parts: string[] = [];
   if (bestEv?.recommendation && bestProp) {
-    const gapPct = bestProp.line != null && bestProp.line > 0
-      ? Math.round(((bestEv.expectedCombined - bestProp.line) / bestProp.line) * 100)
-      : null;
-    if (gapPct != null && gapPct !== 0) parts.push(`Model ${gapPct > 0 ? "+" : ""}${gapPct}% vs ${MARKET_LABELS[bestProp.market] ?? bestProp.market} line`);
+    const statLabel = MARKET_LABELS[bestProp.market] ?? bestProp.market;
+    parts.push(`Historical trend supports ${bestEv.recommendation} on ${statLabel}`);
   }
-  if (player.gamesBack > 0 && player.gamesBack <= 3) parts.push(`G${player.gamesBack} early return`);
+  if (player.gamesBack > 0 && player.gamesBack <= 3) parts.push(`Early return window (G${player.gamesBack})`);
   else if (player.gamesBack > 0) parts.push(`G${player.gamesBack} return`);
   if (player.avg10?.minutes && player.avgSinceReturn?.minutes && player.avgSinceReturn.minutes / player.avg10.minutes < 0.85) {
-    parts.push("minutes limited");
+    parts.push("minutes still below baseline");
   }
   if (curve) {
     const imp = getCurveImpact(curve, Math.min(player.gamesBack - 1, 2), player.league_slug);
-    if (imp && imp.diff < -0.5) parts.push(`hist. ${imp.diff.toFixed(1)} ${imp.label}`);
+    if (imp && imp.diff < -0.5) parts.push(`historical impact: ${imp.diff.toFixed(1)} ${imp.label}`);
   }
   return parts.slice(0, 3).join(" · ") || "Injury return analysis available";
 }
@@ -1151,9 +1189,6 @@ function CompactPlayerRow({
   const lc = leagueColor(player.league_slug);
   const isOver = bestEv?.recommendation === "OVER";
   const edge = bestEv?.bestEv != null ? edgeLabel(bestEv.bestEv, leagueProfile, percentile) : null;
-  const gapPct = bestEv && bestProp?.line != null && bestProp.line > 0
-    ? Math.round(((bestEv.expectedCombined - bestProp.line) / bestProp.line) * 100)
-    : null;
   const teaser = generateTeaser(player, curve, bestEv, bestProp);
 
   return (
@@ -1182,15 +1217,17 @@ function CompactPlayerRow({
 
           {/* Right side: signal direction + strength */}
           <div className="flex items-center gap-3 shrink-0">
-            {bestEv?.recommendation && bestProp && (
+            {bestProp && (
               <>
                 <div className="text-right">
                   <span className="text-[10px] text-white/30">{MARKET_LABELS[bestProp.market] ?? bestProp.market}</span>
                   <div className="flex items-center gap-1.5">
                     <span className="text-[13px] font-bold text-white tabular-nums">{bestProp.line}</span>
-                    <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
-                      {bestEv.recommendation}
-                    </span>
+                    {bestEv?.recommendation && (
+                      <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
+                        {bestEv.recommendation}
+                      </span>
+                    )}
                   </div>
                 </div>
                 {edge && (
@@ -1257,7 +1294,7 @@ function DailyOpportunitiesTable({ players, findCurve, freePlayerIds, onPlayerCl
         const statKey = MARKET_TO_STAT[prop.market];
         const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
         const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
-        if (!curve || !statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack <= 0) continue;
+        if (!curve || !statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack < 0) continue;
 
         const ev = computeEV({
           baseline, propLine: prop.line,
@@ -1286,20 +1323,20 @@ function DailyOpportunitiesTable({ players, findCurve, freePlayerIds, onPlayerCl
     return edgeLabel(evPct, backtestProfiles?.[leagueSlug], percentileMap?.get(playerId));
   }
 
-  // Why tag
+  // Contextual signal reason — insight language
   function whyTag(p: PropsPlayer, curve: PerformanceCurve | null): string {
     if (p.gamesBack <= 3) {
       if (p.avg10?.minutes && p.avgSinceReturn?.minutes && p.avgSinceReturn.minutes / p.avg10.minutes < 0.8)
-        return "Minutes restriction";
-      return "Early return suppression";
+        return "Minutes still below baseline";
+      return "Early return suppression signal";
     }
     if (p.avg10?.minutes && p.avgSinceReturn?.minutes && p.avgSinceReturn.minutes / p.avg10.minutes < 0.8)
-      return "Minutes restriction";
+      return "Minutes still below baseline";
     if (curve) {
       const impG3 = getCurveImpact(curve, 2, p.league_slug);
-      if (impG3 && impG3.diff < -0.3) return "Historical underperformance";
+      if (impG3 && impG3.diff < -0.3) return "Comparable cases show reduced output";
     }
-    return "Return window impact";
+    return "Historical trend supports signal";
   }
 
   return (
@@ -1450,15 +1487,15 @@ function EVInfoModal({ open, onClose }: { open: boolean; onClose: () => void }) 
       >
         <button onClick={onClose} className="absolute top-4 right-4 text-white/30 hover:text-white/60 transition-colors text-lg">&#x2715;</button>
 
-        <h2 className="text-lg font-bold text-white mb-1">How EV Works</h2>
-        <p className="text-xs text-white/40 mb-5">Injury-adjusted expected value</p>
+        <h2 className="text-lg font-bold text-white mb-1">How Our Signals Work</h2>
+        <p className="text-xs text-white/40 mb-5">Injury-adjusted return analysis</p>
 
         <div className="space-y-5 text-[13px] text-white/70 leading-relaxed">
           <div>
             <p>
-              Expected value compares the model's estimated probability
-              of a player going over or under the prop line to the
-              sportsbook's implied probability based on the odds.
+              Our model analyzes how players historically perform after returning
+              from injury and compares that to current prop lines to identify
+              where the market may be mispricing post-injury performance.
             </p>
           </div>
 
@@ -1482,8 +1519,8 @@ function EVInfoModal({ open, onClose }: { open: boolean; onClose: () => void }) 
 
           <div className="rounded-lg bg-[#1C7CFF]/5 border border-[#1C7CFF]/15 p-3.5">
             <p className="text-[13px] text-white/70 leading-relaxed">
-              <span className="text-white/90 font-medium">Positive EV</span> indicates the model probability exceeds the
-              sportsbook's breakeven probability — a potential long-term edge.
+              <span className="text-white/90 font-medium">Signal strength</span> reflects how much the injury recovery
+              data diverges from the current market line — stronger signals indicate larger historical gaps.
             </p>
           </div>
 
@@ -1508,8 +1545,8 @@ function EVInfoModal({ open, onClose }: { open: boolean; onClose: () => void }) 
           <div className="rounded-lg bg-white/5 border border-white/8 p-3 text-[11px] text-white/40 leading-relaxed">
             <p className="font-semibold text-white/60 mb-1">Important</p>
             <p>
-              This model provides statistical estimates, not guarantees. Positive EV does not mean a bet will win —
-              it means the odds may be in your favor over a large number of similar situations. Always bet responsibly.
+              These signals are decision-support insights based on historical injury recovery patterns, not predictions or guarantees.
+              They highlight where post-injury trends may create opportunities worth further analysis.
             </p>
           </div>
         </div>
@@ -1536,11 +1573,12 @@ export default function PropsPage() {
   );
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [statFilter, setStatFilter] = useState<string>("all");
+  const [dateFilter, setDateFilter] = useState<"all" | "today" | "tomorrow">("all");
   const [sortMode, setSortMode] = useState<SortMode>(
     qSort && ["best", "gap", "early", "drop"].includes(qSort) ? qSort as SortMode : "best"
   );
   const [showEVInfo, setShowEVInfo] = useState(false);
-  const [highlightedPlayerId, setHighlightedPlayerId] = useState<string | null>(null);
+  const [, setHighlightedPlayerId] = useState<string | null>(null);
   const [expandedPlayerId, setExpandedPlayerId] = useState<string | null>(null);
 
   // Build curve lookup: injury_type_slug|league_slug -> PerformanceCurve
@@ -1567,7 +1605,9 @@ export default function PropsPage() {
       const [cSlug, cLeague] = key.split("|");
       if (cLeague === p.league_slug && (cSlug.includes(slug) || slug.includes(cSlug))) return curve;
     }
-    return null;
+    // Fallback to "Other" curve for this league
+    const fallback = curveMap.get(`other|${p.league_slug}`);
+    return fallback ?? null;
   };
 
   // Scroll to matched player and highlight
@@ -1578,6 +1618,7 @@ export default function PropsPage() {
     if (!match) return;
 
     setHighlightedPlayerId(match.player_id);
+    setExpandedPlayerId(match.player_id);
 
     let attempts = 0;
     let lastTop = -1;
@@ -1619,10 +1660,43 @@ export default function PropsPage() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Compute local today/tomorrow for date filter
+  const localTodayStr = localToday();
+  const localTmrw = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() + 1);
+  const localTomorrowStr = `${localTmrw.getFullYear()}-${String(localTmrw.getMonth() + 1).padStart(2, "0")}-${String(localTmrw.getDate()).padStart(2, "0")}`;
+
+  // Which dates actually have props?
+  const datesWithProps = useMemo(() => {
+    const dates = new Set(players.flatMap((p) => p.props.map((pr) => pr.game_date).filter(Boolean)));
+    return { today: dates.has(localTodayStr), tomorrow: dates.has(localTomorrowStr) };
+  }, [players, localTodayStr, localTomorrowStr]);
+
+  // Helper: filter a player's props by current source/stat/date filters
+  const filterProps = useCallback((props: PropItem[]): PropItem[] => {
+    let out = sourceFilter === "all" ? props : props.filter((p) => p.source === sourceFilter);
+    if (statFilter && statFilter !== "all") {
+      const sf = STAT_FILTERS.find((f) => f.value === statFilter);
+      if (sf && sf.markets.length > 0) out = out.filter((p) => sf.markets.includes(p.market));
+    }
+    if (dateFilter === "today") out = out.filter((p) => p.game_date === localTodayStr);
+    else if (dateFilter === "tomorrow") out = out.filter((p) => p.game_date === localTomorrowStr);
+    return out;
+  }, [sourceFilter, statFilter, dateFilter, localTodayStr, localTomorrowStr]);
+
   const filtered = useMemo(() => {
     let list = leagueFilter === "all"
       ? players
       : players.filter((p) => p.league_slug === leagueFilter);
+    // Hide players with zero props matching filters, where all lines are null,
+    // or whose only props come from minor/unreliable sources
+    const majorSources = new Set(["fanduel", "draftkings", "betmgm", "pointsbet"]);
+    list = list.filter((p) => {
+      const fp = filterProps(p.props);
+      if (fp.length === 0 || !fp.some((pr) => pr.line != null)) return false;
+      // If source filter is "all", require at least one prop from a major source
+      if (sourceFilter === "all" && !fp.some((pr) => majorSources.has(pr.source))) return false;
+      return true;
+    });
     if (qInjury) {
       list = [...list].sort((a, b) => {
         const aMatch = a.injury_type && injuryToSlug(a.injury_type).includes(qInjury) ? 1 : 0;
@@ -1639,7 +1713,7 @@ export default function PropsPage() {
       });
     }
     return list;
-  }, [players, leagueFilter, qInjury, qPlayer]);
+  }, [players, leagueFilter, qInjury, qPlayer, filterProps]);
 
   // Get unique leagues that have props today
   const activeLeagues = Array.from(new Set(players.map((p) => p.league_slug))).filter(Boolean);
@@ -1654,40 +1728,63 @@ export default function PropsPage() {
     (f) => f.value === "all" || f.markets.some((m) => activeMarkets.has(m))
   );
 
-  // Split: recently returned (10 games or fewer since injury) vs rest
-  const recentlyReturned = useMemo(() => {
-    const list = filtered.filter(
-      (p) => p.injury_date && p.gamesBack > 0 && p.gamesBack <= 10
-    );
-    // Sort by sortMode
-    if (sortMode === "early") {
-      list.sort((a, b) => a.gamesBack - b.gamesBack);
-    } else if (sortMode === "gap") {
-      list.sort((a, b) => {
-        const gapA = getMaxGap(a);
-        const gapB = getMaxGap(b);
-        return gapB - gapA;
+  // Helper: get best EV for a player (respecting source/stat filters)
+  function getBestEv(p: PropsPlayer): number {
+    let best = 0;
+    const curve = findCurve(p);
+    if (!curve || p.gamesBack < 0) return 0;
+    for (const prop of filterProps(p.props)) {
+      const statKey = MARKET_TO_STAT[prop.market];
+      const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
+      const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
+      if (!statKey || baseline == null || baseline <= 0 || prop.line == null) continue;
+      const ev = computeEV({
+        baseline, propLine: prop.line,
+        overOdds: parseOdds(prop.over_price), underOdds: parseOdds(prop.under_price),
+        gamesSinceReturn: p.gamesBack, recentAvg: recent, curve,
+        leagueSlug: p.league_slug, statKey,
+        preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
       });
+      if (ev?.bestEv != null && ev.bestEv > best) best = ev.bestEv;
+    }
+    return best;
+  }
+
+  // Apply sort to a list of players
+  function applySortMode(list: PropsPlayer[]): PropsPlayer[] {
+    const sorted = [...list];
+    if (sortMode === "best") {
+      sorted.sort((a, b) => getBestEv(b) - getBestEv(a));
+    } else if (sortMode === "early") {
+      sorted.sort((a, b) => a.gamesBack - b.gamesBack);
+    } else if (sortMode === "gap") {
+      sorted.sort((a, b) => getMaxGap(b) - getMaxGap(a));
     } else if (sortMode === "drop") {
-      list.sort((a, b) => {
+      sorted.sort((a, b) => {
         const cA = findCurve(a);
         const cB = findCurve(b);
         const dropA = cA ? getCurveImpact(cA, 0, a.league_slug)?.diff ?? 0 : 0;
         const dropB = cB ? getCurveImpact(cB, 0, b.league_slug)?.diff ?? 0 : 0;
-        return dropA - dropB; // most negative first
+        return dropA - dropB;
       });
     }
-    return list;
-  }, [filtered, sortMode, curveMap]);
+    return sorted;
+  }
 
-  const otherPlayers = filtered.filter(
-    (p) => !p.injury_date || p.gamesBack === 0 || p.gamesBack > 10
-  );
+  // Split: recently returned (10 games or fewer since injury) vs rest
+  const recentlyReturned = useMemo(() => {
+    const list = filtered.filter(
+      (p) => p.injury_date && p.gamesBack >= 0 && p.gamesBack <= 10
+    );
+    return applySortMode(list);
+  }, [filtered, sortMode, curveMap, sourceFilter, statFilter]);
 
-  // Compute max gap between any prop line and return avg
+  // Players without injury data are excluded — page only shows post-injury signals
+
+  // Compute max gap between any prop line and return avg (respecting filters)
   function getMaxGap(p: PropsPlayer): number {
     let maxGap = 0;
-    for (const prop of p.props) {
+    for (const prop of filterProps(p.props)) {
       if (prop.line == null) continue;
       const statKey = MARKET_TO_STAT[prop.market];
       const returnVal = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
@@ -1696,21 +1793,20 @@ export default function PropsPage() {
     return maxGap;
   }
 
-  // Top edges for highlight cards
+  // Top edges for highlight cards (respects source/stat filters)
   const topEdges = useMemo(() => {
     return recentlyReturned
       .filter((p) => findCurve(p) != null)
       .map((p) => {
         const curve = findCurve(p)!;
-        // Find the BEST prop (highest positive EV), not just the first
         let bestEv: EVResult | null = null;
         let bestProp: PropItem | null = null;
 
-        for (const prop of p.props) {
+        for (const prop of filterProps(p.props)) {
           const statKey = MARKET_TO_STAT[prop.market];
           const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
           const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
-          if (!statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack <= 0) continue;
+          if (!statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack < 0) continue;
 
           const ev = computeEV({
             baseline, propLine: prop.line,
@@ -1731,7 +1827,7 @@ export default function PropsPage() {
       .filter((e) => e.ev?.recommendation && e.evVal > 0)
       .sort((a, b) => b.evVal - a.evVal)
       .slice(0, 4);
-  }, [recentlyReturned, curveMap]);
+  }, [recentlyReturned, curveMap, filterProps]);
 
   const topEdgePlayerIds = useMemo(() => new Set(topEdges.map((e) => e.player.player_id)), [topEdges]);
 
@@ -1791,26 +1887,37 @@ export default function PropsPage() {
           Identify where the market may still reflect injury uncertainty.
         </p>
 
-        {/* Date context */}
-        {players.length > 0 && (() => {
-          const dates = [...new Set(players.flatMap((p) => p.props.map((pr) => pr.game_date).filter(Boolean)))].sort();
-          const todayStr = new Date().toISOString().slice(0, 10);
-          const hasTomorrow = dates.some((d) => d && d > todayStr);
-          const mostRecent = dates[dates.length - 1];
-          const isStale = mostRecent != null && mostRecent < todayStr;
-          return (
-            <div className={`rounded-lg px-3 py-2 mb-4 text-[11px] ${isStale ? "bg-amber-500/10 text-amber-400/70 border border-amber-500/20" : "bg-white/[0.03] text-white/40 border border-white/5"}`}>
-              {isStale ? (
-                <span>Showing props from {new Date(mostRecent + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })} — today's lines aren't available yet</span>
-              ) : (
-                <span>
-                  {dates.filter((d) => d === todayStr).length > 0 ? "Today's games" : ""}
-                  {hasTomorrow ? (dates.filter((d) => d === todayStr).length > 0 ? " + tomorrow's games" : "Tomorrow's games") : ""}
-                </span>
-              )}
-            </div>
-          );
-        })()}
+        {/* Date filter toggle */}
+        {players.length > 0 && (
+          <div className="flex gap-1.5 mb-4">
+            <button
+              onClick={() => setDateFilter("all")}
+              className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
+                dateFilter === "all" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
+              }`}
+            >
+              All games
+            </button>
+            {datesWithProps.today && (
+              <button
+                onClick={() => setDateFilter("today")}
+                className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
+                  dateFilter === "today" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
+                }`}
+              >
+                Today
+              </button>
+            )}
+            <button
+              onClick={() => setDateFilter("tomorrow")}
+              className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
+                dateFilter === "tomorrow" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
+              }`}
+            >
+              Tomorrow {!datesWithProps.tomorrow && <span className="text-white/20 ml-1">(no odds yet)</span>}
+            </button>
+          </div>
+        )}
 
         {/* STEP 5: League filters */}
         <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1">
@@ -1820,10 +1927,11 @@ export default function PropsPage() {
               leagueFilter === "all" ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
             }`}
           >
-            All ({players.length})
+            All ({players.filter((p) => p.injury_date && p.gamesBack >= 0 && p.gamesBack <= 10).length})
           </button>
           {orderedLeagues.map((slug) => {
-            const count = players.filter((p) => p.league_slug === slug).length;
+            const count = players.filter((p) => p.league_slug === slug && p.injury_date && p.gamesBack >= 0 && p.gamesBack <= 10).length;
+            if (count === 0) return null;
             return (
               <button
                 key={slug}
@@ -1857,58 +1965,37 @@ export default function PropsPage() {
           </div>
         )}
 
-        {/* Source tabs */}
-        {activeSources.length > 1 && (
-          <div className="flex gap-1 mb-3">
-            {["draftkings", "fanduel", ...activeSources.filter((s) => s !== "draftkings" && s !== "fanduel")].filter((s) => activeSources.includes(s)).map((src) => (
+        {/* Source tabs — only show when multiple sources have data for filtered players */}
+        {(() => {
+          const sourcesWithData = activeSources.filter((src) =>
+            filtered.some((p) => p.props.some((pr) => pr.source === src))
+          );
+          if (sourcesWithData.length <= 1) return null;
+          return (
+            <div className="flex gap-1 mb-3">
               <button
-                key={src}
-                onClick={() => setSourceFilter(src)}
+                onClick={() => setSourceFilter("all")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  sourceFilter === src ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
+                  sourceFilter === "all" ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
                 }`}
               >
-                {SOURCE_LABELS[src] ?? src}
+                All
               </button>
-            ))}
-            <button
-              onClick={() => setSourceFilter("all")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                sourceFilter === "all" ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
-              }`}
-            >
-              All
-            </button>
-          </div>
-        )}
+              {sourcesWithData.map((src) => (
+                <button
+                  key={src}
+                  onClick={() => setSourceFilter(src)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    sourceFilter === src ? "bg-white/15 text-white" : "bg-white/5 text-white/40 hover:text-white/60"
+                  }`}
+                >
+                  {SOURCE_LABELS[src] ?? src}
+                </button>
+              ))}
+            </div>
+          );
+        })()}
 
-        {/* Sort controls */}
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-[10px] text-white/25 shrink-0">Sort by</span>
-          {SORT_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => setSortMode(opt.value)}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
-                sortMode === opt.value
-                  ? "bg-white/12 text-white"
-                  : "bg-white/5 text-white/35 hover:text-white/55"
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Stats bar */}
-        {filtered.length > 0 && (
-          <div className="flex gap-4 text-xs text-white/40 mb-4">
-            <span>{filtered.length} players with props</span>
-            {recentlyReturned.length > 0 && (
-              <span>{recentlyReturned.length} recently returned</span>
-            )}
-          </div>
-        )}
 
         {isLoading ? (
           <div className="space-y-3">
@@ -1961,8 +2048,11 @@ export default function PropsPage() {
                             edge_percent: topEv?.bestEv ?? undefined,
                             page_origin: "props_page",
                           });
-                          const el = document.getElementById(`prop-player-${p.player_id}`);
-                          el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                          setExpandedPlayerId(p.player_id);
+                          setTimeout(() => {
+                            const el = document.getElementById(`prop-player-${p.player_id}`);
+                            el?.scrollIntoView({ behavior: "smooth", block: "center" });
+                          }, 100);
                         }}
                       >
                         {/* Player Header + Game Return Badge */}
@@ -2014,20 +2104,20 @@ export default function PropsPage() {
                           </div>
                         )}
 
-                        {/* Why this signal — 1-line explanation */}
+                        {/* Why this signal — contextual insight */}
                         {propExplanation && (
-                          <p className="text-[10px] text-white/40 italic mb-2 leading-snug">Signal: {propExplanation}</p>
+                          <p className="text-[10px] text-white/40 italic mb-2 leading-snug">{propExplanation}</p>
                         )}
 
-                        {/* Metadata row */}
+                        {/* Metadata row — signal-based language, no raw probabilities */}
                         <div className="flex items-center gap-3 text-[10px] text-white/35">
-                          <span>P({side.toLowerCase()}) <span className="text-white/60 font-medium tabular-nums">{Math.round((isOver ? topEv!.probOver : topEv!.probUnder) * 100)}%</span></span>
-                          <span className="text-white/20">|</span>
-                          <span>{topEv!.confidence} conf.</span>
+                          <span className={`font-medium ${topEv!.confidence === "High" ? "text-green-400/70" : topEv!.confidence === "Medium" ? "text-amber-400/70" : "text-white/40"}`}>
+                            {topEv!.confidence} confidence
+                          </span>
                           {impG3 && impG3.diff < 0 && (
                             <>
                               <span className="text-white/20">|</span>
-                              <span className="text-red-400/60">{impG3.diff.toFixed(1)} {impG3.label} hist. avg</span>
+                              <span className="text-red-400/60">Historical impact: {impG3.diff.toFixed(1)} {impG3.label}</span>
                             </>
                           )}
                         </div>
@@ -2059,9 +2149,27 @@ export default function PropsPage() {
             {/* Recently Returned from Injury */}
             {recentlyReturned.length > 0 && (
               <section className="mb-8">
-                <div className="flex items-center gap-3 mb-3">
-                  <h2 className="text-xs font-bold text-[#3DFF8F]/80 uppercase tracking-widest">Recently Returned</h2>
-                  <span className="text-[10px] text-white/30">{recentlyReturned.length} players within 10 games of return</span>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-xs font-bold text-[#3DFF8F]/80 uppercase tracking-widest">Recently Returned</h2>
+                    <span className="text-[10px] text-white/30">{recentlyReturned.length} players</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-white/25 shrink-0">Sort</span>
+                    {SORT_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setSortMode(opt.value)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                          sortMode === opt.value
+                            ? "bg-white/12 text-white"
+                            : "bg-white/5 text-white/30 hover:text-white/50"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="space-y-2">
                   {recentlyReturned.map((p) => {
@@ -2069,11 +2177,11 @@ export default function PropsPage() {
                     // Get best EV for this player
                     let bestEv: EVResult | null = null;
                     let bestProp: PropItem | null = null;
-                    for (const prop of p.props) {
+                    for (const prop of filterProps(p.props)) {
                       const statKey = MARKET_TO_STAT[prop.market];
                       const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
                       const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
-                      if (!curve || !statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack <= 0) continue;
+                      if (!curve || !statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack < 0) continue;
                       const ev = computeEV({
                         baseline, propLine: prop.line,
                         overOdds: parseOdds(prop.over_price), underOdds: parseOdds(prop.under_price),
@@ -2085,6 +2193,11 @@ export default function PropsPage() {
                         bestEv = ev;
                         bestProp = prop;
                       }
+                    }
+                    // Fallback: show the first filtered prop even without EV signal
+                    const filteredPlayerProps = filterProps(p.props);
+                    if (!bestProp && filteredPlayerProps.length > 0) {
+                      bestProp = filteredPlayerProps[0];
                     }
                     return (
                       <CompactPlayerRow
@@ -2107,53 +2220,14 @@ export default function PropsPage() {
               </section>
             )}
 
-            {/* Other Player Props */}
-            {otherPlayers.length > 0 && (
-              <section>
-                <div className="flex items-center gap-3 mb-3">
-                  <h2 className="text-xs font-bold text-white/50 uppercase tracking-widest">Other Player Props</h2>
-                  <span className="text-[10px] text-white/30">{otherPlayers.length} players</span>
-                </div>
-                <div className="space-y-2">
-                  {otherPlayers.map((p) => {
-                    const curve = findCurve(p);
-                    let bestEv: EVResult | null = null;
-                    let bestProp: PropItem | null = null;
-                    for (const prop of p.props) {
-                      const statKey = MARKET_TO_STAT[prop.market];
-                      const baseline = statKey && p.avg10 ? p.avg10[statKey] : null;
-                      const recent = statKey && p.avgSinceReturn ? p.avgSinceReturn[statKey] : null;
-                      if (!curve || !statKey || baseline == null || baseline <= 0 || prop.line == null || p.gamesBack <= 0) continue;
-                      const ev = computeEV({
-                        baseline, propLine: prop.line,
-                        overOdds: parseOdds(prop.over_price), underOdds: parseOdds(prop.under_price),
-                        gamesSinceReturn: p.gamesBack, recentAvg: recent, curve,
-                        leagueSlug: p.league_slug, statKey,
-                        preInjuryMinutes: p.avg10?.minutes, currentMinutes: p.avgSinceReturn?.minutes,
-                      });
-                      if (ev && ev.bestEv != null && ev.recommendation && (!bestEv || ev.bestEv > (bestEv.bestEv ?? 0))) {
-                        bestEv = ev;
-                        bestProp = prop;
-                      }
-                    }
-                    return (
-                      <CompactPlayerRow
-                        key={p.player_id}
-                        player={p}
-                        curve={curve}
-                        sourceFilter={sourceFilter}
-                        statFilter={statFilter}
-                        bestEv={bestEv}
-                        bestProp={bestProp}
-                        expanded={expandedPlayerId === p.player_id}
-                        onToggle={() => setExpandedPlayerId(expandedPlayerId === p.player_id ? null : p.player_id)}
-                        leagueProfile={backtestProfiles[p.league_slug]}
-                        percentile={percentileMap.get(p.player_id)}
-                      />
-                    );
-                  })}
-                </div>
-              </section>
+            {/* Empty state when players have props but none are within 10 games of return */}
+            {recentlyReturned.length === 0 && filtered.length > 0 && (
+              <div className="text-center py-10 border border-white/5 rounded-xl bg-white/[0.02]">
+                <p className="text-white/40 text-sm mb-1">No recently returned players with props today</p>
+                <p className="text-white/25 text-xs">
+                  {filtered.length} player{filtered.length !== 1 ? "s" : ""} have props but {filtered.length === 1 ? "is" : "are"} past the 10-game return window where the model has edge.
+                </p>
+              </div>
             )}
             {/* Early access CTA */}
             <EarlyAccessCTA className="mt-6 border-t border-white/5" page="props" location="page_footer" />

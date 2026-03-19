@@ -114,7 +114,7 @@ export default function PlayerReturnDatePage() {
     "@type": "WebPage",
     name: `${player.player_name} Return Date`,
     description: pageDesc,
-    url: `https://backinplay.app${path}`,
+    url: `https://backinplay.ai${path}`,
     dateModified: now,
     about: {
       "@type": "Person",

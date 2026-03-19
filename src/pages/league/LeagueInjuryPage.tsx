@@ -135,7 +135,7 @@ export default function LeagueInjuryPage() {
     "@type": "WebPage",
     name: `${leagueLabel} Injury Report`,
     description: pageDesc,
-    url: `https://backinplay.app/${leagueSlug}-injuries`,
+    url: `https://backinplay.ai/${leagueSlug}-injuries`,
     dateModified: now,
   };
 

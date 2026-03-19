@@ -61,8 +61,8 @@ def resolve_player_id(player_name: str, league_slug: str) -> str | None:
         for p in r2.data:
             if p.get("league", {}).get("slug") == league_slug:
                 return p["player_id"]
-        # Fall back to first match
-        return r.data[0]["player_id"]
+        # No league match — don't guess, skip this player
+        return None
     return None
 
 
@@ -159,14 +159,20 @@ def extract_props_from_odds(odds_data: dict, event_id: str, game_date: str, leag
 
 def main():
     from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    # Use Toronto/ET so "today" matches the local sports calendar
+    et = ZoneInfo("America/Toronto")
+    now_et = datetime.now(et)
     now = datetime.now(timezone.utc)
-    today = now.strftime("%Y-%m-%d")
-    tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-    target_dates = {today, tomorrow}
+    today = now_et.strftime("%Y-%m-%d")
+    tomorrow = (now_et + timedelta(days=1)).strftime("%Y-%m-%d")
+    # Also include yesterday to catch games that started late and haven't been removed from the API
+    yesterday = (now_et - timedelta(days=1)).strftime("%Y-%m-%d")
+    target_dates = {yesterday, today, tomorrow}
     total_props = 0
     total_events = 0
 
-    print(f"[{now.isoformat()}] Fetching props for {today} + {tomorrow}")
+    print(f"[{now.isoformat()}] Fetching props for {yesterday} + {today} + {tomorrow} (ET: {now_et.strftime('%Y-%m-%d %H:%M')})")
 
     for sport_key, league_slug in SPORT_MAP.items():
         events = fetch_events(sport_key)
@@ -197,7 +203,13 @@ def main():
 
         for event in target_events:
             eid = event["id"]
-            game_date = event.get("commence_time", "")[:10]
+            # Convert commence_time to ET date so 9pm ET March 18 = March 18, not March 19
+            ct_str = event.get("commence_time", "")
+            if ct_str:
+                ct_utc = datetime.fromisoformat(ct_str.replace("Z", "+00:00"))
+                game_date = ct_utc.astimezone(et).strftime("%Y-%m-%d")
+            else:
+                game_date = today
             odds = fetch_props(sport_key, eid, sport_markets, regions=regions)
             if not odds:
                 continue

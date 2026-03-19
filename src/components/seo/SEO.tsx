@@ -9,7 +9,7 @@ interface SEOProps {
   jsonLd?: Record<string, unknown>;
 }
 
-const SITE_URL = "https://backinplay.app";
+const SITE_URL = "https://backinplay.ai";
 const SITE_NAME = "Back In Play";
 
 export function SEO({ title, description, path, type = "website", dateModified, jsonLd }: SEOProps) {

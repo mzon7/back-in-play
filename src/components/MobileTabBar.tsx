@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { useIsMobile } from "../hooks/useIsMobile";
+import { trackNavClick } from "../lib/analytics";
 
 const tabs = [
   {
@@ -54,6 +55,7 @@ export function MobileTabBar() {
             key={tab.to}
             to={tab.to}
             end={tab.to === "/"}
+            onClick={() => trackNavClick(tab.to, "mobile_tab")}
             className={({ isActive }) =>
               `flex flex-col items-center justify-center gap-0.5 min-w-[64px] min-h-[44px] text-[10px] font-medium transition-colors ${
                 isActive

@@ -38,6 +38,7 @@ interface ReturningPlayer {
   is_star: boolean;
   is_starter: boolean;
   games_back: number;
+  next_game_date: string | null;
   // Matched curve data
   curve?: PerformanceCurve | null;
 }
@@ -80,17 +81,17 @@ function useReturningPlayers(leagueSlug?: string) {
   return useQuery<ReturningPlayer[]>({
     queryKey: ["returning-today-page", leagueSlug ?? "all"],
     queryFn: async () => {
-      // 1. Get leagues, teams, players
-      const { data: leagues } = await supabase.from(dbTable("leagues")).select("league_id,league_name,slug");
+      // 1. Get leagues + teams in parallel
+      const [leagueRes, teamRes] = await Promise.all([
+        supabase.from(dbTable("leagues")).select("league_id,league_name,slug").then(r => r),
+        supabase.from(dbTable("teams")).select("team_id,team_name,league_id").neq("team_name", "Unknown").then(r => r),
+      ]);
       const leagueMap = new Map<string, { name: string; slug: string }>();
-      (leagues ?? []).forEach((l) => leagueMap.set(l.league_id, { name: l.league_name, slug: l.slug }));
-
-      const { data: teams } = await supabase.from(dbTable("teams")).select("team_id,team_name,league_id").neq("team_name", "Unknown");
+      (leagueRes.data ?? []).forEach((l) => leagueMap.set(l.league_id, { name: l.league_name, slug: l.slug }));
       const teamMap = new Map<string, { name: string; leagueId: string }>();
-      (teams ?? []).forEach((t) => teamMap.set(t.team_id, { name: t.team_name, leagueId: t.league_id }));
+      (teamRes.data ?? []).forEach((t) => teamMap.set(t.team_id, { name: t.team_name, leagueId: t.league_id }));
 
-      // 2. Pre-filter: get player IDs for in-season leagues only
-      // This prevents off-season leagues (NFL in spring etc.) from filling up query limits
+      // 2. Pre-filter: in-season leagues only
       const inSeasonLeagueIds: string[] = [];
       for (const [lid, lg] of leagueMap) {
         if (leagueSlug && leagueSlug !== "all" && lg.slug !== leagueSlug) continue;
@@ -100,46 +101,50 @@ function useReturningPlayers(leagueSlug?: string) {
       for (const [tid, tm] of teamMap) {
         if (inSeasonLeagueIds.includes(tm.leagueId)) inSeasonTeamIds.push(tid);
       }
-      // Fetch player IDs for in-season teams
-      const inSeasonPlayerIds = new Set<string>();
+      // Fetch player IDs — all chunks in parallel
+      const playerChunkPromises = [];
       for (let i = 0; i < inSeasonTeamIds.length; i += 100) {
         const chunk = inSeasonTeamIds.slice(i, i + 100);
-        const { data } = await supabase
-          .from(dbTable("players"))
-          .select("player_id")
-          .in("team_id", chunk);
-        (data ?? []).forEach((p) => inSeasonPlayerIds.add(p.player_id));
+        playerChunkPromises.push(
+          supabase.from(dbTable("players")).select("player_id").in("team_id", chunk).then(r => r)
+        );
       }
+      const playerChunks = await Promise.all(playerChunkPromises);
+      const inSeasonPlayerIds = new Set<string>();
+      playerChunks.forEach(({ data }) => (data ?? []).forEach((p) => inSeasonPlayerIds.add(p.player_id)));
 
       if (inSeasonPlayerIds.size === 0) return [];
       const seasonPids = Array.from(inSeasonPlayerIds);
 
-      // 3. Find players nearing return OR recently returned (only in-season players)
+      // 3. Find players nearing return OR recently returned — all chunks in parallel
       const cutoff21d = new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10);
       const cutoff90d = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
 
-      // Query in chunks since we filter by player_id
-      const allInjs: any[] = [];
+      const injuryPromises = [];
       for (let i = 0; i < seasonPids.length; i += 200) {
         const chunk = seasonPids.slice(i, i + 200);
-        const [r1, r2] = await Promise.all([
+        injuryPromises.push(
           supabase
             .from(dbTable("injuries"))
             .select("*")
             .in("player_id", chunk)
             .gte("date_injured", cutoff90d)
             .in("status", ["questionable", "day-to-day", "probable", "doubtful"])
-            .order("date_injured", { ascending: false }),
+            .order("date_injured", { ascending: false })
+            .then(r => r),
           supabase
             .from(dbTable("injuries"))
             .select("*")
             .in("player_id", chunk)
             .gte("return_date", cutoff21d)
             .in("status", ["returned", "active", "active_today", "back_in_play", "reduced_load"])
-            .order("return_date", { ascending: false }),
-        ]);
-        allInjs.push(...(r1.data ?? []), ...(r2.data ?? []));
+            .order("return_date", { ascending: false })
+            .then(r => r),
+        );
       }
+      const injuryResults = await Promise.all(injuryPromises);
+      const allInjs: any[] = [];
+      injuryResults.forEach(({ data }) => allInjs.push(...(data ?? [])));
 
       // Dedupe by player_id (keep most recent)
       const byPlayer = new Map<string, (typeof allInjs)[0]>();
@@ -147,69 +152,107 @@ function useReturningPlayers(leagueSlug?: string) {
         if (!byPlayer.has(inj.player_id)) byPlayer.set(inj.player_id, inj);
       }
 
-      // 4. Fetch player details
+      // 4. Fetch player details + curves + game logs — all in parallel
       const playerIds = Array.from(byPlayer.keys());
       if (playerIds.length === 0) return [];
 
-      const players = new Map<string, any>();
-      for (let i = 0; i < playerIds.length; i += 100) {
-        const chunk = playerIds.slice(i, i + 100);
-        const { data } = await supabase
-          .from(dbTable("players"))
-          .select("player_id,player_name,slug,position,team_id,headshot_url,espn_id,is_star,is_starter,league_rank")
-          .in("player_id", chunk);
-        (data ?? []).forEach((p) => players.set(p.player_id, p));
-      }
-
-      // 4. Fetch performance curves for matching injury types
       const injurySlugs = [...new Set(allInjs.map((i) => slugify(i.injury_type)).filter(Boolean))];
-      const curves = new Map<string, PerformanceCurve>();
-      if (injurySlugs.length > 0) {
-        const { data: curveData } = await supabase
-          .from(dbTable("performance_curves"))
-          .select("*")
-          .in("injury_type_slug", injurySlugs)
-          .eq("position", "")
-          .gte("sample_size", 3);
-        (curveData ?? []).forEach((c: any) => {
-          const key = `${c.league_slug}:${c.injury_type_slug}`;
-          curves.set(key, c as PerformanceCurve);
-        });
-      }
-
-      // 5. Count actual games played since return_date for returned players
       const returnedPids: { pid: string; returnDate: string }[] = [];
       for (const [pid, inj] of byPlayer) {
         if (inj.return_date && ["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(inj.status)) {
           returnedPids.push({ pid, returnDate: inj.return_date });
         }
       }
-      const gamesBackMap = new Map<string, number>();
+
+      // Build all promises at once
+      const playerPromises = [];
+      for (let i = 0; i < playerIds.length; i += 100) {
+        const chunk = playerIds.slice(i, i + 100);
+        playerPromises.push(
+          supabase.from(dbTable("players"))
+            .select("player_id,player_name,slug,position,team_id,headshot_url,espn_id,is_star,is_starter,league_rank")
+            .in("player_id", chunk)
+            .then(r => r)
+        );
+      }
+
+      const curvePromise = injurySlugs.length > 0
+        ? supabase.from(dbTable("performance_curves")).select("*")
+            .in("injury_type_slug", injurySlugs).eq("position", "").gte("sample_size", 3)
+            .then(r => r)
+        : Promise.resolve({ data: [] as any[] });
+
+      const logPromises: PromiseLike<any>[] = [];
       if (returnedPids.length > 0) {
-        // Batch query game logs for returned players
         const rpIds = returnedPids.map((r) => r.pid);
         const earliestReturn = returnedPids.reduce((min, r) => r.returnDate < min ? r.returnDate : min, returnedPids[0].returnDate);
         for (let i = 0; i < rpIds.length; i += 100) {
           const chunk = rpIds.slice(i, i + 100);
-          const { data: logs } = await supabase
-            .from("back_in_play_player_game_logs")
-            .select("player_id, game_date")
-            .in("player_id", chunk)
-            .gte("game_date", earliestReturn)
-            .order("game_date", { ascending: false });
-          if (logs) {
-            // Build per-player return date lookup
-            const returnDateLookup = new Map<string, string>();
-            for (const r of returnedPids) returnDateLookup.set(r.pid, r.returnDate);
-            for (const log of logs) {
-              const rd = returnDateLookup.get(log.player_id);
-              if (rd && log.game_date >= rd) {
-                gamesBackMap.set(log.player_id, (gamesBackMap.get(log.player_id) ?? 0) + 1);
-              }
-            }
-          }
+          logPromises.push(
+            supabase.from("back_in_play_player_game_logs")
+              .select("player_id, game_date")
+              .in("player_id", chunk)
+              .gte("game_date", earliestReturn)
+              .order("game_date", { ascending: false })
+              .then(r => r)
+          );
         }
       }
+
+      // Fetch next game dates from props
+      const today = new Date().toISOString().slice(0, 10);
+      const nextGamePromises: PromiseLike<any>[] = [];
+      for (let i = 0; i < playerIds.length; i += 100) {
+        const chunk = playerIds.slice(i, i + 100);
+        nextGamePromises.push(
+          supabase.from("back_in_play_player_props")
+            .select("player_id, game_date")
+            .in("player_id", chunk)
+            .gte("game_date", today)
+            .order("game_date", { ascending: true })
+            .then(r => r)
+        );
+      }
+
+      // Execute everything in parallel
+      const [playerResults, curveResult, nextGameResults, ...logResults] = await Promise.all([
+        Promise.all(playerPromises),
+        curvePromise,
+        Promise.all(nextGamePromises),
+        ...logPromises,
+      ]);
+
+      const players = new Map<string, any>();
+      playerResults.forEach(({ data }) => (data ?? []).forEach((p: any) => players.set(p.player_id, p)));
+
+      const curves = new Map<string, PerformanceCurve>();
+      (curveResult.data ?? []).forEach((c: any) => {
+        const key = `${c.league_slug}:${c.injury_type_slug}`;
+        curves.set(key, c as PerformanceCurve);
+      });
+
+      // Build next game date map (earliest upcoming game per player)
+      const nextGameMap = new Map<string, string>();
+      (nextGameResults as any[]).forEach((res: any) => {
+        for (const row of res?.data ?? []) {
+          if (!nextGameMap.has(row.player_id) || row.game_date < nextGameMap.get(row.player_id)!) {
+            nextGameMap.set(row.player_id, row.game_date);
+          }
+        }
+      });
+
+      const gamesBackMap = new Map<string, number>();
+      const returnDateLookup = new Map<string, string>();
+      for (const r of returnedPids) returnDateLookup.set(r.pid, r.returnDate);
+      logResults.forEach((res: any) => {
+        const logs = res?.data ?? [];
+        for (const log of logs) {
+          const rd = returnDateLookup.get(log.player_id);
+          if (rd && log.game_date >= rd) {
+            gamesBackMap.set(log.player_id, (gamesBackMap.get(log.player_id) ?? 0) + 1);
+          }
+        }
+      });
 
       // 6. Build result
       const result: ReturningPlayer[] = [];
@@ -258,6 +301,7 @@ function useReturningPlayers(leagueSlug?: string) {
           is_star: p.is_star ?? false,
           is_starter: p.is_starter ?? false,
           games_back: gamesBack,
+          next_game_date: nextGameMap.get(pid) ?? null,
           curve: curves.get(curveKey) ?? null,
         });
       }
@@ -304,6 +348,7 @@ function perfTrend(p: ReturningPlayer): { text: string; color: string; detail: s
 }
 
 function DashboardCard({ player, multiLeague }: { player: ReturningPlayer; multiLeague: boolean }) {
+  const [showCurve, setShowCurve] = useState(false);
   const isBack = ["returned", "active", "active_today", "back_in_play", "reduced_load"].includes(player.status);
   const lc = leagueColor(player.league_slug);
   const tag = isBack ? returnTag(player) : null;
@@ -360,6 +405,13 @@ function DashboardCard({ player, multiLeague }: { player: ReturningPlayer; multi
           </div>
         )}
 
+        {/* Next game date */}
+        {player.next_game_date && (
+          <span className="text-[10px] text-blue-400/60">
+            Next: {new Date(player.next_game_date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </span>
+        )}
+
         {/* Games missed */}
         {player.games_missed != null && player.games_missed > 0 && (
           <span className="text-[10px] text-white/30">Missed {player.games_missed} game{player.games_missed !== 1 ? "s" : ""}</span>
@@ -403,21 +455,119 @@ function DashboardCard({ player, multiLeague }: { player: ReturningPlayer; multi
         );
       })()}
 
-      {/* Action link */}
+      {/* Action links */}
       <div className="flex items-center gap-3 mt-3 pt-2 border-t border-white/5">
+        {player.curve && (
+          <button
+            onClick={() => setShowCurve(!showCurve)}
+            className="text-[10px] text-blue-400/50 hover:text-blue-400/80 transition-colors"
+          >
+            {showCurve ? "Hide recovery curve ▴" : "View recovery curve ▾"}
+          </button>
+        )}
         <Link
           to={`/props?player=${encodeURIComponent(player.player_name)}`}
-          className="text-[10px] text-blue-400/50 hover:text-blue-400/80 transition-colors"
+          className="text-[10px] text-white/25 hover:text-white/50 transition-colors"
         >
-          View model signals →
+          Props →
         </Link>
         <Link
           to={`/player/${player.player_slug}`}
           className="text-[10px] text-white/25 hover:text-white/50 transition-colors"
         >
-          Player profile →
+          Profile →
         </Link>
       </div>
+
+      {/* Inline recovery curve */}
+      {showCurve && player.curve && (() => {
+        const curve = player.curve!;
+        const medians = curve.stat_median_pct ?? {};
+        const baselines = curve.stat_baselines ?? {};
+        const stats = LEAGUE_STATS[player.league_slug] ?? [];
+        const gIdx = Math.min(Math.max(player.games_back - 1, 0), 9);
+
+        // Build SVG curve for primary stat
+        const primaryStat = stats[0];
+        const pcts = primaryStat ? (medians[primaryStat] as number[] | undefined) : undefined;
+        const points = pcts?.slice(0, 10);
+
+        return (
+          <div className="mt-3 pt-3 border-t border-white/5">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[10px] text-white/40">
+                {curve.injury_type} recovery — {curve.sample_size} cases
+              </span>
+            </div>
+
+            {/* SVG curve */}
+            {points && points.length > 1 && (() => {
+              const minPct = Math.min(...points, 0.7);
+              const maxPct = Math.max(...points, 1.1);
+              const range = maxPct - minPct || 0.1;
+              const w = 280;
+              const h = 60;
+              const step = w / (points.length - 1 || 1);
+
+              const pathPoints = points.map((p, i) => {
+                const x = i * step;
+                const y = h - ((p - minPct) / range) * h;
+                return `${x},${y}`;
+              });
+              const path = `M${pathPoints.join(" L")}`;
+              const baselineY = h - ((1.0 - minPct) / range) * h;
+              const curIdx = Math.min(player.games_back - 1, points.length - 1);
+              const curX = curIdx >= 0 ? curIdx * step : 0;
+              const curY = curIdx >= 0 ? h - ((points[curIdx] - minPct) / range) * h : h / 2;
+
+              return (
+                <div className="mb-2">
+                  <svg width={w} height={h + 16} className="overflow-visible">
+                    {/* Baseline */}
+                    <line x1={0} y1={baselineY} x2={w} y2={baselineY} stroke="rgba(255,255,255,0.1)" strokeDasharray="3,3" />
+                    <text x={w + 4} y={baselineY + 3} fill="rgba(255,255,255,0.2)" fontSize={8}>100%</text>
+                    {/* Curve */}
+                    <path d={path} fill="none" stroke="rgba(59,130,246,0.6)" strokeWidth={2} />
+                    {/* Game markers */}
+                    {points.map((p, i) => (
+                      <circle key={i} cx={i * step} cy={h - ((p - minPct) / range) * h} r={2} fill="rgba(59,130,246,0.3)" />
+                    ))}
+                    {/* Current position */}
+                    {curIdx >= 0 && (
+                      <circle cx={curX} cy={curY} r={4} fill="#3b82f6" stroke="#0a0f1a" strokeWidth={2} />
+                    )}
+                    {/* Game labels */}
+                    {points.map((_, i) => (
+                      <text key={i} x={i * step} y={h + 12} fill="rgba(255,255,255,0.15)" fontSize={7} textAnchor="middle">G{i + 1}</text>
+                    ))}
+                  </svg>
+                </div>
+              );
+            })()}
+
+            {/* Stat impacts per game */}
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {stats.slice(0, 3).map((stat) => {
+                const pctArr = medians[stat] as number[] | undefined;
+                const base = baselines[stat] as number | undefined;
+                if (!pctArr || !base || base === 0) return null;
+                const pct = pctArr[gIdx];
+                if (pct == null) return null;
+                const diff = Math.round((pct - 1) * 100);
+                return (
+                  <span key={stat} className="text-[10px]">
+                    <span className="text-white/30">{STAT_LABELS[stat] ?? stat}: </span>
+                    <span className={diff >= 0 ? "text-green-400/70" : "text-red-400/70"}>
+                      {diff >= 0 ? "+" : ""}{diff}%
+                    </span>
+                    <span className="text-white/15"> ({(base * pct).toFixed(1)} vs {base.toFixed(1)})</span>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -493,7 +643,7 @@ export default function ReturningTodayPage() {
       {/* Hero */}
       <div className="relative overflow-hidden border-b border-white/10 bg-gradient-to-br from-[#0A0F1E] via-[#0d1529] to-[#0A0F1E]">
         <div className="pointer-events-none absolute -top-32 -left-32 w-96 h-96 rounded-full bg-[#3DFF8F] opacity-10 blur-3xl" />
-        <div className="relative max-w-4xl mx-auto px-4 sm:px-6 py-10">
+        <div className="relative max-w-4xl lg:max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-10">
           <nav className="text-sm text-white/40 mb-4">
             <Link to="/" className="hover:text-white/60">Home</Link>
             {league !== "all" && (
@@ -524,7 +674,7 @@ export default function ReturningTodayPage() {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+      <div className="max-w-4xl lg:max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-8">
         {/* League filter */}
         <div className="flex gap-1.5 overflow-x-auto pb-4 mb-6">
           {(["all", "nba", "nfl", "mlb", "nhl", "premier-league"] as const).map((slug) => (

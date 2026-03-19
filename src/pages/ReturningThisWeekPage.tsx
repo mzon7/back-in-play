@@ -383,7 +383,7 @@ export default function ReturningThisWeekPage() {
       {/* Hero */}
       <div className="relative overflow-hidden border-b border-white/10 bg-gradient-to-br from-[#0A0F1E] via-[#0d1529] to-[#0A0F1E]">
         <div className="pointer-events-none absolute -top-32 -left-32 w-96 h-96 rounded-full bg-[#1C7CFF] opacity-10 blur-3xl" />
-        <div className="relative max-w-4xl mx-auto px-4 sm:px-6 py-10">
+        <div className="relative max-w-4xl lg:max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-10">
           <nav className="text-sm text-white/40 mb-4">
             <Link to="/" className="hover:text-white/60">Home</Link>
             {league !== "all" && (
@@ -426,7 +426,7 @@ export default function ReturningThisWeekPage() {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+      <div className="max-w-4xl lg:max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10 py-8">
         {/* League filter */}
         {!routeLeague && (
           <div className="flex gap-1.5 overflow-x-auto pb-4 mb-6">

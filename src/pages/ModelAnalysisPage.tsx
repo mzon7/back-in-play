@@ -583,12 +583,8 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
   const [selectedRow, setSelectedRow] = useState<StatRow | null>(null);
   const [maxGnFilter, setMaxGnFilter] = useState(10); // max games back filter
   const [minBetsFilter, setMinBetsFilter] = useState(20); // min bets to show a row
-
-  const toggleModel = (suffix: string) => {
-    setSelectedModels((prev) =>
-      prev.includes(suffix) ? prev.filter((s) => s !== suffix) : [...prev, suffix]
-    );
-  };
+  const [minFlatBr, setMinFlatBr] = useState<number>(0); // min flat BR% filter — default to positive only
+  const [showTableInfo, setShowTableInfo] = useState(false);
 
   // Derive season from bet date (e.g. "2024-11-05" → "2024-25", "2024-03-05" → "2023-24")
   const getBetSeason = (b: BacktestBet): string => {
@@ -678,9 +674,9 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
       // Same league sub-rows: same model group, then by market
       return b.flatRoi - a.flatRoi;
     });
-    // Filter out rows with fewer bets than minBetsFilter
-    return result.filter((r) => r.bets >= minBetsFilter);
-  }, [allData, evThreshold, selectedModels, oddsMode, seasonFilter, leagueFilter, unitPct, maxGnFilter, minBetsFilter]);
+    // Filter out rows with fewer bets than minBetsFilter and below flat BR threshold
+    return result.filter((r) => r.bets >= minBetsFilter && (minFlatBr <= -999 || r.flatBr >= minFlatBr));
+  }, [allData, evThreshold, selectedModels, oddsMode, seasonFilter, leagueFilter, unitPct, maxGnFilter, minBetsFilter, minFlatBr]);
 
   const evOptions = [0, 5, 10, 15, 20, 30];
 
@@ -691,14 +687,52 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
     <div className="mb-8">
       <div className="flex items-center gap-3 mb-4">
         <h2 className="text-lg font-bold">League / Stat Breakdown</h2>
+        <button
+          onClick={() => setShowTableInfo(!showTableInfo)}
+          className="shrink-0 w-6 h-6 rounded-full border border-white/15 text-white/35 hover:text-white/70 hover:border-white/30 transition-colors text-xs font-semibold flex items-center justify-center"
+          title="Column explanations"
+        >
+          ?
+        </button>
       </div>
+      {showTableInfo && (
+        <div className="rounded-lg bg-white/[0.04] border border-white/10 p-3 mb-4 text-[11px] text-white/50 space-y-1.5">
+          <p><span className="text-white/70 font-medium">League</span> — Sports league (NBA, NHL, MLB, EPL)</p>
+          <p><span className="text-white/70 font-medium">Stat</span> — Market type (ALL = combined, or specific like PTS, AST, etc.)</p>
+          <p><span className="text-white/70 font-medium">Model</span> — Which LightGBM model variant (C, D, E, F) with different feature sets</p>
+          <p><span className="text-white/70 font-medium">Bets</span> — Total number of bets placed in backtest</p>
+          <p><span className="text-white/70 font-medium">Win%</span> — Percentage of bets that hit (green if &gt;52.4%)</p>
+          <p><span className="text-white/70 font-medium">Flat ROI</span> — Return on investment per unit bet (flat staking)</p>
+          <p><span className="text-white/70 font-medium">Flat BR%</span> — Bankroll % change using flat unit sizing, with units won/lost in parentheses</p>
+          <p><span className="text-white/70 font-medium">Half Kelly BR%</span> — Bankroll % change using half-Kelly criterion sizing (conservative)</p>
+          <p><span className="text-white/70 font-medium">Full Kelly BR%</span> — Bankroll % change using full Kelly criterion (aggressive, higher variance)</p>
+        </div>
+      )}
 
       {/* Model selector */}
       <div className="mb-4">
         <p className="text-[11px] text-white/40 mb-2">Models</p>
         <div className="flex flex-wrap gap-1.5">
+          <button
+            onClick={() => setSelectedModels(MODEL_SUFFIXES.map((m) => m.suffix))}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+              selectedModels.length === MODEL_SUFFIXES.length
+                ? "bg-white/10 text-white border-white/20"
+                : "bg-white/[0.02] text-white/20 border-transparent"
+            }`}>
+            All
+          </button>
           {MODEL_SUFFIXES.map((m) => (
-            <button key={m.suffix} onClick={() => toggleModel(m.suffix)}
+            <button key={m.suffix} onClick={() => {
+              setSelectedModels((prev) => {
+                if (prev.includes(m.suffix)) {
+                  // Don't allow deselecting the last model
+                  const next = prev.filter((s) => s !== m.suffix);
+                  return next.length > 0 ? next : prev;
+                }
+                return [...prev, m.suffix];
+              });
+            }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
                 selectedModels.includes(m.suffix)
                   ? `${m.color} border-current`
@@ -867,6 +901,30 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
         <p className="text-[10px] text-white/25 mt-1">Hide rows with fewer than {minBetsFilter} bets.</p>
       </div>
 
+      {/* Min Flat BR% filter */}
+      <div className="mb-4">
+        <p className="text-[11px] text-white/40 mb-2">Min Flat BR%</p>
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            { value: -999, label: "All" },
+            { value: 0, label: ">0%" },
+            { value: 5, label: ">5%" },
+            { value: 10, label: ">10%" },
+            { value: 20, label: ">20%" },
+          ].map((opt) => (
+            <button key={opt.value} onClick={() => setMinFlatBr(opt.value)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+                minFlatBr === opt.value
+                  ? "bg-green-500/20 text-green-400 border-green-500/30"
+                  : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
+              }`}>
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-white/25 mt-1">Only show rows with flat bankroll return above this threshold.</p>
+      </div>
+
       {/* Data Coverage */}
       {Object.keys(modelMeta).some((k) => modelMeta[k]?.skip_counts) && (
         <div className="mb-4 bg-white/[0.03] rounded-xl p-3">
@@ -906,8 +964,8 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
+      <div className="overflow-x-auto -mx-4 px-4">
+        <table className="w-full text-xs whitespace-nowrap">
           <thead>
             <tr className="text-white/40 border-b border-white/10">
               <th className="text-left py-2 px-2">League</th>
@@ -917,8 +975,8 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
               <th className="text-right py-2 px-2">Win%</th>
               <th className="text-right py-2 px-2">Flat ROI</th>
               <th className="text-right py-2 px-2">Flat BR%</th>
-              <th className="text-right py-2 px-2">Half Kelly BR%</th>
-              <th className="text-right py-2 px-2">Full Kelly BR%</th>
+              <th className="text-right py-2 px-2">½K BR%</th>
+              <th className="text-right py-2 px-2">Full K BR%</th>
             </tr>
           </thead>
           <tbody>
@@ -1218,6 +1276,22 @@ function LeagueStatTableWrapper() {
   return <LeagueStatTable allData={data.byLeague} modelMeta={data.modelMeta} />;
 }
 
+// ─── Game Time Helper ────────────────────────────────────────────────────────
+
+function formatGameTime(commenceTime: string | null | undefined, gameDate: string): { label: string; started: boolean; soon: boolean } {
+  const today = new Date().toISOString().slice(0, 10);
+  const isTomorrow = gameDate > today;
+  if (!commenceTime) return { label: isTomorrow ? "Tomorrow" : gameDate, started: false, soon: false };
+  const ct = new Date(commenceTime);
+  const now = new Date();
+  if (now >= ct) return { label: "Live", started: true, soon: false };
+  const minsUntil = (ct.getTime() - now.getTime()) / 60000;
+  const isSoon = minsUntil <= 30;
+  const timeStr = ct.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const soonLabel = isSoon ? `${Math.ceil(minsUntil)}min · ${timeStr}` : timeStr;
+  return { label: isTomorrow ? `Tomorrow ${timeStr}` : soonLabel, started: false, soon: isSoon };
+}
+
 // ─── Today's / Tomorrow's Model Bets ──────────────────────────────────────────
 
 interface StoredPrediction {
@@ -1243,6 +1317,10 @@ interface StoredPrediction {
   kelly_fraction: number;
   features_json: Record<string, number>;
   predicted_at: string;
+  // Enriched from props
+  commence_time?: string | null;
+  home_team?: string | null;
+  away_team?: string | null;
 }
 
 function useModelPredictions(selectedModel: string) {
@@ -1263,8 +1341,37 @@ function useModelPredictions(selectedModel: string) {
         const preds: StoredPrediction[] = parsed.predictions ?? [];
         all.push(...preds);
       }
-      // Sort by game_date, then EV descending
+
+      // Enrich with commence_time from player_props
+      const gameDates = [...new Set(all.map((p) => p.game_date))];
+      if (gameDates.length > 0) {
+        const { data: propsData } = await supabase
+          .from("back_in_play_player_props")
+          .select("player_name, game_date, commence_time, home_team, away_team")
+          .in("game_date", gameDates)
+          .limit(2000);
+        if (propsData) {
+          const propMap = new Map<string, { commence_time: string | null; home_team: string | null; away_team: string | null }>();
+          for (const p of propsData) {
+            const key = `${p.player_name}|${p.game_date}`;
+            if (!propMap.has(key) && p.commence_time) propMap.set(key, p);
+          }
+          for (const pred of all) {
+            const match = propMap.get(`${pred.player_name}|${pred.game_date}`);
+            if (match) {
+              pred.commence_time = match.commence_time;
+              pred.home_team = match.home_team;
+              pred.away_team = match.away_team;
+            }
+          }
+        }
+      }
+
+      // Sort by commence_time (earliest first), then EV descending
       all.sort((a, b) => {
+        const timeA = a.commence_time ?? "9999";
+        const timeB = b.commence_time ?? "9999";
+        if (timeA !== timeB) return timeA > timeB ? 1 : -1;
         if (a.game_date !== b.game_date) return a.game_date > b.game_date ? 1 : -1;
         return Math.abs(b.ev) - Math.abs(a.ev);
       });
@@ -1380,14 +1487,21 @@ function TodaysBets() {
                 <th className="text-right py-2 px-2">p(over)</th>
                 <th className="text-right py-2 px-2">EV</th>
                 <th className="text-right py-2 px-2">Kelly</th>
-                <th className="text-left py-2 px-2">Date</th>
+                <th className="text-left py-2 px-2">Game</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((p, i) => {
                 const hasOdds = p.prop_line != null && (p.over_odds || p.under_odds);
                 return (
-                  <tr key={i} className="border-b border-white/5 hover:bg-white/[0.03]">
+                  <tr key={i} className={`border-b border-white/5 hover:bg-white/[0.03] ${
+                    (() => {
+                      const gt = formatGameTime(p.commence_time, p.game_date);
+                      if (gt.started) return "bg-green-500/[0.04] border-l-2 border-l-green-500/30";
+                      if (gt.soon) return "bg-amber-500/[0.04] border-l-2 border-l-amber-500/30";
+                      return "";
+                    })()
+                  }`}>
                     <td className="py-1.5 px-2 font-medium">{p.player_name}</td>
                     <td className="py-1.5 px-2 text-white/50">{LEAGUE_LABELS[p.league] ?? p.league}</td>
                     <td className="py-1.5 px-2 text-white/40 max-w-[100px] truncate">{p.injury_type}</td>
@@ -1423,7 +1537,23 @@ function TodaysBets() {
                     <td className="py-1.5 px-2 text-right tabular-nums text-white/40">
                       {p.kelly_fraction > 0 ? `${(p.kelly_fraction * 100).toFixed(1)}%` : "—"}
                     </td>
-                    <td className="py-1.5 px-2 text-white/40">{p.game_date}</td>
+                    <td className="py-1.5 px-2">
+                      {(() => {
+                        const gt = formatGameTime(p.commence_time, p.game_date);
+                        return (
+                          <div className="flex flex-col gap-0.5">
+                            {p.home_team && p.away_team && (
+                              <span className="text-[9px] text-white/35 whitespace-nowrap">{p.away_team} @ {p.home_team}</span>
+                            )}
+                            <span className={`text-[10px] font-medium whitespace-nowrap ${gt.started ? "text-green-400" : gt.soon ? "text-amber-400" : "text-white/40"}`}>
+                              {gt.started && <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse mr-1 align-middle" />}
+                              {gt.soon && !gt.started && <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse mr-1 align-middle" />}
+                              {gt.label}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    </td>
                   </tr>
                 );
               })}
@@ -1802,7 +1932,7 @@ export default function ModelAnalysisPage() {
     <PasswordGate>
     <div className="min-h-screen bg-[#0a0f1a] text-white">
       <SiteHeader />
-      <div className="max-w-3xl mx-auto px-4 py-6">
+      <div className="max-w-3xl lg:max-w-[1400px] mx-auto px-4 lg:px-10 py-6">
         <div className="flex items-center gap-3 mb-1">
           <h1 className="text-2xl font-bold">Model Analysis</h1>
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400/80 font-semibold">Local Only</span>

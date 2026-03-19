@@ -3,8 +3,9 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@mzon7/zon-incubator-sdk/auth";
 import { supabase } from "../lib/supabase";
+import { trackSignupSuccess, trackGoogleOAuthClick } from "../lib/analytics";
 
-const SITE_URL = typeof window !== "undefined" ? window.location.origin : "https://backinplay.app";
+const SITE_URL = typeof window !== "undefined" ? window.location.origin : "https://backinplay.ai";
 
 export default function SignupPage() {
   const { signUp } = useAuth();
@@ -18,6 +19,7 @@ export default function SignupPage() {
   const handleGoogleSignup = async () => {
     setGoogleLoading(true);
     setError(null);
+    trackGoogleOAuthClick("signup");
     const { error: err } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
@@ -40,6 +42,7 @@ export default function SignupPage() {
     if (err) {
       setError(err);
     } else if (needsConfirmation) {
+      trackSignupSuccess("email");
       setSuccess(true);
     }
   };
