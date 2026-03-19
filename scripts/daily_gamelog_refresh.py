@@ -23,27 +23,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-# ─── Env ─────────────────────────────────────────────────────────────────────
-
-def load_env():
-    for envfile in ["/root/.daemon-env", ".env", "../.env"]:
-        p = Path(envfile)
-        if p.exists():
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    if line.startswith("export "):
-                        line = line[7:]
-                    key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip().strip("'\""))
-
-load_env()
-
-SB_URL = os.environ.get("SUPABASE_URL", "")
-SB_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-if not SB_URL or not SB_KEY:
-    print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
-    sys.exit(1)
+from db_writer import pg_upsert, pg_query
 
 # ─── ESPN config ─────────────────────────────────────────────────────────────
 
@@ -67,6 +47,13 @@ ESPN_LEAGUES = {
     "premier-league":  {"sport": "soccer",     "league": "eng.1"},
 }
 
+# Leagues where ESPN data is unreliable and a better primary source exists:
+#   NHL: ESPN has no SOG -> use NHL API (bulk_scrape_nhl_api.py)
+#   NFL: ESPN category labels are ambiguous -> use nflverse CSV (import_nfl_csv.py)
+#   MLB: ESPN missing totalBases -> use MLB Stats API (import_mlb_api.py)
+# ESPN is only reliable for NBA. EPL has limited stats from ESPN too.
+ESPN_SKIP_LEAGUES = {"nhl", "nfl", "mlb"}
+
 # ─── Stat parsing per league ────────────────────────────────────────────────
 
 def sf(stats, *keys):
@@ -79,6 +66,17 @@ def sf(stats, *keys):
             except (ValueError, TypeError):
                 pass
     return 0.0
+
+def sf_or_none(stats, *keys):
+    """Safe float, returns None if key not found (avoids overwriting good data with 0)."""
+    for k in keys:
+        v = stats.get(k, None)
+        if v is not None:
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                pass
+    return None
 
 def parse_stats_nba(stats):
     return {
@@ -94,30 +92,33 @@ def parse_stats_nhl(stats):
     return {
         "stat_goals": sf(stats, "G", "Goals"),
         "stat_assists": sf(stats, "A", "Assists"),
-        "stat_sog": sf(stats, "SOG", "Shots"),
+        # ESPN doesn't reliably provide SOG for NHL — use sf_or_none
+        # to avoid overwriting correct NHL API data with 0
+        "stat_sog": sf_or_none(stats, "SOG", "Shots"),
     }
 
 def parse_stats_nfl(stats):
     return {
-        "stat_pass_yds": sf(stats, "PYDS", "PassYds", "YDS"),
-        "stat_rush_yds": sf(stats, "RYDS", "RushYds"),
-        "stat_rec_yds": sf(stats, "RECYDS", "RecYds"),
-        "stat_rec": sf(stats, "REC", "Rec"),
+        "stat_pass_yds": sf(stats, "passing_YDS", "PYDS", "PassYds"),
+        "stat_rush_yds": sf(stats, "rushing_YDS", "RYDS", "RushYds"),
+        "stat_rec_yds": sf(stats, "receiving_YDS", "RECYDS", "RecYds"),
+        "stat_rec": sf(stats, "receiving_REC", "REC", "Rec"),
     }
 
 def parse_stats_mlb(stats):
     return {
-        "stat_h": sf(stats, "H", "Hits"),
-        "stat_rbi": sf(stats, "RBI"),
-        "stat_goals": sf(stats, "HR"),  # overloading goals for HR
+        "stat_h": sf_or_none(stats, "H", "Hits"),
+        "stat_rbi": sf_or_none(stats, "RBI"),
+        "stat_goals": sf_or_none(stats, "HR"),  # overloading goals for HR
+        "stat_stl": sf_or_none(stats, "TB", "TotalBases"),  # totalBases stored in stat_stl
     }
 
 def parse_stats_epl(stats):
     return {
-        "stat_goals": sf(stats, "G", "GLS", "Goals"),
-        "stat_assists": sf(stats, "A", "AST", "Assists"),
-        "stat_sog": sf(stats, "SOT", "ShotsOnTarget"),
-        "minutes": sf(stats, "MIN", "Min"),
+        "stat_goals": sf_or_none(stats, "G", "GLS", "Goals"),
+        "stat_assists": sf_or_none(stats, "A", "AST", "Assists"),
+        "stat_sog": sf_or_none(stats, "SOT", "ShotsOnTarget"),
+        "minutes": sf_or_none(stats, "MIN", "Min"),
     }
 
 STAT_PARSERS = {
@@ -138,11 +139,13 @@ def compute_composite(slug, stats):
     elif slug == "mlb":
         return sf(stats, "H") + sf(stats, "HR") * 4 + sf(stats, "RBI") + sf(stats, "R") + sf(stats, "SB") * 2
     elif slug == "nfl":
-        return (sf(stats, "RYDS", "RushYds") * 0.1 + sf(stats, "RECYDS", "RecYds") * 0.1 +
-                sf(stats, "REC", "Rec") + sf(stats, "PYDS", "PassYds", "YDS") * 0.04)
+        return (sf(stats, "rushing_YDS", "RYDS", "RushYds") * 0.1 +
+                sf(stats, "receiving_YDS", "RECYDS", "RecYds") * 0.1 +
+                sf(stats, "receiving_REC", "REC", "Rec") +
+                sf(stats, "passing_YDS", "PYDS", "PassYds") * 0.04)
     return 0
 
-# ─── HTTP / Supabase helpers ────────────────────────────────────────────────
+# ─── HTTP helpers ────────────────────────────────────────────────────────────
 
 def http_get_json(url, timeout=30):
     for attempt in range(3):
@@ -154,52 +157,6 @@ def http_get_json(url, timeout=30):
             if attempt < 2:
                 time.sleep(2 * (attempt + 1))
     return None
-
-def sb_get(table, params=""):
-    url = SB_URL + "/rest/v1/" + table + "?" + params
-    hdrs = {"apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY}
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(url, headers=hdrs)
-            resp = urllib.request.urlopen(req, timeout=60)
-            return json.loads(resp.read().decode())
-        except Exception:
-            time.sleep(3)
-    return []
-
-def sb_upsert(table, rows, conflict="player_id,game_date"):
-    if not rows:
-        return 0
-    # Dedupe
-    seen = set()
-    unique = []
-    for r in rows:
-        k = (r.get("player_id"), r.get("game_date"))
-        if k not in seen:
-            seen.add(k)
-            unique.append(r)
-    rows = unique
-    hdrs = {
-        "apikey": SB_KEY,
-        "Authorization": "Bearer " + SB_KEY,
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal,resolution=merge-duplicates",
-    }
-    url = SB_URL + "/rest/v1/" + table + "?on_conflict=" + conflict
-    total = 0
-    for i in range(0, len(rows), 200):
-        batch = rows[i:i + 200]
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(url, data=json.dumps(batch).encode(),
-                                            headers=hdrs, method="POST")
-                urllib.request.urlopen(req, timeout=120).read()
-                total += len(batch)
-                break
-            except Exception:
-                if attempt < 2:
-                    time.sleep(5 * (attempt + 1))
-    return total
 
 # ─── ESPN gamelog fetch ──────────────────────────────────────────────────────
 
@@ -225,9 +182,15 @@ def fetch_espn_gamelog(sport, league, espn_id, season):
                                 if isinstance(edata.get("opponent"), dict) else "",
                 }
 
-    games = []
+    # For NFL, ESPN returns separate categories (passing, rushing, receiving)
+    # with overlapping label names (YDS, TD). We need to merge them per event
+    # and prefix labels with the category name to disambiguate.
+    # For other sports, categories don't overlap so no prefix needed.
+    merged = {}  # eid -> {"date": ..., "opponent": ..., "stats": {...}}
+
     for st in season_types:
         for cat in st.get("categories", []):
+            cat_name = cat.get("displayName", cat.get("name", "")).lower()
             cat_labels = cat.get("labels", top_labels)
             if not cat_labels:
                 cat_stats = cat.get("stats", [])
@@ -244,15 +207,20 @@ def fetch_espn_gamelog(sport, league, espn_id, season):
                 if not game_date:
                     continue
 
-                stat_dict = {}
+                if eid not in merged:
+                    merged[eid] = {"date": game_date, "opponent": info.get("opponent", ""), "stats": {}}
+
                 labels = cat_labels if cat_labels else top_labels
                 for idx, val in enumerate(stats_vals):
                     if idx < len(labels):
-                        stat_dict[labels[idx]] = val
+                        label = labels[idx]
+                        # Prefix ambiguous NFL labels with category name
+                        if cat_name in ("passing", "rushing", "receiving", "defense"):
+                            merged[eid]["stats"][f"{cat_name}_{label}"] = val
+                        # Also store unprefixed for non-NFL sports
+                        merged[eid]["stats"][label] = val
 
-                games.append({"date": game_date, "opponent": info.get("opponent", ""), "stats": stat_dict})
-
-    return games
+    return list(merged.values())
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
@@ -271,6 +239,9 @@ def main():
         if slug not in ESPN_LEAGUES:
             print(f"Unknown league: {slug}")
             continue
+        if slug in ESPN_SKIP_LEAGUES:
+            print(f"\n  Skipping {slug} — ESPN data unreliable, use dedicated importer instead")
+            continue
 
         cfg = ESPN_LEAGUES[slug]
         season = current_season(slug)
@@ -281,25 +252,17 @@ def main():
         print(f"{'='*60}", flush=True)
 
         # Get league_id
-        lgs = sb_get("back_in_play_leagues", "select=league_id&slug=eq." + slug)
+        lgs = pg_query("back_in_play_leagues", "league_id", filters={"slug": "eq." + slug})
         if not lgs:
             print(f"  League {slug} not found in DB")
             continue
         league_id = lgs[0]["league_id"]
 
         # Get all players with ESPN IDs for this league
-        players = []
-        offset = 0
-        while True:
-            batch = sb_get("back_in_play_players",
-                "select=player_id,espn_id&league_id=eq." + league_id +
-                "&espn_id=not.is.null&limit=1000&offset=" + str(offset))
-            if not batch:
-                break
-            players.extend(batch)
-            if len(batch) < 1000:
-                break
-            offset += 1000
+        from db_writer import pg_query_paginate
+        players = pg_query_paginate("back_in_play_players",
+            select="player_id,espn_id",
+            filters={"league_id": "eq." + league_id, "espn_id": "not.is.null"})
 
         print(f"  {len(players)} players with ESPN IDs", flush=True)
 
@@ -346,7 +309,7 @@ def main():
                 players_with_data += 1
                 total_logs += len(rows)
                 if not args.dry_run:
-                    n = sb_upsert("back_in_play_player_game_logs", rows)
+                    n = pg_upsert("back_in_play_player_game_logs", rows, conflict_cols=["player_id", "game_date"])
                     total_loaded += n
                 else:
                     total_loaded += len(rows)

@@ -36,6 +36,7 @@ export function PremiumGate({
 
   const status = getStatus(contentId);
   const [showSignupPrompt, setShowSignupPrompt] = useState(false);
+  const [showLimitMsg, setShowLimitMsg] = useState(false);
 
   const handleUnlock = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -52,6 +53,14 @@ export function PremiumGate({
       trackPremiumLimitHit({ page: "props", is_authenticated: isAuth, unlocks_used: getSummary().used });
       trackPremiumSignupPrompt("props", section);
       setShowSignupPrompt(true);
+      return;
+    }
+
+    // Auth user out of daily unlocks
+    if (isAuth && current.remaining <= 0 && !current.isUnlocked) {
+      trackPremiumLimitHit({ page: "props", is_authenticated: isAuth, unlocks_used: getSummary().used });
+      setShowLimitMsg(true);
+      setTimeout(() => setShowLimitMsg(false), 3000);
       return;
     }
 
@@ -93,7 +102,14 @@ export function PremiumGate({
         </span>
       </Tag>
 
-      {/* Signup prompt modal */}
+      {/* Daily limit reached toast (authenticated users) */}
+      {showLimitMsg && (
+        <div className="absolute -top-8 left-1/2 -translate-x-1/2 z-50 whitespace-nowrap rounded-lg bg-[#0D1224] border border-purple-500/20 px-3 py-1.5 shadow-lg">
+          <p className="text-[10px] text-purple-300/80 font-medium">Premium unlocks refresh tomorrow</p>
+        </div>
+      )}
+
+      {/* Signup prompt modal (anonymous users) */}
       {showSignupPrompt && (
         <SignupPromptInline onClose={() => setShowSignupPrompt(false)} />
       )}
@@ -104,9 +120,11 @@ export function PremiumGate({
 /**
  * Signup prompt — fixed overlay modal.
  * Appears when anon user exhausts 2 free unlocks.
+ * Clicking outside the box dismisses it.
  */
 function SignupPromptInline({ onClose }: { onClose: () => void }) {
-  const handleDismiss = () => {
+  const handleDismiss = (e: React.MouseEvent) => {
+    e.stopPropagation(); // prevent bubbling to PremiumGate's handleUnlock
     trackSignupModalDismiss("props");
     onClose();
   };

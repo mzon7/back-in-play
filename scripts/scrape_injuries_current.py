@@ -29,26 +29,7 @@ import json, os, re, sys, time, urllib.request, urllib.error
 from datetime import date, datetime
 from pathlib import Path
 
-
-# -- Load env -----------------------------------------------------------------
-def load_env():
-    for envfile in ["/root/.daemon-env", ".env", "../.env"]:
-        p = Path(envfile)
-        if p.exists():
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip().strip("'\""))
-
-load_env()
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
-    sys.exit(1)
+from db_writer import pg_upsert, SB_URL as SUPABASE_URL, SB_KEY as SUPABASE_KEY
 
 MAX_RETRIES = 3
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -101,52 +82,6 @@ def _strip_unknown_columns(table, rows):
         return rows
     return [{k: v for k, v in row.items() if k in known} for row in rows]
 
-
-def sb_upsert(table, rows, conflict=""):
-    if not rows:
-        return 0
-    if conflict:
-        keys = conflict.split(",")
-        seen = set()
-        unique = []
-        for r in rows:
-            k = tuple(r.get(c) for c in keys)
-            if k not in seen:
-                seen.add(k)
-                unique.append(r)
-        rows = unique
-    # Strip columns that don't exist yet (migration not run)
-    rows = _strip_unknown_columns(table, rows)
-    hdrs = sb_headers("return=representation,resolution=merge-duplicates")
-    url = SUPABASE_URL + "/rest/v1/" + table
-    if conflict:
-        url += "?on_conflict=" + conflict
-    total = 0
-    for i in range(0, len(rows), 50):
-        batch = rows[i:i+50]
-        for attempt in range(MAX_RETRIES):
-            try:
-                req = urllib.request.Request(url, data=json.dumps(batch).encode(),
-                                             headers=hdrs, method="POST")
-                resp = urllib.request.urlopen(req, timeout=60)
-                result = json.loads(resp.read().decode())
-                total += len(result) if isinstance(result, list) else 1
-                break
-            except Exception as e:
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(2 ** attempt)
-                else:
-                    for row in batch:
-                        try:
-                            req2 = urllib.request.Request(url, data=json.dumps([row]).encode(),
-                                                          headers=hdrs, method="POST")
-                            resp2 = urllib.request.urlopen(req2, timeout=30)
-                            resp2.read()
-                            total += 1
-                        except Exception:
-                            pass
-                    break
-    return total
 
 def sb_get(table, params=""):
     url = SUPABASE_URL + "/rest/v1/" + table + "?" + params
@@ -1193,8 +1128,8 @@ def ingest_league(league_key, sources, use_diff=False, state=None):
 
         # Only upsert the changed ones
         stamp_ranks(changed)
-        count = sb_upsert("back_in_play_injuries", changed,
-                          "player_id,date_injured,injury_type_slug")
+        count = pg_upsert("back_in_play_injuries", changed,
+                          conflict_cols=["player_id", "date_injured", "injury_type_slug"])
         print("  UPSERTED: %d changed injuries for %s" % (count, league_key.upper()), flush=True)
 
         # Log status changes to the feed table
@@ -1210,8 +1145,8 @@ def ingest_league(league_key, sources, use_diff=False, state=None):
     else:
         # Full mode — upsert everything
         stamp_ranks(all_injuries)
-        count = sb_upsert("back_in_play_injuries", all_injuries,
-                          "player_id,date_injured,injury_type_slug")
+        count = pg_upsert("back_in_play_injuries", all_injuries,
+                          conflict_cols=["player_id", "date_injured", "injury_type_slug"])
         print("  UPSERTED: %d injuries for %s" % (count, league_key.upper()), flush=True)
         return count
 

@@ -45,25 +45,7 @@ except ImportError:
     print("ERROR: pip install beautifulsoup4 lxml")
     sys.exit(1)
 
-# ─── Env & Supabase ──────────────────────────────────────────────────────────
-
-def load_env():
-    for envfile in ["/root/.daemon-env", ".env", "../.env"]:
-        p = Path(envfile)
-        if p.exists():
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip().strip("'\""))
-
-load_env()
-
-SB_URL = os.environ.get("SUPABASE_URL", "")
-SB_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-if not SB_URL or not SB_KEY:
-    print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
-    sys.exit(1)
+from db_writer import pg_upsert, SB_URL, SB_KEY
 
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -107,46 +89,6 @@ def sb_get(table, params=""):
     except Exception as e:
         print(f"  [SB GET ERR] {table}: {e}", flush=True)
         return []
-
-def sb_upsert(table, rows, conflict=""):
-    if not rows:
-        return 0
-    if conflict:
-        keys = conflict.split(",")
-        seen = set()
-        unique = []
-        for r in rows:
-            k = tuple(r.get(c) for c in keys)
-            if k not in seen:
-                seen.add(k)
-                unique.append(r)
-        rows = unique
-
-    hdrs = sb_headers("return=representation,resolution=merge-duplicates")
-    url = SB_URL + "/rest/v1/" + table
-    if conflict:
-        url += "?on_conflict=" + conflict
-    total = 0
-    for i in range(0, len(rows), 50):
-        batch = rows[i:i + 50]
-        try:
-            req = urllib.request.Request(url, data=json.dumps(batch).encode(),
-                                        headers=hdrs, method="POST")
-            resp = urllib.request.urlopen(req, timeout=60)
-            result = json.loads(resp.read().decode())
-            total += len(result) if isinstance(result, list) else 1
-        except Exception as e:
-            print(f"  [UPSERT ERR] {table}: {e}", flush=True)
-            # row-by-row fallback
-            for row in batch:
-                try:
-                    req2 = urllib.request.Request(url, data=json.dumps([row]).encode(),
-                                                 headers=hdrs, method="POST")
-                    urllib.request.urlopen(req2, timeout=30).read()
-                    total += 1
-                except Exception:
-                    pass
-    return total
 
 def sb_patch(table, filters, body):
     url = SB_URL + "/rest/v1/" + table + "?" + filters
@@ -629,6 +571,7 @@ def scrape_mlb_game_log(sport_ref_id, season, is_pitcher=False):
                 "stat_rbi": stat("RBI"),
                 "stat_r": stat("R"),
                 "stat_sb": stat("SB"),
+                "stat_stl": stat("TB"),  # totalBases stored in stat_stl
             }
         rows.append(row)
 
@@ -915,6 +858,7 @@ def espn_scrape_mlb(espn_id, season, is_pitcher=False):
                 "stat_rbi": _espn_stat_by_name(names, stats, "RBIs"),
                 "stat_r": _espn_stat_by_name(names, stats, "runs"),
                 "stat_sb": _espn_stat_by_name(names, stats, "stolenBases"),
+                "stat_stl": _espn_stat_by_name(names, stats, "totalBases"),  # TB in stat_stl
             }
         rows.append(row)
     return rows
@@ -1275,7 +1219,7 @@ def fpl_bulk_store():
             db_rows.append(db_row)
 
         if db_rows:
-            sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+            pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
             stored += len(db_rows)
 
         if (i + 1) % 100 == 0:
@@ -1876,7 +1820,7 @@ def audit_returns(league=None):
             db_rows.append(db_row)
 
         if db_rows:
-            sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+            pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
 
         if (i + 1) % 50 == 0:
             print(f"  [{i + 1}/{len(to_scrape)}] scraped...", flush=True)
@@ -2240,7 +2184,7 @@ def phase_3_scrape_logs(cases, league=None):
             db_row["composite"] = compute_composite(db_row, ls)
             db_rows.append(db_row)
 
-        n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+        n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
         scraped += n
         label = ref_id or espn_id or pid
         print(f"    [{i + 1}/{len(to_scrape)}] {label} {season} → {len(db_rows)} games [{source}]", flush=True)
@@ -2518,12 +2462,12 @@ def phase_4_compute(cases, league=None):
 
                 # Batch upsert
                 if len(upsert_batch) >= UPSERT_BATCH_SIZE:
-                    sb_upsert("back_in_play_injury_return_cases", upsert_batch, conflict="injury_id")
+                    pg_upsert("back_in_play_injury_return_cases", upsert_batch, conflict_cols=["injury_id"])
                     upsert_batch = []
 
     # Flush remaining
     if upsert_batch:
-        sb_upsert("back_in_play_injury_return_cases", upsert_batch, conflict="injury_id")
+        pg_upsert("back_in_play_injury_return_cases", upsert_batch, conflict_cols=["injury_id"])
 
     print(f"  Computed {processed} return cases, audited {audited} recovery_days", flush=True)
     return processed
@@ -2878,7 +2822,7 @@ def phase_5_aggregate(league=None):
                 _emit_curves_for_cases(pos_cases, ls, its, position=pos, curves=curves)
 
     # Upsert with position and return_type in conflict key
-    n = sb_upsert("back_in_play_performance_curves", curves, conflict="league_slug,injury_type_slug,position,return_type")
+    n = pg_upsert("back_in_play_performance_curves", curves, conflict_cols=["league_slug", "injury_type_slug", "position", "return_type"])
     print(f"  Aggregated {n} performance curves ({len([c for c in curves if c['position']])} per-position) from {len(cases)} cases", flush=True)
 
 
@@ -2896,7 +2840,7 @@ def run_pipeline(mode, league=None, phase=None):
 
     # Record pipeline run
     run_row = {"run_type": mode, "league_slug": league, "status": "running"}
-    runs = sb_upsert("back_in_play_pipeline_runs", [run_row])
+    runs = pg_upsert("back_in_play_pipeline_runs", [run_row])
 
     # Determine since_date for incremental mode
     since_date = None

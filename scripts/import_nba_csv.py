@@ -29,31 +29,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-# ─── Env ─────────────────────────────────────────────────────────────────────
+from db_writer import pg_upsert
 
-def load_env():
-    for envfile in ["/root/.daemon-env", ".env", "../.env"]:
-        p = Path(envfile)
-        if p.exists():
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    if line.startswith("export "):
-                        line = line[7:]
-                    key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip().strip("'\""))
-
-load_env()
-
-SB_URL = os.environ.get("SUPABASE_URL", "")
-SB_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-if not SB_URL or not SB_KEY:
-    print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
-    sys.exit(1)
-
-# ─── Supabase REST helpers ───────────────────────────────────────────────────
+# ─── Supabase read helpers (kept — reads via REST are fine) ──────────────────
 
 def sb_get(table, params=""):
+    from db_writer import SB_URL, SB_KEY
     url = SB_URL + "/rest/v1/" + table + "?" + params
     hdrs = {"apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY}
     for attempt in range(3):
@@ -67,53 +48,6 @@ def sb_get(table, params=""):
                 continue
             print(f"  [SB GET ERR] {table}: {e}", flush=True)
             return []
-
-def sb_upsert(table, rows, conflict="player_id,game_date"):
-    if not rows:
-        return 0
-    # Dedup
-    keys = conflict.split(",")
-    seen = set()
-    unique = []
-    for r in rows:
-        k = tuple(r.get(c) for c in keys)
-        if k not in seen:
-            seen.add(k)
-            unique.append(r)
-    rows = unique
-
-    hdrs = {
-        "apikey": SB_KEY,
-        "Authorization": "Bearer " + SB_KEY,
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal,resolution=merge-duplicates",
-    }
-    url = SB_URL + "/rest/v1/" + table + "?on_conflict=" + conflict
-    total = 0
-    for i in range(0, len(rows), 200):
-        batch = rows[i:i + 200]
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(url, data=json.dumps(batch).encode(),
-                                            headers=hdrs, method="POST")
-                urllib.request.urlopen(req, timeout=120).read()
-                total += len(batch)
-                break
-            except Exception as e:
-                if attempt < 2:
-                    time.sleep(5 * (attempt + 1))
-                    continue
-                # Try smaller batches
-                for j in range(0, len(batch), 20):
-                    mini = batch[j:j + 20]
-                    try:
-                        req2 = urllib.request.Request(url, data=json.dumps(mini).encode(),
-                                                     headers=hdrs, method="POST")
-                        urllib.request.urlopen(req2, timeout=60).read()
-                        total += len(mini)
-                    except Exception as e2:
-                        print(f"    [UPSERT ERR] {e2}", flush=True)
-    return total
 
 # ─── Name normalization ──────────────────────────────────────────────────────
 
@@ -319,7 +253,7 @@ def main():
                 # Batch upsert every 500
                 if len(db_rows) >= 500:
                     if not args.dry_run:
-                        n = sb_upsert("back_in_play_player_game_logs", db_rows)
+                        n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
                         total_loaded += n
                     else:
                         total_loaded += len(db_rows)
@@ -332,7 +266,7 @@ def main():
     # Final batch
     if db_rows:
         if not args.dry_run:
-            n = sb_upsert("back_in_play_player_game_logs", db_rows)
+            n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
             total_loaded += n
         else:
             total_loaded += len(db_rows)

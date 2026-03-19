@@ -25,25 +25,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-# ─── Env ─────────────────────────────────────────────────────────────────────
-
-def load_env():
-    for envfile in ["/root/.daemon-env", ".env", "../.env"]:
-        p = Path(envfile)
-        if p.exists():
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip().strip("'\""))
-
-load_env()
-
-SB_URL = os.environ.get("SUPABASE_URL", "")
-SB_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-if not SB_URL or not SB_KEY:
-    print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
-    sys.exit(1)
+from db_writer import pg_upsert
 
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -82,9 +64,10 @@ LEAGUE_CONFIG = {
     },
 }
 
-# ─── Supabase helpers ────────────────────────────────────────────────────────
+# ─── Supabase read helpers (kept — reads via REST are fine) ──────────────────
 
 def sb_get(table, params=""):
+    from db_writer import SB_URL, SB_KEY
     url = f"{SB_URL}/rest/v1/{table}?{params}"
     hdrs = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}"}
     try:
@@ -94,54 +77,6 @@ def sb_get(table, params=""):
     except Exception as e:
         print(f"  [SB GET ERR] {table}: {e}", flush=True)
         return []
-
-
-def sb_upsert(table, rows, conflict=""):
-    """Upsert rows in batches of 200, with fallback to smaller batches."""
-    if not rows:
-        return 0
-    # Deduplicate by conflict keys
-    if conflict:
-        keys = conflict.split(",")
-        seen = set()
-        unique = []
-        for r in rows:
-            k = tuple(r.get(c) for c in keys)
-            if k not in seen:
-                seen.add(k)
-                unique.append(r)
-        rows = unique
-
-    hdrs = {
-        "apikey": SB_KEY,
-        "Authorization": f"Bearer {SB_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal,resolution=merge-duplicates",
-    }
-    url = f"{SB_URL}/rest/v1/{table}"
-    if conflict:
-        url += f"?on_conflict={conflict}"
-
-    total = 0
-    for i in range(0, len(rows), 200):
-        batch = rows[i:i + 200]
-        try:
-            req = urllib.request.Request(url, data=json.dumps(batch).encode(),
-                                        headers=hdrs, method="POST")
-            urllib.request.urlopen(req, timeout=120).read()
-            total += len(batch)
-        except Exception:
-            # Fallback: smaller batches
-            for j in range(0, len(batch), 20):
-                mini = batch[j:j + 20]
-                try:
-                    req2 = urllib.request.Request(url, data=json.dumps(mini).encode(),
-                                                  headers=hdrs, method="POST")
-                    urllib.request.urlopen(req2, timeout=60).read()
-                    total += len(mini)
-                except Exception as e2:
-                    print(f"    [UPSERT ERR] batch {j}: {e2}", flush=True)
-    return total
 
 
 def sb_get_all(table, params=""):
@@ -317,6 +252,8 @@ def parse_mlb_event(labels, event):
     rbi_idx = _label_index(labels, "RBI")
     r_idx = _label_index(labels, "R")
     sb_idx = _label_index(labels, "SB")
+    dbl_idx = _label_index(labels, "2B")
+    tpl_idx = _label_index(labels, "3B")
 
     # Pitcher labels: IP, H, R, ER, BB, K, HR, ERA, WHIP
     ip_idx = _label_index(labels, "IP")
@@ -333,6 +270,14 @@ def parse_mlb_event(labels, event):
     row["stat_ip"] = _safe_float(_stat_at(stats, ip_idx))
     row["stat_k"] = _safe_float(_stat_at(stats, k_idx))
     row["stat_era"] = _safe_float(_stat_at(stats, era_idx))
+
+    # Compute totalBases: H + 2B + 2*3B + 3*HR, store in stat_stl
+    h = row.get("stat_h") or 0
+    dbl = _safe_float(_stat_at(stats, dbl_idx)) or 0
+    tpl = _safe_float(_stat_at(stats, tpl_idx)) or 0
+    hr = row.get("stat_hr") or 0
+    if h > 0 or dbl > 0 or tpl > 0 or hr > 0:
+        row["stat_stl"] = h + dbl + 2 * tpl + 3 * hr
     return row
 
 
@@ -590,8 +535,8 @@ def main():
                 continue
 
             if rows:
-                n = sb_upsert("back_in_play_player_game_logs", rows,
-                              conflict="player_id,game_date")
+                n = pg_upsert("back_in_play_player_game_logs", rows,
+                              conflict_cols=["player_id", "game_date"])
                 league_total += n
                 if (i + 1) % 25 == 0 or n > 50:
                     print(f"  [{i+1}/{len(players)}] {pname}: {n} games upserted "

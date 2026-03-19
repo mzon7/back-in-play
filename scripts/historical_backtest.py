@@ -42,7 +42,7 @@ MARKET_TO_STAT = {
     "player_shots": "stat_sog",
     "player_shots_on_target": "stat_sog",
     "batter_hits": "stat_h",
-    "batter_total_bases": "stat_h",
+    "batter_total_bases": "stat_stl",  # MLB: totalBases stored in stat_stl
     "batter_rbis": "stat_rbi",
 }
 
@@ -54,7 +54,7 @@ LEAGUE_IDS = {
     "premier-league": "759cf693-7e15-4ea5-a3ed-ff9fd7d6bbb0",
 }
 
-HAS_MINUTES = {"nba", "nfl", "nhl"}
+HAS_MINUTES = {"nba", "nhl"}  # NFL doesn't have minutes in game logs
 
 # ── Helpers ──
 
@@ -130,7 +130,8 @@ def load_props_from_files(league):
         for f in date_dir.glob("*.json"):
             try:
                 props = json.loads(f.read_text())
-                all_props.extend(props)
+                if isinstance(props, list):
+                    all_props.extend(p for p in props if isinstance(p, dict))
             except:
                 pass
     return all_props
@@ -189,12 +190,16 @@ def load_all_data(league):
         injuries_by_player[pid].sort(key=lambda x: x["return_date"], reverse=True)
     print(f"  {len(all_injuries):,} injuries for {len(injuries_by_player):,} players")
 
-    # 4. Load game logs
+    # 4. Load game logs — only for players who have both props AND injuries
     print("Loading game logs...")
-    stat_cols = "player_id, game_date, minutes, stat_pts, stat_reb, stat_ast, stat_sog, stat_rush_yds, stat_pass_yds, stat_rec, stat_rec_yds, stat_goals, stat_h, stat_rbi"
+    prop_player_names = set(p.get("player_name", "").lower() for p in props if isinstance(p, dict))
+    prop_player_ids = [pid for name, pid in name_to_id.items() if name in prop_player_names]
+    needed_ids = list(set(prop_player_ids) & set(injuries_by_player.keys()))
+    print(f"  Need game logs for {len(needed_ids):,} players (have props + injuries)")
+    stat_cols = "player_id, game_date, minutes, stat_pts, stat_reb, stat_ast, stat_sog, stat_rush_yds, stat_pass_yds, stat_rec, stat_rec_yds, stat_goals, stat_h, stat_rbi, stat_stl"
     all_logs = []
-    for i in range(0, len(player_ids), CHUNK):
-        chunk = player_ids[i:i + CHUNK]
+    for i in range(0, len(needed_ids), CHUNK):
+        chunk = needed_ids[i:i + CHUNK]
         logs = paginate("back_in_play_player_game_logs", stat_cols,
                        filters=[
                            ("in_", ("player_id", chunk)),
@@ -203,6 +208,8 @@ def load_all_data(league):
                        order_col="game_date", order_desc=True,
                        batch=1000)
         all_logs.extend(logs)
+        if (i // CHUNK) % 10 == 0:
+            print(f"    chunk {i // CHUNK + 1}/{(len(needed_ids) + CHUNK - 1) // CHUNK}: {len(all_logs):,} logs so far")
     # Index: player_id → list of games sorted by date desc
     logs_by_player = defaultdict(list)
     for g in all_logs:
@@ -260,9 +267,9 @@ def run_backtest(league):
         return
 
     # Split: use only the most recent season as test set (holdout)
-    # Train period: curves were built from all historical data
-    # Test period: 2024-10-22 onwards (2024-25 NBA season)
-    holdout_start = "2024-10-22"
+    # NBA/NHL: 2024-10-22 onwards (2024-25 season)
+    # MLB: 2024-07-15 onwards (second half of 2024 season — no data after Oct)
+    holdout_start = "2024-07-15" if league == "mlb" else "2024-10-22"
     test_props = [p for p in props if p.get("game_date", "") >= holdout_start]
     train_props = [p for p in props if p.get("game_date", "") < holdout_start]
     print(f"  Train period: {len(train_props):,} props (before {holdout_start})")
@@ -443,6 +450,8 @@ def run_backtest(league):
         tier = "≥50%" if ep >= 50 else "30-50%" if ep >= 30 else "20-30%" if ep >= 20 else "10-20%" if ep >= 10 else "5-10%" if ep >= 5 else "<5%"
 
         # Record individual bet
+        # NOTE: p_over and kelly_f omitted — heuristic stddev=0.25*baseline
+        # produces overconfident probabilities unsuitable for Kelly sizing.
         results["bets"].append({
             "player": player_name,
             "date": game_date,

@@ -40,7 +40,7 @@ const MARKET_TO_STAT: Record<string, string> = {
   player_reception_yds: "stat_rec_yds", player_receptions: "stat_rec",
   player_goals: "stat_goals", player_shots_on_goal: "stat_sog",
   player_shots: "stat_sog", player_shots_on_target: "stat_sog",
-  batter_hits: "stat_h", batter_total_bases: "stat_h", batter_rbis: "stat_rbi",
+  batter_hits: "stat_h", batter_total_bases: "stat_stl", batter_rbis: "stat_rbi",
 };
 
 /** Normalize an injury_type string to a slug for curve matching */
@@ -127,27 +127,33 @@ function localToday(): string {
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
 }
 
-function gameStatus(commenceTime: string | null | undefined, gameDate: string | undefined): { label: string; started: boolean; soon: boolean; tomorrow: boolean } {
+function gameStatus(commenceTime: string | null | undefined, gameDate: string | undefined): { label: string; started: boolean; soon: boolean; tomorrow: boolean; finished: boolean } {
   const today = localToday();
   const isTomorrow = gameDate != null && gameDate > today;
 
   if (!commenceTime) {
-    return { label: isTomorrow ? "Tomorrow" : "Today", started: false, soon: false, tomorrow: isTomorrow };
+    return { label: isTomorrow ? "Tomorrow" : "Today", started: false, soon: false, tomorrow: isTomorrow, finished: false };
   }
   const ct = new Date(commenceTime);
   const now = new Date();
   if (now >= ct) {
-    return { label: "Live", started: true, soon: false, tomorrow: false };
+    // ~3 hours after tip-off → likely finished
+    const hrsSinceStart = (now.getTime() - ct.getTime()) / 3600000;
+    if (hrsSinceStart >= 3) {
+      return { label: "Final", started: false, soon: false, tomorrow: false, finished: true };
+    }
+    return { label: "Live", started: true, soon: false, tomorrow: false, finished: false };
   }
   const minsUntil = (ct.getTime() - now.getTime()) / 60000;
   const timeStr = ct.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return { label: isTomorrow ? `Tomorrow ${timeStr}` : timeStr, started: false, soon: minsUntil <= 30, tomorrow: isTomorrow };
+  return { label: isTomorrow ? `Tomorrow ${timeStr}` : timeStr, started: false, soon: minsUntil <= 30, tomorrow: isTomorrow, finished: false };
 }
 
 function GameTimeBadge({ commenceTime, gameDate }: { commenceTime?: string | null; gameDate?: string }) {
-  const { label, started, soon, tomorrow } = gameStatus(commenceTime, gameDate);
+  const { label, started, soon, tomorrow, finished } = gameStatus(commenceTime, gameDate);
   return (
     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold ${
+      finished ? "bg-white/5 text-white/30" :
       started ? "bg-green-500/20 text-green-400" :
       soon ? "bg-amber-500/20 text-amber-400" :
       tomorrow ? "bg-blue-500/10 text-blue-400/60" :
@@ -943,7 +949,7 @@ export function PlayerPropCard({ player, sourceFilter, curve, highlighted, statF
                       </div>
                       {hasEdge && edge && (
                         <PremiumGate
-                          contentId={`${p.id}-direction`}
+                          contentId={`player-${player.player_id}`}
                           playerName={player.player_name}
                           section="prop_direction"
                           inline
@@ -966,7 +972,7 @@ export function PlayerPropCard({ player, sourceFilter, curve, highlighted, statF
                       </div>
                       {ev && (
                         <PremiumGate
-                          contentId={`${p.id}-model`}
+                          contentId={`player-${player.player_id}`}
                           playerName={player.player_name}
                           section="prop_model"
                           placeholder={
@@ -984,7 +990,7 @@ export function PlayerPropCard({ player, sourceFilter, curve, highlighted, statF
                       )}
                       {projDiffPct != null && projDiffPct !== 0 && (
                         <PremiumGate
-                          contentId={`${p.id}-gap`}
+                          contentId={`player-${player.player_id}`}
                           playerName={player.player_name}
                           section="prop_gap"
                           placeholder={
@@ -1215,25 +1221,53 @@ function CompactPlayerRow({
             </div>
           </div>
 
-          {/* Right side: signal direction + strength */}
+          {/* Right side: line + model signal */}
           <div className="flex items-center gap-3 shrink-0">
             {bestProp && (
               <>
                 <div className="text-right">
                   <span className="text-[10px] text-white/30">{MARKET_LABELS[bestProp.market] ?? bestProp.market}</span>
                   <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] text-white/25">Line</span>
                     <span className="text-[13px] font-bold text-white tabular-nums">{bestProp.line}</span>
-                    {bestEv?.recommendation && (
-                      <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
-                        {bestEv.recommendation}
-                      </span>
+                    {bestEv?.recommendation ? (
+                      <PremiumGate
+                        contentId={`player-${player.player_id}`}
+                        playerName={player.player_name}
+                        section="compact_direction"
+                        inline
+                        placeholder={<span className="text-[11px] font-bold text-white/40">OVER</span>}
+                      >
+                        <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
+                          {bestEv.recommendation}
+                        </span>
+                      </PremiumGate>
+                    ) : (
+                      <span className="text-[9px] text-white/20">No signal</span>
                     )}
                   </div>
                 </div>
+                {bestEv && (
+                  <PremiumGate
+                    contentId={`player-${player.player_id}`}
+                    playerName={player.player_name}
+                    section="compact_model"
+                    inline
+                    placeholder={<span className="text-[10px] text-white/40 tabular-nums">24.5</span>}
+                  >
+                    <div className="text-right">
+                      <span className="text-[9px] text-white/25">Model</span>
+                      <p className="text-[12px] font-bold text-white/60 tabular-nums">{bestEv.expectedCombined.toFixed(1)}</p>
+                    </div>
+                  </PremiumGate>
+                )}
                 {edge && (
                   <span className={`text-[10px] font-semibold ${edge.color}`}>{edge.text}</span>
                 )}
               </>
+            )}
+            {!bestProp && player.props.length > 0 && (
+              <span className="text-[10px] text-white/25">{player.props.length} prop{player.props.length !== 1 ? "s" : ""}</span>
             )}
             <span className={`text-white/30 text-xs transition-transform ${expanded ? "rotate-180" : ""}`}>▾</span>
           </div>
@@ -1437,7 +1471,7 @@ function DailyOpportunitiesTable({ players, findCurve, freePlayerIds, onPlayerCl
                         </>
                       ) : (
                         <PremiumGate
-                          contentId={`table-${p.player_id}-model`}
+                          contentId={`player-${p.player_id}`}
                           playerName={p.player_name}
                           section="table_model"
                           placeholder={

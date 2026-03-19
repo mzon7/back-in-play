@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useQuery } from "@tanstack/react-query";
 import { SiteHeader } from "../components/SiteHeader";
@@ -15,7 +15,7 @@ const MARKET_TO_STAT: Record<string, string> = {
   player_reception_yds: "stat_rec_yds", player_receptions: "stat_rec",
   player_goals: "stat_goals", player_shots_on_goal: "stat_sog",
   player_shots: "stat_sog", player_shots_on_target: "stat_sog",
-  batter_hits: "stat_h", batter_total_bases: "stat_h", batter_rbis: "stat_rbi",
+  batter_hits: "stat_h", batter_total_bases: "stat_stl", batter_rbis: "stat_rbi",
 };
 
 const MARKET_LABELS: Record<string, string> = {
@@ -694,6 +694,19 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
         >
           ?
         </button>
+        <button
+          onClick={() => {
+            const header = "League\tStat\tModel\tBets\tWin%\tFlat ROI\tFlat BR%\tFlat PnL\t½K BR%\tFull K BR%";
+            const lines = rows.map((r) =>
+              `${LEAGUE_LABELS[r.league] ?? r.league}\t${r.market === "ALL" ? "ALL" : (MARKET_LABELS[r.market] ?? r.market)}\t${r.model}\t${r.bets}\t${(r.winRate * 100).toFixed(1)}%\t${r.flatRoi >= 0 ? "+" : ""}${r.flatRoi.toFixed(1)}%\t${r.flatBr >= 0 ? "+" : ""}${r.flatBr.toFixed(1)}%\t${r.flatPnl >= 0 ? "+" : ""}${r.flatPnl.toFixed(0)}u\t${r.halfKellyPnl >= 0 ? "+" : ""}${r.halfKellyPnl.toFixed(1)}%\t${r.fullKellyPnl >= 0 ? "+" : ""}${r.fullKellyPnl.toFixed(1)}%`
+            );
+            navigator.clipboard.writeText([header, ...lines].join("\n"));
+          }}
+          className="shrink-0 px-2 py-1 rounded-lg border border-white/10 text-white/30 hover:text-white/60 hover:border-white/20 transition-colors text-[10px]"
+          title="Copy table as tab-separated text"
+        >
+          Copy Table
+        </button>
       </div>
       {showTableInfo && (
         <div className="rounded-lg bg-white/[0.04] border border-white/10 p-3 mb-4 text-[11px] text-white/50 space-y-1.5">
@@ -985,7 +998,7 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
               return (
                 <tr key={i} className={`border-b border-white/5 ${isAll ? "bg-white/[0.03] font-medium" : ""} cursor-pointer hover:bg-white/[0.05]`}
                     onClick={() => setSelectedRow(selectedRow === r ? null : r)}>
-                  <td className="py-1.5 px-2">{isAll ? (LEAGUE_LABELS[r.league] ?? r.league) : ""}</td>
+                  <td className="py-1.5 px-2">{LEAGUE_LABELS[r.league] ?? r.league}</td>
                   <td className="py-1.5 px-2">{isAll ? "ALL" : (MARKET_LABELS[r.market] ?? r.market)}</td>
                   <td className="py-1.5 px-2">
                     <span className={`px-1.5 py-0.5 rounded text-[10px] ${getModelColor(r.model)}`}>{r.model}</span>
@@ -1122,6 +1135,36 @@ function HistoricalBacktest() {
         <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400/80 font-semibold">
           {allBets.length.toLocaleString()} bets · Heuristic Model · Holdout
         </span>
+        {stats && (
+          <button
+            onClick={() => {
+              const lines: string[] = [];
+              lines.push(`Win Rate: ${(stats.wins / stats.total * 100).toFixed(1)}% (${stats.wins}/${stats.total})`);
+              lines.push(`ROI: ${(stats.profit / stats.total * 100).toFixed(1)}% (${stats.profit >= 0 ? "+" : ""}${stats.profit.toFixed(0)}u)`);
+              lines.push("");
+              lines.push("Game#\tWin%\tBets\tROI");
+              Object.entries(stats.byGn).filter(([, d]) => d.total > 0).forEach(([gn, d]) => {
+                lines.push(`G${gn}\t${(d.correct / d.total * 100).toFixed(1)}%\t${d.total}\t${(d.profit / d.total * 100).toFixed(1)}%`);
+              });
+              lines.push("");
+              lines.push("EV Tier\tWin%\tBets\tROI");
+              ["<5%", "5-10%", "10-20%", "20-30%", "30-50%", "≥50%"].forEach((tier) => {
+                const d = stats.byEv[tier];
+                if (d?.total > 0) lines.push(`${tier}\t${(d.correct / d.total * 100).toFixed(1)}%\t${d.total}\t${(d.profit / d.total * 100).toFixed(1)}%`);
+              });
+              lines.push("");
+              lines.push("Market\tWin%\tBets\tROI");
+              Object.entries(stats.byMarket).sort((a, b) => b[1].total - a[1].total).forEach(([market, d]) => {
+                lines.push(`${MARKET_LABELS[market] ?? market}\t${(d.correct / d.total * 100).toFixed(1)}%\t${d.total}\t${(d.profit / d.total * 100).toFixed(1)}%`);
+              });
+              navigator.clipboard.writeText(lines.join("\n"));
+            }}
+            className="shrink-0 px-2 py-1 rounded-lg border border-white/10 text-white/30 hover:text-white/60 hover:border-white/20 transition-colors text-[10px]"
+            title="Copy backtest summary"
+          >
+            Copy
+          </button>
+        )}
       </div>
       <p className="text-[11px] text-white/40 mb-4">
         Results from the heuristic EV model on holdout data. See League/Stat Breakdown below for all model comparisons.
@@ -1323,12 +1366,13 @@ interface StoredPrediction {
   away_team?: string | null;
 }
 
-function useModelPredictions(selectedModel: string) {
+/** Fetch ALL model predictions across all leagues and models */
+function useAllModelPredictions() {
   return useQuery<StoredPrediction[]>({
-    queryKey: ["model-predictions", selectedModel],
+    queryKey: ["all-model-predictions"],
     queryFn: async () => {
-      // Fetch predictions for all leagues for the selected model
-      const predKeys = BACKTEST_LEAGUES.map((l) => `${l}_${selectedModel}_predictions`);
+      const MODELS = ["model_c", "model_d", "model_e", "model_f"];
+      const predKeys = BACKTEST_LEAGUES.flatMap((l) => MODELS.map((m) => `${l}_${m}_predictions`));
       const { data, error } = await supabase
         .from("back_in_play_backtest_results")
         .select("league, results")
@@ -1367,7 +1411,6 @@ function useModelPredictions(selectedModel: string) {
         }
       }
 
-      // Sort by commence_time (earliest first), then EV descending
       all.sort((a, b) => {
         const timeA = a.commence_time ?? "9999";
         const timeB = b.commence_time ?? "9999";
@@ -1381,96 +1424,202 @@ function useModelPredictions(selectedModel: string) {
   });
 }
 
-function TodaysBets() {
-  const [selectedModel, setSelectedModel] = useState("model_d");
-  const [maxGn, setMaxGn] = useState(10);
-  const [minEv, setMinEv] = useState(0);
-  const { data: predictions = [], isLoading } = useModelPredictions(selectedModel);
+interface LeagueConfig {
+  model: string;
+  maxGn: number;
+  minEv: number;
+  enabled: boolean;
+}
 
+const DEFAULT_LEAGUE_CONFIG: LeagueConfig = { model: "model_d", maxGn: 10, minEv: 0, enabled: true };
+const MODEL_CONFIG_PASSWORD = "sonic_77";
+
+function TodaysBets() {
+  const { data: allPredictions = [], isLoading } = useAllModelPredictions();
   const MODELS_WITH_BETS = MODEL_SUFFIXES.filter((m) => m.suffix.includes("model_"));
 
+  // Per-league configs — loaded from Supabase
+  const [leagueConfigs, setLeagueConfigs] = useState<Record<string, LeagueConfig>>(() => {
+    const init: Record<string, LeagueConfig> = {};
+    for (const l of BACKTEST_LEAGUES) init[l] = { ...DEFAULT_LEAGUE_CONFIG };
+    return init;
+  });
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savePassword, setSavePassword] = useState("");
+  const [showSavePrompt, setShowSavePrompt] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  // Load saved configs from Supabase on mount
+  useEffect(() => {
+    supabase.from("back_in_play_app_config")
+      .select("value")
+      .eq("key", "model_league_configs")
+      .single()
+      .then(({ data }) => {
+        if (data?.value && typeof data.value === "object") {
+          setLeagueConfigs((prev) => {
+            const merged = { ...prev };
+            for (const [league, cfg] of Object.entries(data.value as Record<string, LeagueConfig>)) {
+              if (merged[league]) merged[league] = { ...DEFAULT_LEAGUE_CONFIG, ...cfg };
+            }
+            return merged;
+          });
+        }
+        setConfigLoaded(true);
+      });
+  }, []);
+
+  const updateLeague = (league: string, update: Partial<LeagueConfig>) => {
+    setLeagueConfigs((prev) => ({ ...prev, [league]: { ...prev[league], ...update } }));
+  };
+
+  // Save configs to Supabase
+  const handleSave = async () => {
+    if (savePassword !== MODEL_CONFIG_PASSWORD) {
+      setSaveMsg("Wrong password");
+      setTimeout(() => setSaveMsg(null), 2000);
+      return;
+    }
+    setSaving(true);
+    const { error } = await supabase.from("back_in_play_app_config")
+      .upsert({ key: "model_league_configs", value: leagueConfigs, updated_at: new Date().toISOString() });
+    setSaving(false);
+    setShowSavePrompt(false);
+    setSavePassword("");
+    setSaveMsg(error ? "Save failed" : "Saved!");
+    setTimeout(() => setSaveMsg(null), 2000);
+  };
+
+  // Filter predictions based on per-league configs
   const filtered = useMemo(() => {
-    return predictions.filter((p) => {
-      if (p.game_number_back > maxGn) return false;
-      if (minEv > 0 && Math.abs(p.ev) < minEv) return false;
+    return allPredictions.filter((p) => {
+      const cfg = leagueConfigs[p.league];
+      if (!cfg || !cfg.enabled) return false;
+      if (p.model !== cfg.model) return false;
+      if (p.game_number_back > cfg.maxGn) return false;
+      if (cfg.minEv > 0 && Math.abs(p.ev) < cfg.minEv) return false;
       return true;
     });
-  }, [predictions, maxGn, minEv]);
+  }, [allPredictions, leagueConfigs]);
 
-  if (isLoading) return <div className="text-white/30 text-center py-6">Loading predictions...</div>;
+  if (isLoading || !configLoaded) return <div className="text-white/30 text-center py-6">Loading predictions...</div>;
 
   return (
     <div className="mb-8">
       <h2 className="text-lg font-bold mb-2">Today's & Tomorrow's Model Bets</h2>
       <p className="text-[11px] text-white/40 mb-4">
-        Predictions from the trained LGBM model using the exact same feature engineering as the backtest. Each prediction stores its feature vector for verification.
+        Configure model, games back, and EV threshold per league.
       </p>
 
-      <div className="flex flex-wrap gap-4 mb-4">
-        {/* Model selector */}
-        <div>
-          <p className="text-[11px] text-white/40 mb-2">Model</p>
-          <div className="flex flex-wrap gap-1.5">
-            {MODELS_WITH_BETS.map((m) => {
-              const modelKey = m.suffix.replace(/^_/, "");
-              return (
-                <button key={m.suffix} onClick={() => setSelectedModel(modelKey)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                    selectedModel === modelKey
-                      ? `${m.color} border-current`
-                      : "bg-white/[0.02] text-white/20 border-transparent"
-                  }`}>
-                  {m.label}
+      {/* Per-league config rows — show ALL leagues */}
+      <div className="space-y-3 mb-4">
+        {BACKTEST_LEAGUES.map((league) => {
+          const cfg = leagueConfigs[league];
+          const leagueCount = filtered.filter((p) => p.league === league).length;
+          const hasPredictions = allPredictions.some((p) => p.league === league);
+          return (
+            <div key={league} className={`rounded-xl border p-3 transition-colors ${cfg.enabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
+              <div className="flex items-center gap-3 mb-2">
+                <button onClick={() => updateLeague(league, { enabled: !cfg.enabled })}
+                  className={`w-4 h-4 rounded border transition-colors ${cfg.enabled ? "bg-[#3DFF8F]/30 border-[#3DFF8F]/50" : "bg-white/5 border-white/20"}`}>
+                  {cfg.enabled && <span className="text-[10px] text-[#3DFF8F] flex items-center justify-center">✓</span>}
                 </button>
-              );
-            })}
-          </div>
-        </div>
+                <span className="text-sm font-bold">{LEAGUE_LABELS[league]}</span>
+                <span className="text-[10px] text-white/30">
+                  {hasPredictions ? `${leagueCount} bets` : "no predictions yet"}
+                </span>
+              </div>
 
-        {/* Games back filter */}
-        <div>
-          <p className="text-[11px] text-white/40 mb-2">Max Games Back</p>
-          <div className="flex flex-wrap gap-1.5">
-            {[1, 2, 3, 5, 10].map((gn) => (
-              <button key={gn} onClick={() => setMaxGn(gn)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                  maxGn === gn
-                    ? "bg-[#3DFF8F]/20 text-[#3DFF8F] border-[#3DFF8F]/30"
-                    : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
-                }`}>
-                {gn === 1 ? "G1" : `G1-${gn}`}
-              </button>
-            ))}
-          </div>
-        </div>
+              {cfg.enabled && (
+                <div className="flex flex-wrap gap-3">
+                  {/* Model */}
+                  <div>
+                    <p className="text-[9px] text-white/30 mb-1">Model</p>
+                    <div className="flex gap-1">
+                      {MODELS_WITH_BETS.map((m) => {
+                        const modelKey = m.suffix.replace(/^_/, "");
+                        return (
+                          <button key={m.suffix} onClick={() => updateLeague(league, { model: modelKey })}
+                            className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+                              cfg.model === modelKey ? `${m.color} border border-current` : "bg-white/[0.02] text-white/20 border border-transparent"
+                            }`}>
+                            {m.label.replace("Model ", "")}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
 
-        {/* Min EV filter */}
-        <div>
-          <p className="text-[11px] text-white/40 mb-2">Min EV%</p>
-          <div className="flex flex-wrap gap-1.5">
-            {[0, 5, 10, 15, 20].map((ev) => (
-              <button key={ev} onClick={() => setMinEv(ev)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                  minEv === ev
-                    ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border-[#1C7CFF]/30"
-                    : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
-                }`}>
-                {ev === 0 ? "All" : `≥${ev}%`}
-              </button>
-            ))}
+                  {/* Max Games Back */}
+                  <div>
+                    <p className="text-[9px] text-white/30 mb-1">Max Games</p>
+                    <div className="flex gap-1">
+                      {[1, 2, 3, 5, 10].map((gn) => (
+                        <button key={gn} onClick={() => updateLeague(league, { maxGn: gn })}
+                          className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+                            cfg.maxGn === gn ? "bg-[#3DFF8F]/20 text-[#3DFF8F]" : "bg-white/5 text-white/30"
+                          }`}>
+                          {gn === 1 ? "G1" : `≤${gn}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Min EV */}
+                  <div>
+                    <p className="text-[9px] text-white/30 mb-1">Min EV%</p>
+                    <div className="flex gap-1">
+                      {[0, 5, 10, 15, 20].map((ev) => (
+                        <button key={ev} onClick={() => updateLeague(league, { minEv: ev })}
+                          className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+                            cfg.minEv === ev ? "bg-[#1C7CFF]/20 text-[#1C7CFF]" : "bg-white/5 text-white/30"
+                          }`}>
+                          {ev === 0 ? "All" : `≥${ev}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Save config button */}
+      <div className="flex items-center gap-3 mb-5">
+        {!showSavePrompt ? (
+          <button onClick={() => setShowSavePrompt(true)}
+            className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/10 text-white/50 hover:text-white/80 hover:border-white/20 transition-colors">
+            Save Configuration
+          </button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <input type="password" value={savePassword} onChange={(e) => setSavePassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSave()}
+              placeholder="Password" autoFocus
+              className="px-2 py-1.5 rounded-lg text-[11px] bg-white/5 border border-white/15 text-white/70 placeholder-white/20 w-32 outline-none focus:border-white/30" />
+            <button onClick={handleSave} disabled={saving}
+              className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-[#3DFF8F]/15 border border-[#3DFF8F]/30 text-[#3DFF8F] hover:bg-[#3DFF8F]/25 transition-colors disabled:opacity-50">
+              {saving ? "Saving..." : "Save"}
+            </button>
+            <button onClick={() => { setShowSavePrompt(false); setSavePassword(""); }}
+              className="px-2 py-1.5 text-[10px] text-white/30 hover:text-white/50">Cancel</button>
           </div>
-        </div>
+        )}
+        {saveMsg && <span className={`text-[11px] ${saveMsg === "Saved!" ? "text-[#3DFF8F]" : "text-red-400"}`}>{saveMsg}</span>}
       </div>
 
       {filtered.length === 0 ? (
         <div className="text-white/30 text-center py-8 bg-white/[0.02] rounded-xl">
-          {predictions.length === 0
+          {allPredictions.length === 0
             ? "No predictions stored yet. Run predict_live.py on the droplet to generate."
             : "No predictions match current filters."}
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <p className="text-[10px] text-white/25 mb-2">{filtered.length} bets · Generated {predictions[0]?.predicted_at ? new Date(predictions[0].predicted_at).toLocaleString() : "—"}</p>
+          <p className="text-[10px] text-white/25 mb-2">{filtered.length} bets · Generated {allPredictions[0]?.predicted_at ? new Date(allPredictions[0].predicted_at).toLocaleString() : "—"}</p>
           <table className="w-full text-xs">
             <thead>
               <tr className="text-white/40 border-b border-white/10">

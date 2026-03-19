@@ -19,25 +19,7 @@ from pathlib import Path
 
 import requests
 
-# ─── Env & Supabase ──────────────────────────────────────────────────────────
-
-def load_env():
-    for envfile in ["/root/.daemon-env", ".env", "../.env"]:
-        p = Path(envfile)
-        if p.exists():
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip().strip("'\""))
-
-load_env()
-
-SUPA_URL = os.environ.get("SUPABASE_URL", "")
-SUPA_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-if not SUPA_URL or not SUPA_KEY:
-    print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY", flush=True)
-    sys.exit(1)
+from db_writer import pg_upsert, SB_URL as SUPA_URL, SB_KEY as SUPA_KEY
 
 SB_HEADERS = {
     "apikey": SUPA_KEY,
@@ -84,40 +66,6 @@ def sb_get_all(table, params=""):
         offset += page_size
     return rows
 
-
-def sb_upsert(table, rows, conflict="player_id,game_date"):
-    if not rows:
-        return
-    # Dedup by conflict keys
-    keys = conflict.split(",")
-    seen = set()
-    unique = []
-    for r in rows:
-        k = tuple(r.get(c) for c in keys)
-        if k not in seen:
-            seen.add(k)
-            unique.append(r)
-    rows = unique
-
-    hdrs = {
-        **SB_HEADERS,
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates,return=minimal",
-    }
-    url = f"{SUPA_URL}/rest/v1/{table}?on_conflict={conflict}"
-    # Batch in chunks of 200
-    for i in range(0, len(rows), 200):
-        batch = rows[i:i + 200]
-        for attempt in range(3):
-            try:
-                r = requests.post(url, json=batch, headers=hdrs, timeout=120)
-                r.raise_for_status()
-                break
-            except requests.exceptions.HTTPError:
-                if r.status_code in (502, 503, 429) and attempt < 2:
-                    time.sleep(5 * (attempt + 1))
-                    continue
-                raise
 
 
 # ─── Name normalization ───────────────────────────────────────────────────────
@@ -332,7 +280,7 @@ def main():
 
         if all_rows:
             try:
-                sb_upsert("back_in_play_player_game_logs", all_rows)
+                pg_upsert("back_in_play_player_game_logs", all_rows, conflict_cols=["player_id", "game_date"])
                 total_logs += len(all_rows)
                 print(f"  [{idx+1}] {pname}: {len(all_rows)} logs (NHL ID {nhl_pid})", flush=True)
             except Exception as e:

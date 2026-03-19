@@ -43,13 +43,38 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 }
 
 // --- Supabase helpers ---
+const SB_DELAY_MS = 100; // throttle requests to avoid pool exhaustion
+let _lastSbCall = 0;
+
 async function sbGet(table, params = "") {
+  // Rate-limit: ensure at least SB_DELAY_MS between requests
+  const now = Date.now();
+  const wait = SB_DELAY_MS - (now - _lastSbCall);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  _lastSbCall = Date.now();
+
   const url = `${SUPABASE_URL}/rest/v1/${table}?${params}`;
-  const resp = await fetch(url, {
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-  });
-  if (!resp.ok) throw new Error(`Supabase ${table}: ${resp.status}`);
-  return resp.json();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const resp = await fetch(url, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+      });
+      if (!resp.ok) {
+        if (resp.status === 429 || resp.status >= 500) {
+          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+          continue;
+        }
+        throw new Error(`Supabase ${table}: ${resp.status}`);
+      }
+      return resp.json();
+    } catch (e) {
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+        continue;
+      }
+      throw e;
+    }
+  }
 }
 
 // --- HTML helpers ---

@@ -91,7 +91,7 @@ def fetch_props(sport_key: str, event_id: str, markets: list[str], regions: str 
     return r.json()
 
 
-def extract_props_from_odds(odds_data: dict, event_id: str, game_date: str, league_slug: str) -> list[dict]:
+def extract_props_from_odds(odds_data: dict, event_id: str, game_date: str, league_slug: str, commence_time: str | None = None, home_team: str | None = None, away_team: str | None = None) -> list[dict]:
     """Extract player prop rows from Odds API response."""
     rows = []
     snapshot = datetime.now(timezone.utc).isoformat()
@@ -152,6 +152,9 @@ def extract_props_from_odds(odds_data: dict, event_id: str, game_date: str, leag
                 "event_id": event_id,
                 "game_date": game_date,
                 "snapshot_time": snapshot,
+                "commence_time": commence_time,
+                "home_team": home_team,
+                "away_team": away_team,
             })
 
     return rows
@@ -214,7 +217,7 @@ def main():
             if not odds:
                 continue
 
-            rows = extract_props_from_odds(odds, eid, game_date, league_slug)
+            rows = extract_props_from_odds(odds, eid, game_date, league_slug, commence_time=ct_str or None, home_team=event.get("home_team"), away_team=event.get("away_team"))
             if rows:
                 # Upsert to preserve historical props while updating current ones
                 for i in range(0, len(rows), 100):

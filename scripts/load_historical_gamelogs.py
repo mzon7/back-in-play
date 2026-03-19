@@ -30,29 +30,14 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-# ─── Env & Supabase ──────────────────────────────────────────────────────────
-
-def load_env():
-    for envfile in ["/root/.daemon-env", ".env", "../.env"]:
-        p = Path(envfile)
-        if p.exists():
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip().strip("'\""))
-
-load_env()
-
-SB_URL = os.environ.get("SUPABASE_URL", "")
-SB_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-if not SB_URL or not SB_KEY:
-    print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
-    sys.exit(1)
+from db_writer import pg_upsert
 
 USER_AGENT = "Mozilla/5.0 (compatible)"
 
+# ─── Supabase read helpers (kept — reads via REST are fine) ──────────────────
+
 def sb_get(table, params=""):
+    from db_writer import SB_URL, SB_KEY
     url = SB_URL + "/rest/v1/" + table + "?" + params
     hdrs = {"apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY}
     try:
@@ -62,51 +47,6 @@ def sb_get(table, params=""):
     except Exception as e:
         print(f"  [SB GET ERR] {table}: {e}", flush=True)
         return []
-
-def sb_upsert(table, rows, conflict=""):
-    if not rows:
-        return 0
-    if conflict:
-        keys = conflict.split(",")
-        seen = set()
-        unique = []
-        for r in rows:
-            k = tuple(r.get(c) for c in keys)
-            if k not in seen:
-                seen.add(k)
-                unique.append(r)
-        rows = unique
-
-    hdrs = {
-        "apikey": SB_KEY,
-        "Authorization": "Bearer " + SB_KEY,
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal,resolution=merge-duplicates",
-    }
-    url = SB_URL + "/rest/v1/" + table
-    if conflict:
-        url += "?on_conflict=" + conflict
-    total = 0
-    for i in range(0, len(rows), 200):
-        batch = rows[i:i + 200]
-        try:
-            req = urllib.request.Request(url, data=json.dumps(batch).encode(),
-                                        headers=hdrs, method="POST")
-            resp = urllib.request.urlopen(req, timeout=120)
-            resp.read()  # drain response
-            total += len(batch)
-        except Exception as e:
-            # Smaller batch fallback
-            for j in range(0, len(batch), 20):
-                mini = batch[j:j + 20]
-                try:
-                    req2 = urllib.request.Request(url, data=json.dumps(mini).encode(),
-                                                  headers=hdrs, method="POST")
-                    urllib.request.urlopen(req2, timeout=60).read()
-                    total += len(mini)
-                except Exception:
-                    pass
-    return total
 
 def fetch_csv(url):
     """Download a CSV and return parsed rows."""
@@ -267,7 +207,7 @@ def load_nba(league_id):
 
         # Upsert in batches
         if db_rows:
-            n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+            n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
             total_loaded += n
             print(f"  Upserted {n} rows", flush=True)
 
@@ -346,7 +286,7 @@ def load_nfl(league_id):
         matched += 1
 
     if db_rows:
-        n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+        n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
         print(f"  Upserted {n} rows", flush=True)
     else:
         n = 0
@@ -429,14 +369,14 @@ def load_nhl(league_id):
             total_matched += 1
 
             if len(db_rows) >= 500:
-                n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+                n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
                 total_loaded += n
                 db_rows = []
                 if total_loaded % 10000 < 500:
                     print(f"  {total_loaded} loaded so far...", flush=True)
 
     if db_rows:
-        n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+        n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
         total_loaded += n
 
     print(f"\nNHL: {total_loaded} game logs loaded, {total_matched} matched, {len(unmatched)} unmatched", flush=True)
@@ -576,7 +516,7 @@ def load_nhl_api(league_id):
             time.sleep(0.3)
 
         if db_rows:
-            n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+            n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
             total_loaded += n
             if total_loaded % 500 < len(db_rows):
                 print(f"  [{i + 1}/{len(missing)}] {clean_name}: {len(db_rows)} games loaded", flush=True)
@@ -648,7 +588,7 @@ def load_epl(league_id):
             total_matched += 1
 
         if db_rows:
-            n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+            n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
             total_loaded += n
             print(f"  {season_str}: upserted {n} rows", flush=True)
 
@@ -789,12 +729,12 @@ def load_mlb(league_id):
 
             # Batch upsert every 500 rows to limit memory
             if len(db_rows) >= 500:
-                n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+                n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
                 total_loaded += n
                 db_rows = []
 
         if db_rows:
-            n = sb_upsert("back_in_play_player_game_logs", db_rows, conflict="player_id,game_date")
+            n = pg_upsert("back_in_play_player_game_logs", db_rows, conflict_cols=["player_id", "game_date"])
             total_loaded += n
         # Free memory for this year
         del rows, db_rows
