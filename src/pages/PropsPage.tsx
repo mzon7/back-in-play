@@ -1616,7 +1616,7 @@ export default function PropsPage() {
   const [leagueFilter, setLeagueFilter] = useState<string>(
     qLeague && LEAGUE_ORDER.includes(qLeague) ? qLeague : "all"
   );
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("fanduel");
   const [statFilter, setStatFilter] = useState<string>("all");
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "tomorrow">("all");
   const [sortMode, setSortMode] = useState<SortMode>(
@@ -1766,6 +1766,13 @@ export default function PropsPage() {
 
   // Get unique sources
   const activeSources = Array.from(new Set(players.flatMap((p) => p.props.map((pr) => pr.source)))).filter(Boolean);
+
+  // Fall back to "all" if selected source has no data
+  useEffect(() => {
+    if (sourceFilter !== "all" && players.length > 0 && !players.some((p) => p.props.some((pr) => pr.source === sourceFilter))) {
+      setSourceFilter("all");
+    }
+  }, [players, sourceFilter]);
 
   // Get active stat markets for filter pills
   const activeMarkets = new Set(players.flatMap((p) => p.props.map((pr) => pr.market)));
@@ -2012,9 +2019,11 @@ export default function PropsPage() {
 
         {/* Source tabs — only show when multiple sources have data for filtered players */}
         {(() => {
-          const sourcesWithData = activeSources.filter((src) =>
-            filtered.some((p) => p.props.some((pr) => pr.source === src))
-          );
+          const MIN_SOURCE_PLAYERS = 3;
+          const sourcesWithData = activeSources.filter((src) => {
+            const playerCount = filtered.filter((p) => p.props.some((pr) => pr.source === src)).length;
+            return playerCount >= MIN_SOURCE_PLAYERS;
+          });
           if (sourcesWithData.length <= 1) return null;
           return (
             <div className="flex gap-1 mb-3">
