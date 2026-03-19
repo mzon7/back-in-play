@@ -406,13 +406,24 @@ function usePropsWithPlayers() {
         const avg5 = computeAvg(preInjuryGames, 5);
         const avg10 = computeAvg(preInjuryGames, 10);
 
-        // Post-return games (after return date, fallback to injury date)
+        // Post-return games: use whichever is earlier — return_date or the first
+        // game after the injury date — since return_date can lag behind actual appearances
         let postReturnGames: any[] = [];
         const returnDate = injury?.return_date ?? injuryDate;
-        if (returnDate) {
-          postReturnGames = allGames
-            .filter((g: any) => g.game_date > returnDate)
-            .sort((a: any, b: any) => b.game_date.localeCompare(a.game_date));
+        if (injuryDate) {
+          // Find games after the injury date (the player's actual return games)
+          const gamesAfterInjury = allGames
+            .filter((g: any) => g.game_date > injuryDate)
+            .sort((a: any, b: any) => a.game_date.localeCompare(b.game_date));
+          // Use whichever cutoff captures more games (earlier of return_date or first game after injury)
+          const effectiveReturn = returnDate && gamesAfterInjury.length > 0 && gamesAfterInjury[0].game_date < returnDate
+            ? gamesAfterInjury[0].game_date
+            : returnDate;
+          if (effectiveReturn) {
+            postReturnGames = allGames
+              .filter((g: any) => g.game_date >= effectiveReturn)
+              .sort((a: any, b: any) => b.game_date.localeCompare(a.game_date));
+          }
         }
         const gamesBack = postReturnGames.length;
         const avgSinceReturn = gamesBack > 0 ? computeAvg(postReturnGames, gamesBack) : null;
