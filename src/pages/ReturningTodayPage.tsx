@@ -465,12 +465,14 @@ function DashboardCard({ player, multiLeague }: { player: ReturningPlayer; multi
             {showCurve ? "Hide recovery curve ▴" : "View recovery curve ▾"}
           </button>
         )}
-        <Link
-          to={`/props?player=${encodeURIComponent(player.player_name)}`}
-          className="text-[10px] text-white/25 hover:text-white/50 transition-colors"
-        >
-          Props →
-        </Link>
+        {player.next_game_date && (
+          <Link
+            to={`/props?player=${encodeURIComponent(player.player_name)}`}
+            className="text-[10px] text-white/25 hover:text-white/50 transition-colors"
+          >
+            Props →
+          </Link>
+        )}
         <Link
           to={`/player/${player.player_slug}`}
           className="text-[10px] text-white/25 hover:text-white/50 transition-colors"
@@ -482,14 +484,19 @@ function DashboardCard({ player, multiLeague }: { player: ReturningPlayer; multi
       {/* Inline recovery curve */}
       {showCurve && player.curve && (() => {
         const curve = player.curve!;
-        const medians = curve.stat_median_pct ?? {};
-        const baselines = curve.stat_baselines ?? {};
+        const rawMedians = curve.stat_median_pct ?? {};
+        const rawBaselines = curve.stat_baselines ?? {};
+        const medians = typeof rawMedians === "string" ? JSON.parse(rawMedians) : rawMedians;
+        const baselines = typeof rawBaselines === "string" ? JSON.parse(rawBaselines) : rawBaselines;
         const stats = LEAGUE_STATS[player.league_slug] ?? [];
         const gIdx = Math.min(Math.max(player.games_back - 1, 0), 9);
 
-        // Build SVG curve for primary stat
-        const primaryStat = stats[0];
-        const pcts = primaryStat ? (medians[primaryStat] as number[] | undefined) : undefined;
+        // Build SVG curve for primary stat (fallback to composite if primary is all zeros)
+        let pcts: number[] | undefined;
+        for (const s of [...stats, "composite"]) {
+          const arr = medians[s] as number[] | undefined;
+          if (arr && arr.some((v) => v > 0)) { pcts = arr; break; }
+        }
         const points = pcts?.slice(0, 10);
 
         return (

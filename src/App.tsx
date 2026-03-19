@@ -1,7 +1,7 @@
 // @refresh reset
 import React, { Fragment, lazy, Suspense } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { AuthCallback } from "@mzon7/zon-incubator-sdk/auth";
+import { OAuthCallback } from "./components/OAuthCallback";
 import { supabase } from "./lib/supabase";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
@@ -95,7 +95,7 @@ function AppRoutes() {
           <Route path="/" element={<HomePage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
-          <Route path="/auth/callback" element={<AuthCallback supabase={supabase} redirectTo="/" />} />
+          <Route path="/auth/callback" element={<OAuthCallback />} />
 
           <Route path="/recovery-stats" element={<RecoveryStatsPage />} />
           <Route path="/performance-curves" element={<PerformanceCurvesPage />} />

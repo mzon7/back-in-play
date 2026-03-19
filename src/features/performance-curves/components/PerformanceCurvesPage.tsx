@@ -611,11 +611,23 @@ export default function PerformanceCurvesPage() {
     position,
     returnType
   );
-  const { data: positions = [] } = usePositionsWithCurves(league === "all" ? undefined : league);
+  const { data: rawPositions = [] } = usePositionsWithCurves(league === "all" ? undefined : league);
+  // Only show positions that have at least one curve with sample_size >= 30
+  const positions = useMemo(() => {
+    const validBase = curves.filter((c) => isRealInjury(c.injury_type_slug, c.injury_type) && c.sample_size >= 30);
+    return rawPositions.filter((pos) => validBase.some((c) => c.position === pos));
+  }, [rawPositions, curves]);
 
   // Filter out "other" category and require n >= 30
   const filteredCurves = useMemo(() => {
-    const base = curves.filter((c) => isRealInjury(c.injury_type_slug, c.injury_type) && c.sample_size >= 30 && (c.median_pct_recent[0] == null || c.median_pct_recent[0] > 0));
+    let base = curves.filter((c) => isRealInjury(c.injury_type_slug, c.injury_type) && c.sample_size >= 30 && (c.median_pct_recent[0] == null || c.median_pct_recent[0] > 0));
+    // Filter by position if selected
+    if (position !== "all") {
+      const posMatches = base.filter((c) => c.position === position);
+      if (posMatches.length > 0) base = posMatches;
+      // If no position-specific curves, fall back to all-position curves (position = "")
+      else base = base.filter((c) => !c.position);
+    }
     // Deduplicate by injury_type_slug + league_slug (keep highest sample_size)
     const seen = new Map<string, typeof base[0]>();
     for (const c of base) {
@@ -624,7 +636,7 @@ export default function PerformanceCurvesPage() {
       if (!existing || c.sample_size > existing.sample_size) seen.set(key, c);
     }
     return Array.from(seen.values());
-  }, [curves]);
+  }, [curves, position]);
 
   // Auto-scroll to injury from query param after data loads
   useEffect(() => {
