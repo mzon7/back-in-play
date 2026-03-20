@@ -1846,7 +1846,8 @@ export default function PropsPage() {
   }, [players, sourceFilter]);
 
   // Get active stat markets for filter pills
-  const activeMarkets = new Set(players.flatMap((p) => p.props.map((pr) => pr.market)));
+  // Only show stat filters for markets that exist on recently returned players
+  const activeMarkets = new Set(recentlyReturned.flatMap((p) => p.props.map((pr) => pr.market)));
   const activeStatFilters = STAT_FILTERS.filter(
     (f) => f.value === "all" || f.markets.some((m) => activeMarkets.has(m))
   );
