@@ -1727,7 +1727,7 @@ export default function PropsPage() {
   );
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [statFilter, setStatFilter] = useState<string>("all");
-  const [dateFilter, setDateFilter] = useState<"all" | "yesterday" | "today" | "tomorrow">("all");
+  const [dateFilter, setDateFilter] = useState<"yesterday" | "today" | "tomorrow">("today");
   const [sortMode, setSortMode] = useState<SortMode>(
     qSort && ["best", "gap", "early", "drop"].includes(qSort) ? qSort as SortMode : "best"
   );
@@ -1827,6 +1827,13 @@ export default function PropsPage() {
     return { yesterday: dates.has(localYesterdayStr), today: dates.has(localTodayStr), tomorrow: dates.has(localTomorrowStr) };
   }, [players, localYesterdayStr, localTodayStr, localTomorrowStr]);
 
+  // Default to yesterday if no props for today
+  useEffect(() => {
+    if (dateFilter === "today" && !datesWithProps.today && datesWithProps.yesterday) {
+      setDateFilter("yesterday");
+    }
+  }, [datesWithProps, dateFilter]);
+
   // Helper: filter a player's props by current source/stat/date filters
   // When source is "all", deduplicate by market+game_date, preferring consensus > fanduel > other
   const filterProps = useCallback((props: PropItem[]): PropItem[] => {
@@ -1838,7 +1845,6 @@ export default function PropsPage() {
     if (dateFilter === "yesterday") out = out.filter((p) => p.game_date === localYesterdayStr);
     else if (dateFilter === "today") out = out.filter((p) => p.game_date === localTodayStr);
     else if (dateFilter === "tomorrow") out = out.filter((p) => p.game_date === localTomorrowStr);
-    else if (dateFilter === "all") out = out.filter((p) => p.game_date >= localTodayStr); // "All" = today + tomorrow only
     // Deduplicate: keep best source per market+game_date
     if (sourceFilter === "all") {
       const sourcePriority: Record<string, number> = { consensus: 0, fanduel: 1, draftkings: 2, betmgm: 3 };
@@ -2074,14 +2080,6 @@ export default function PropsPage() {
         {/* Date filter toggle */}
         {players.length > 0 && (
           <div className="flex gap-1.5 mb-4">
-            <button
-              onClick={() => setDateFilter("all")}
-              className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
-                dateFilter === "all" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
-              }`}
-            >
-              All
-            </button>
             {datesWithProps.yesterday && (
               <button
                 onClick={() => setDateFilter("yesterday")}
@@ -2092,16 +2090,14 @@ export default function PropsPage() {
                 Yesterday
               </button>
             )}
-            {datesWithProps.today && (
-              <button
-                onClick={() => setDateFilter("today")}
-                className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
-                  dateFilter === "today" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
-                }`}
-              >
-                Today
-              </button>
-            )}
+            <button
+              onClick={() => setDateFilter("today")}
+              className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
+                dateFilter === "today" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
+              }`}
+            >
+              Today {!datesWithProps.today && <span className="text-white/20 ml-1">(no odds yet)</span>}
+            </button>
             {datesWithProps.tomorrow && (
               <button
                 onClick={() => setDateFilter("tomorrow")}
