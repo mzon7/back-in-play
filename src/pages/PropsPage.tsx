@@ -130,9 +130,11 @@ function localToday(): string {
 function gameStatus(commenceTime: string | null | undefined, gameDate: string | undefined): { label: string; started: boolean; soon: boolean; tomorrow: boolean; finished: boolean } {
   const today = localToday();
   const isTomorrow = gameDate != null && gameDate > today;
+  const isYesterday = gameDate != null && gameDate < today;
 
   if (!commenceTime) {
-    return { label: isTomorrow ? "Tomorrow" : "Today", started: false, soon: false, tomorrow: isTomorrow, finished: false };
+    const label = isYesterday ? "Yesterday" : isTomorrow ? "Tomorrow" : "Today";
+    return { label, started: false, soon: false, tomorrow: isTomorrow, finished: isYesterday };
   }
   const ct = new Date(commenceTime);
   const now = new Date();
@@ -140,6 +142,9 @@ function gameStatus(commenceTime: string | null | undefined, gameDate: string | 
     // ~3 hours after tip-off → likely finished
     const hrsSinceStart = (now.getTime() - ct.getTime()) / 3600000;
     if (hrsSinceStart >= 3) {
+      return { label: "Final", started: false, soon: false, tomorrow: false, finished: true };
+    }
+    if (isYesterday) {
       return { label: "Final", started: false, soon: false, tomorrow: false, finished: true };
     }
     return { label: "Live", started: true, soon: false, tomorrow: false, finished: false };
@@ -1833,6 +1838,7 @@ export default function PropsPage() {
     if (dateFilter === "yesterday") out = out.filter((p) => p.game_date === localYesterdayStr);
     else if (dateFilter === "today") out = out.filter((p) => p.game_date === localTodayStr);
     else if (dateFilter === "tomorrow") out = out.filter((p) => p.game_date === localTomorrowStr);
+    else if (dateFilter === "all") out = out.filter((p) => p.game_date >= localTodayStr); // "All" = today + tomorrow only
     // Deduplicate: keep best source per market+game_date
     if (sourceFilter === "all") {
       const sourcePriority: Record<string, number> = { consensus: 0, fanduel: 1, draftkings: 2, betmgm: 3 };
