@@ -1687,7 +1687,7 @@ export default function PropsPage() {
   const [leagueFilter, setLeagueFilter] = useState<string>(
     qLeague && LEAGUE_ORDER.includes(qLeague) ? qLeague : "all"
   );
-  const [sourceFilter, setSourceFilter] = useState<string>("fanduel");
+  const [sourceFilter, setSourceFilter] = useState<string>("consensus");
   const [statFilter, setStatFilter] = useState<string>("all");
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "tomorrow">("all");
   const [sortMode, setSortMode] = useState<SortMode>(
@@ -1805,7 +1805,7 @@ export default function PropsPage() {
       : players.filter((p) => p.league_slug === leagueFilter);
     // Hide players with zero props matching filters, where all lines are null,
     // or whose only props come from minor/unreliable sources
-    const majorSources = new Set(["fanduel", "draftkings", "betmgm", "pointsbet"]);
+    const majorSources = new Set(["consensus", "fanduel", "draftkings", "betmgm", "pointsbet"]);
     list = list.filter((p) => {
       const fp = filterProps(p.props);
       if (fp.length === 0 || !fp.some((pr) => pr.line != null)) return false;
@@ -1838,19 +1838,16 @@ export default function PropsPage() {
   // Get unique sources
   const activeSources = Array.from(new Set(players.flatMap((p) => p.props.map((pr) => pr.source)))).filter(Boolean);
 
-  // Fall back to "all" if selected source has no data
+  // Fall back: consensus → fanduel → all
   useEffect(() => {
     if (sourceFilter !== "all" && players.length > 0 && !players.some((p) => p.props.some((pr) => pr.source === sourceFilter))) {
-      setSourceFilter("all");
+      if (sourceFilter === "consensus" && players.some((p) => p.props.some((pr) => pr.source === "fanduel"))) {
+        setSourceFilter("fanduel");
+      } else {
+        setSourceFilter("all");
+      }
     }
   }, [players, sourceFilter]);
-
-  // Get active stat markets for filter pills
-  // Only show stat filters for markets that exist on recently returned players
-  const activeMarkets = new Set(recentlyReturned.flatMap((p) => p.props.map((pr) => pr.market)));
-  const activeStatFilters = STAT_FILTERS.filter(
-    (f) => f.value === "all" || f.markets.some((m) => activeMarkets.has(m))
-  );
 
   // Helper: get best EV for a player (respecting source/stat filters)
   function getBestEv(p: PropsPlayer): number {
@@ -1902,6 +1899,13 @@ export default function PropsPage() {
     );
     return applySortMode(list);
   }, [filtered, sortMode, curveMap, sourceFilter, statFilter]);
+
+  // Get active stat markets for filter pills
+  // Only show stat filters for markets that exist on recently returned players
+  const activeMarkets = new Set(recentlyReturned.flatMap((p) => p.props.map((pr) => pr.market)));
+  const activeStatFilters = STAT_FILTERS.filter(
+    (f) => f.value === "all" || f.markets.some((m) => activeMarkets.has(m))
+  );
 
   // Players without injury data are excluded — page only shows post-injury signals
 
@@ -2090,7 +2094,7 @@ export default function PropsPage() {
         )}
 
         {/* Source label */}
-        <p className="text-[10px] text-white/20 mb-3">Odds via FanDuel</p>
+        <p className="text-[10px] text-white/20 mb-3">Consensus odds across major sportsbooks</p>
 
 
         {isLoading ? (
