@@ -367,7 +367,7 @@ function usePropsWithPlayers() {
       }
       if (!props || props.length === 0) return [];
 
-      // 2. Group props by player_id (skip nulls)
+      // 2. Group props by player_id initially
       const propsByPlayer = new Map<string, typeof props>();
       for (const p of props) {
         if (!p.player_id) continue;
@@ -376,6 +376,7 @@ function usePropsWithPlayers() {
         propsByPlayer.set(p.player_id, existing);
       }
 
+      // Collect ALL player_ids (including duplicates from different scrapers)
       const playerIds = Array.from(propsByPlayer.keys());
 
       // 3. Parallel: players (with team+league joins), injuries, game logs
@@ -539,14 +540,51 @@ function usePropsWithPlayers() {
         }
       }
 
+      // Merge duplicate player names (different player_ids from different scrapers)
+      const mergedResult: PropsPlayer[] = [];
+      const seenNames = new Map<string, number>(); // name → index in mergedResult
+      for (const p of result) {
+        const nameLower = p.player_name.toLowerCase();
+        const existingIdx = seenNames.get(nameLower);
+        if (existingIdx != null) {
+          const existing = mergedResult[existingIdx];
+          // Merge props from this duplicate into the existing entry
+          existing.props.push(...p.props);
+          // Prefer the entry that has injury data
+          if (!existing.injury_date && p.injury_date) {
+            existing.player_id = p.player_id;
+            existing.status = p.status;
+            existing.injury_type = p.injury_type;
+            existing.injury_date = p.injury_date;
+            existing.expected_return = p.expected_return;
+            existing.avg5 = p.avg5;
+            existing.avg10 = p.avg10;
+            existing.gamesBack = p.gamesBack;
+            existing.avgSinceReturn = p.avgSinceReturn;
+            existing.headshot_url = p.headshot_url || existing.headshot_url;
+            existing.league_slug = p.league_slug || existing.league_slug;
+            existing.team_name = p.team_name || existing.team_name;
+          }
+          // Prefer non-null game time
+          if (!existing.commence_time && p.commence_time) {
+            existing.commence_time = p.commence_time;
+            existing.home_team = p.home_team;
+            existing.away_team = p.away_team;
+          }
+        } else {
+          seenNames.set(nameLower, mergedResult.length);
+          mergedResult.push(p);
+        }
+      }
+
       // Sort: stars first, then starters, then by name
-      result.sort((a, b) => {
+      mergedResult.sort((a, b) => {
         if (a.is_star !== b.is_star) return a.is_star ? -1 : 1;
         if (a.is_starter !== b.is_starter) return a.is_starter ? -1 : 1;
         return a.player_name.localeCompare(b.player_name);
       });
 
-      return result;
+      return mergedResult;
     },
     staleTime: 5 * 60 * 1000,
   });
