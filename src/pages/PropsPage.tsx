@@ -1827,12 +1827,13 @@ export default function PropsPage() {
     return { yesterday: dates.has(localYesterdayStr), today: dates.has(localTodayStr), tomorrow: dates.has(localTomorrowStr) };
   }, [players, localYesterdayStr, localTodayStr, localTomorrowStr]);
 
-  // Default to yesterday if no props for today
+  // On initial load only, default to yesterday if no props for today
+  const [hasUserChangedDate, setHasUserChangedDate] = useState(false);
   useEffect(() => {
-    if (dateFilter === "today" && !datesWithProps.today && datesWithProps.yesterday) {
+    if (!hasUserChangedDate && dateFilter === "today" && !datesWithProps.today && datesWithProps.yesterday) {
       setDateFilter("yesterday");
     }
-  }, [datesWithProps, dateFilter]);
+  }, [datesWithProps]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Helper: filter a player's props by current source/stat/date filters
   // When source is "all", deduplicate by market+game_date, preferring consensus > fanduel > other
@@ -2082,7 +2083,7 @@ export default function PropsPage() {
           <div className="flex gap-1.5 mb-4">
             {datesWithProps.yesterday && (
               <button
-                onClick={() => setDateFilter("yesterday")}
+                onClick={() => { setHasUserChangedDate(true); setDateFilter("yesterday"); }}
                 className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
                   dateFilter === "yesterday" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
                 }`}
@@ -2091,7 +2092,7 @@ export default function PropsPage() {
               </button>
             )}
             <button
-              onClick={() => setDateFilter("today")}
+              onClick={() => { setHasUserChangedDate(true); setDateFilter("today"); }}
               className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
                 dateFilter === "today" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
               }`}
@@ -2100,7 +2101,7 @@ export default function PropsPage() {
             </button>
             {datesWithProps.tomorrow && (
               <button
-                onClick={() => setDateFilter("tomorrow")}
+                onClick={() => { setHasUserChangedDate(true); setDateFilter("tomorrow"); }}
                 className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
                   dateFilter === "tomorrow" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
                 }`}
