@@ -233,6 +233,42 @@ def main():
 
     print(f"Done: {total_props} props across {total_events} events")
 
+    # Backfill missing commence_time/home_team/away_team from events data
+    # Build event_id → metadata map from all fetched events
+    print("\nBackfilling missing game times...")
+    event_meta = {}
+    for sport_key, league_slug in SPORT_MAP.items():
+        events = fetch_events(sport_key)
+        for e in events:
+            eid = e.get("id", "")
+            ct = e.get("commence_time", "")
+            if eid and ct:
+                event_meta[eid] = {
+                    "commence_time": ct,
+                    "home_team": e.get("home_team"),
+                    "away_team": e.get("away_team"),
+                }
+
+    if event_meta:
+        # Find props with null commence_time for today/tomorrow
+        null_ct = supabase.table("back_in_play_player_props").select(
+            "id, event_id"
+        ).in_("game_date", [today, tomorrow]).is_("commence_time", "null").limit(2000).execute()
+
+        updated = 0
+        for row in null_ct.data or []:
+            meta = event_meta.get(row["event_id"])
+            if meta:
+                supabase.table("back_in_play_player_props").update({
+                    "commence_time": meta["commence_time"],
+                    "home_team": meta["home_team"],
+                    "away_team": meta["away_team"],
+                }).eq("id", row["id"]).execute()
+                updated += 1
+        print(f"  Backfilled {updated} props with game times")
+    else:
+        print("  No event metadata available for backfill")
+
     # Report API usage
     try:
         usage = requests.get(
