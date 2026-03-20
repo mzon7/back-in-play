@@ -122,9 +122,10 @@ def fetch_props_page(sport: str, market: str, date: str, page: int = 1, limit: i
         return None
 
 
-def fetch_all_props(sport: str, market: str, date: str) -> list[dict]:
-    """Fetch all pages of props for a sport/market/date."""
+def fetch_all_props(sport: str, market: str, date: str) -> tuple[list[dict], dict[int, dict]]:
+    """Fetch all pages of props for a sport/market/date. Returns (props, event_map)."""
     all_props = []
+    event_map: dict[int, dict] = {}  # event_id → event metadata
     page = 1
     while True:
         data = fetch_props_page(sport, market, date, page=page)
@@ -134,20 +135,45 @@ def fetch_all_props(sport: str, market: str, date: str) -> list[dict]:
         if not props:
             break
         all_props.extend(props)
+        # Capture events from first page (they're the same across pages)
+        if page == 1:
+            for ev in data.get("events", []):
+                eid = ev.get("id")
+                if eid:
+                    # Parse scheduled time and team info
+                    # home/visitor are abbreviation strings (e.g. "SAC", "PHI")
+                    # Look up full names from participants array if available
+                    home_abbr = ev.get("home", "")
+                    away_abbr = ev.get("visitor", "")
+                    home_name = home_abbr
+                    away_name = away_abbr
+                    for part in ev.get("participants", []):
+                        abbr = part.get("abbr", "")
+                        name = part.get("name", "")
+                        if abbr == home_abbr and name:
+                            home_name = name
+                        elif abbr == away_abbr and name:
+                            away_name = name
+                    event_map[eid] = {
+                        "scheduled": ev.get("scheduled"),
+                        "home_team": home_name,
+                        "away_team": away_name,
+                    }
         pagination = data.get("_pagination", {})
         total_pages = pagination.get("total_pages", 1)
         if page >= total_pages:
             break
         page += 1
         time.sleep(0.3)  # Be polite
-    return all_props
+    return all_props, event_map
 
 
-def extract_rows(props: list[dict], our_market: str, target_market_id: int, league_slug: str, game_date: str) -> list[dict]:
+def extract_rows(props: list[dict], our_market: str, target_market_id: int, league_slug: str, game_date: str, event_map: dict[int, dict] | None = None) -> list[dict]:
     """Convert BettingPros props to our DB rows."""
     rows = []
     seen_keys: set[str] = set()  # Deduplicate by conflict key
     snapshot = datetime.now(timezone.utc).isoformat()
+    event_map = event_map or {}
 
     for prop in props:
         # Only include props matching our target market_id
@@ -183,6 +209,21 @@ def extract_rows(props: list[dict], our_market: str, target_market_id: int, leag
         # Build a deterministic ID
         row_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"bp:{player_name}:{our_market}:{game_date}:consensus"))
 
+        # Get game time from event_map
+        bp_event_id = prop.get("event_id")
+        ev_meta = event_map.get(bp_event_id, {})
+        commence_time = None
+        home_team = ev_meta.get("home_team")
+        away_team = ev_meta.get("away_team")
+        scheduled = ev_meta.get("scheduled")
+        if scheduled:
+            # BettingPros uses "2026-03-19 23:00:00" (UTC) — convert to ISO format
+            try:
+                ct = datetime.strptime(scheduled, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                commence_time = ct.isoformat()
+            except ValueError:
+                pass
+
         rows.append({
             "id": row_id,
             "player_id": player_id,
@@ -192,12 +233,12 @@ def extract_rows(props: list[dict], our_market: str, target_market_id: int, leag
             "over_price": str(over_odds) if over_odds is not None else None,
             "under_price": str(under_odds) if under_odds is not None else None,
             "source": "consensus",
-            "event_id": f"bp_{prop.get('event_id', '')}",
+            "event_id": f"bp_{bp_event_id or ''}",
             "game_date": game_date,
             "snapshot_time": snapshot,
-            "commence_time": None,  # Will be enriched below
-            "home_team": None,
-            "away_team": None,
+            "commence_time": commence_time,
+            "home_team": home_team,
+            "away_team": away_team,
         })
 
     return rows
@@ -257,17 +298,19 @@ def main():
 
             for target_date in [today, tomorrow]:
                 label = "today" if target_date == today else "tomorrow"
-                props = fetch_all_props(sport, bp_market, target_date)
+                props, event_map = fetch_all_props(sport, bp_market, target_date)
 
                 if not props:
                     continue
 
-                rows = extract_rows(props, our_market, bp_market_id, league_slug, target_date)
+                rows = extract_rows(props, our_market, bp_market_id, league_slug, target_date, event_map)
                 if not rows:
                     continue
 
-                # Enrich with game times from existing Odds API props
-                enrich_game_times(rows, target_date)
+                # Fill any remaining missing game times from existing props
+                missing_times = sum(1 for r in rows if not r["commence_time"])
+                if missing_times:
+                    enrich_game_times(rows, target_date)
 
                 # Upsert in batches with retry
                 for i in range(0, len(rows), 100):

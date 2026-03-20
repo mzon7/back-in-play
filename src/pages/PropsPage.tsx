@@ -1032,21 +1032,7 @@ export function PlayerPropCard({ player, sourceFilter, curve, highlighted, statF
                         </p>
                         {isPrimary && <span className="text-[8px] text-blue-400/60 font-bold uppercase tracking-wider bg-blue-400/10 px-1.5 py-0.5 rounded">Primary</span>}
                       </div>
-                      {hasEdge && edge && (
-                        <PremiumGate
-                          contentId={`player-${player.player_id}`}
-                          playerName={player.player_name}
-                          section="prop_direction"
-                          inline
-                          placeholder={
-                            <span className={`${isPrimary ? "text-[11px]" : "text-[10px]"} font-bold text-white/40`}>OVER</span>
-                          }
-                        >
-                          <span className={`${isPrimary ? "text-[11px]" : "text-[10px]"} font-bold ${edge.color}`}>
-                            {ev!.recommendation}
-                          </span>
-                        </PremiumGate>
-                      )}
+                      {/* Direction shown inside the unified PremiumGate below */}
                     </div>
 
                     {/* Market vs Model */}
@@ -1059,9 +1045,10 @@ export function PlayerPropCard({ player, sourceFilter, curve, highlighted, statF
                         <PremiumGate
                           contentId={`player-${player.player_id}`}
                           playerName={player.player_name}
-                          section="prop_model"
+                          section="prop_signal"
                           placeholder={
                             <div className="flex items-baseline gap-3">
+                              <span className={`${isPrimary ? "text-[11px]" : "text-[10px]"} font-bold text-white/40`}>OVER</span>
                               <div className="text-right">
                                 <p className="text-[9px] text-white/30">Model</p>
                                 <p className={`${isPrimary ? "text-xl" : "text-base"} font-bold text-white/70 tabular-nums`}>24.5</p>
@@ -1074,6 +1061,11 @@ export function PlayerPropCard({ player, sourceFilter, curve, highlighted, statF
                           }
                         >
                           <div className="flex items-baseline gap-3">
+                            {hasEdge && edge && ev.recommendation && (
+                              <span className={`${isPrimary ? "text-[11px]" : "text-[10px]"} font-bold ${edge.color}`}>
+                                {ev.recommendation}
+                              </span>
+                            )}
                             <div className="text-right">
                               <p className="text-[9px] text-white/30">Model</p>
                               <p className={`${isPrimary ? "text-xl" : "text-base"} font-bold text-white/70 tabular-nums`}>{ev.expectedCombined.toFixed(1)}</p>
@@ -1311,19 +1303,7 @@ function CompactPlayerRow({
                   <div className="flex items-center gap-1.5">
                     <span className="text-[9px] text-white/25">Line</span>
                     <span className="text-[13px] font-bold text-white tabular-nums">{bestProp.line}</span>
-                    {bestEv?.recommendation ? (
-                      <PremiumGate
-                        contentId={`player-${player.player_id}`}
-                        playerName={player.player_name}
-                        section="compact_direction"
-                        inline
-                        placeholder={<span className="text-[11px] font-bold text-white/40">OVER</span>}
-                      >
-                        <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
-                          {bestEv.recommendation}
-                        </span>
-                      </PremiumGate>
-                    ) : (
+                    {!bestEv?.recommendation && (
                       <span className="text-[9px] text-white/20">No signal</span>
                     )}
                   </div>
@@ -1332,18 +1312,31 @@ function CompactPlayerRow({
                   <PremiumGate
                     contentId={`player-${player.player_id}`}
                     playerName={player.player_name}
-                    section="compact_model"
+                    section="compact_signal"
                     inline
-                    placeholder={<span className="text-[10px] text-white/40 tabular-nums">24.5</span>}
+                    placeholder={
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-bold text-white/40">OVER</span>
+                        <span className="text-[10px] text-white/40 tabular-nums">24.5</span>
+                        <span className="text-[10px] font-semibold text-green-400/40">+8%</span>
+                      </div>
+                    }
                   >
-                    <div className="text-right">
-                      <span className="text-[9px] text-white/25">Model</span>
-                      <p className="text-[12px] font-bold text-white/60 tabular-nums">{bestEv.expectedCombined.toFixed(1)}</p>
+                    <div className="flex items-center gap-2">
+                      {bestEv.recommendation && (
+                        <span className={`text-[11px] font-bold ${isOver ? "text-green-400" : "text-red-400"}`}>
+                          {bestEv.recommendation}
+                        </span>
+                      )}
+                      <div className="text-right">
+                        <span className="text-[9px] text-white/25">Model</span>
+                        <p className="text-[12px] font-bold text-white/60 tabular-nums">{bestEv.expectedCombined.toFixed(1)}</p>
+                      </div>
+                      {edge && (
+                        <span className={`text-[10px] font-semibold ${edge.color}`}>{edge.text}</span>
+                      )}
                     </div>
                   </PremiumGate>
-                )}
-                {edge && (
-                  <span className={`text-[10px] font-semibold ${edge.color}`}>{edge.text}</span>
                 )}
               </>
             )}
@@ -1687,7 +1680,7 @@ export default function PropsPage() {
   const [leagueFilter, setLeagueFilter] = useState<string>(
     qLeague && LEAGUE_ORDER.includes(qLeague) ? qLeague : "all"
   );
-  const [sourceFilter, setSourceFilter] = useState<string>("consensus");
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [statFilter, setStatFilter] = useState<string>("all");
   const [dateFilter, setDateFilter] = useState<"all" | "today" | "tomorrow">("all");
   const [sortMode, setSortMode] = useState<SortMode>(
@@ -1788,6 +1781,7 @@ export default function PropsPage() {
   }, [players, localTodayStr, localTomorrowStr]);
 
   // Helper: filter a player's props by current source/stat/date filters
+  // When source is "all", deduplicate by market+game_date, preferring consensus > fanduel > other
   const filterProps = useCallback((props: PropItem[]): PropItem[] => {
     let out = sourceFilter === "all" ? props : props.filter((p) => p.source === sourceFilter);
     if (statFilter && statFilter !== "all") {
@@ -1796,6 +1790,19 @@ export default function PropsPage() {
     }
     if (dateFilter === "today") out = out.filter((p) => p.game_date === localTodayStr);
     else if (dateFilter === "tomorrow") out = out.filter((p) => p.game_date === localTomorrowStr);
+    // Deduplicate: keep best source per market+game_date
+    if (sourceFilter === "all") {
+      const sourcePriority: Record<string, number> = { consensus: 0, fanduel: 1, draftkings: 2, betmgm: 3 };
+      const best = new Map<string, PropItem>();
+      for (const p of out) {
+        const key = `${p.market}|${p.game_date}`;
+        const existing = best.get(key);
+        if (!existing || (sourcePriority[p.source ?? ""] ?? 99) < (sourcePriority[existing.source ?? ""] ?? 99)) {
+          best.set(key, p);
+        }
+      }
+      out = Array.from(best.values());
+    }
     return out;
   }, [sourceFilter, statFilter, dateFilter, localTodayStr, localTomorrowStr]);
 
@@ -2094,7 +2101,7 @@ export default function PropsPage() {
         )}
 
         {/* Source label */}
-        <p className="text-[10px] text-white/20 mb-3">Consensus odds across major sportsbooks</p>
+        <p className="text-[10px] text-white/20 mb-3">Odds via FanDuel, DraftKings, BetMGM & more</p>
 
 
         {isLoading ? (
