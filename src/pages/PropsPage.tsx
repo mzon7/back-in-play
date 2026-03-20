@@ -339,14 +339,16 @@ function usePropsWithPlayers() {
   const today = localToday();
   const tmrw = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() + 1);
   const tomorrow = `${tmrw.getFullYear()}-${String(tmrw.getMonth() + 1).padStart(2, "0")}-${String(tmrw.getDate()).padStart(2, "0")}`;
+  const yday = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() - 1);
+  const yesterday = `${yday.getFullYear()}-${String(yday.getMonth() + 1).padStart(2, "0")}-${String(yday.getDate()).padStart(2, "0")}`;
   return useQuery<PropsPlayer[]>({
     queryKey: ["bip-props-page", today],
     queryFn: async () => {
-      // 1. Get today's + tomorrow's props; fall back to most recent if none
+      // 1. Get yesterday's + today's + tomorrow's props; fall back to most recent if none
       let { data: props, error: propsErr } = await supabase
         .from("back_in_play_player_props")
         .select("id, player_id, player_name, market, line, over_price, under_price, source, game_date, commence_time, home_team, away_team")
-        .in("game_date", [today, tomorrow])
+        .in("game_date", [yesterday, today, tomorrow])
         .order("game_date", { ascending: true });
       if (propsErr) throw propsErr;
       // If no props for today/tomorrow, get the most recent day that has data
@@ -1720,7 +1722,7 @@ export default function PropsPage() {
   );
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [statFilter, setStatFilter] = useState<string>("all");
-  const [dateFilter, setDateFilter] = useState<"all" | "today" | "tomorrow">("all");
+  const [dateFilter, setDateFilter] = useState<"all" | "yesterday" | "today" | "tomorrow">("all");
   const [sortMode, setSortMode] = useState<SortMode>(
     qSort && ["best", "gap", "early", "drop"].includes(qSort) ? qSort as SortMode : "best"
   );
@@ -1807,16 +1809,18 @@ export default function PropsPage() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Compute local today/tomorrow for date filter
+  // Compute local yesterday/today/tomorrow for date filter
   const localTodayStr = localToday();
   const localTmrw = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() + 1);
   const localTomorrowStr = `${localTmrw.getFullYear()}-${String(localTmrw.getMonth() + 1).padStart(2, "0")}-${String(localTmrw.getDate()).padStart(2, "0")}`;
+  const localYday = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() - 1);
+  const localYesterdayStr = `${localYday.getFullYear()}-${String(localYday.getMonth() + 1).padStart(2, "0")}-${String(localYday.getDate()).padStart(2, "0")}`;
 
   // Which dates actually have props?
   const datesWithProps = useMemo(() => {
     const dates = new Set(players.flatMap((p) => p.props.map((pr) => pr.game_date).filter(Boolean)));
-    return { today: dates.has(localTodayStr), tomorrow: dates.has(localTomorrowStr) };
-  }, [players, localTodayStr, localTomorrowStr]);
+    return { yesterday: dates.has(localYesterdayStr), today: dates.has(localTodayStr), tomorrow: dates.has(localTomorrowStr) };
+  }, [players, localYesterdayStr, localTodayStr, localTomorrowStr]);
 
   // Helper: filter a player's props by current source/stat/date filters
   // When source is "all", deduplicate by market+game_date, preferring consensus > fanduel > other
@@ -1826,7 +1830,8 @@ export default function PropsPage() {
       const sf = STAT_FILTERS.find((f) => f.value === statFilter);
       if (sf && sf.markets.length > 0) out = out.filter((p) => sf.markets.includes(p.market));
     }
-    if (dateFilter === "today") out = out.filter((p) => p.game_date === localTodayStr);
+    if (dateFilter === "yesterday") out = out.filter((p) => p.game_date === localYesterdayStr);
+    else if (dateFilter === "today") out = out.filter((p) => p.game_date === localTodayStr);
     else if (dateFilter === "tomorrow") out = out.filter((p) => p.game_date === localTomorrowStr);
     // Deduplicate: keep best source per market+game_date
     if (sourceFilter === "all") {
@@ -1842,7 +1847,7 @@ export default function PropsPage() {
       out = Array.from(best.values());
     }
     return out;
-  }, [sourceFilter, statFilter, dateFilter, localTodayStr, localTomorrowStr]);
+  }, [sourceFilter, statFilter, dateFilter, localYesterdayStr, localTodayStr, localTomorrowStr]);
 
   const filtered = useMemo(() => {
     let list = leagueFilter === "all"
@@ -2069,8 +2074,18 @@ export default function PropsPage() {
                 dateFilter === "all" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
               }`}
             >
-              All games
+              All
             </button>
+            {datesWithProps.yesterday && (
+              <button
+                onClick={() => setDateFilter("yesterday")}
+                className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
+                  dateFilter === "yesterday" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
+                }`}
+              >
+                Yesterday
+              </button>
+            )}
             {datesWithProps.today && (
               <button
                 onClick={() => setDateFilter("today")}
@@ -2081,14 +2096,16 @@ export default function PropsPage() {
                 Today
               </button>
             )}
-            <button
-              onClick={() => setDateFilter("tomorrow")}
-              className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
-                dateFilter === "tomorrow" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
-              }`}
-            >
-              Tomorrow {!datesWithProps.tomorrow && <span className="text-white/20 ml-1">(no odds yet)</span>}
-            </button>
+            {datesWithProps.tomorrow && (
+              <button
+                onClick={() => setDateFilter("tomorrow")}
+                className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
+                  dateFilter === "tomorrow" ? "bg-white/12 text-white" : "bg-white/5 text-white/35 hover:text-white/55"
+                }`}
+              >
+                Tomorrow
+              </button>
+            )}
           </div>
         )}
 
