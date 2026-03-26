@@ -213,6 +213,81 @@ function usePlayerAllProps(playerId: string | null) {
   });
 }
 
+/** Fetch game scores + odds + ESPN event_id for a player's team, keyed by game_date */
+function usePlayerGameContext(playerTeamName: string | null, leagueSlug: string | null) {
+  return useQuery({
+    queryKey: ["player-game-context", playerTeamName, leagueSlug],
+    queryFn: async () => {
+      if (!playerTeamName || !leagueSlug) return new Map<string, any>();
+
+      // Load games where this team is home or away
+      let allGames: any[] = [];
+      let offset = 0;
+      const PAGE = 1000;
+      while (true) {
+        const { data } = await supabase
+          .from("back_in_play_games")
+          .select("game_date, home_team, away_team, home_score, away_score, event_id")
+          .eq("league_slug", leagueSlug)
+          .or(`home_team.eq.${playerTeamName},away_team.eq.${playerTeamName}`)
+          .range(offset, offset + PAGE - 1);
+        if (!data || data.length === 0) break;
+        allGames.push(...data);
+        if (data.length < PAGE) break;
+        offset += PAGE;
+      }
+
+      // Load odds for this sport
+      const sportKey: Record<string, string> = {
+        nba: "basketball_nba", nhl: "icehockey_nhl", nfl: "americanfootball_nfl", mlb: "baseball_mlb",
+      };
+      const sk = sportKey[leagueSlug];
+      let allOdds: any[] = [];
+      if (sk) {
+        offset = 0;
+        while (true) {
+          const { data } = await supabase
+            .from("back_in_play_game_odds")
+            .select("game_date, home_team, away_team, h2h_home_price, h2h_away_price, spread_home_line, total_line, source")
+            .eq("sport_key", sk)
+            .in("source", ["fanduel", "draftkings"])
+            .range(offset, offset + PAGE - 1);
+          if (!data || data.length === 0) break;
+          allOdds.push(...data);
+          if (data.length < PAGE) break;
+          offset += PAGE;
+        }
+      }
+
+      // Index games by date
+      const byDate = new Map<string, any>();
+      for (const g of allGames) {
+        byDate.set(g.game_date, g);
+      }
+
+      // Index odds by date+home (dedup prefer fanduel)
+      const oddsByDate = new Map<string, any>();
+      for (const o of allOdds) {
+        const key = o.game_date;
+        const existing = oddsByDate.get(key);
+        if (!existing || o.source === "fanduel") {
+          oddsByDate.set(key, o);
+        }
+      }
+
+      // Merge
+      const result = new Map<string, any>();
+      for (const [date, game] of byDate) {
+        const odds = oddsByDate.get(date);
+        result.set(date, { ...game, odds });
+      }
+      return result;
+    },
+    enabled: !!playerTeamName && !!leagueSlug,
+    staleTime: 120_000,
+  });
+}
+
 // ─── Data hooks: Team mode ──────────────────────────────────────────────────
 
 function useTeamSearch(query: string) {
@@ -395,6 +470,8 @@ function PlayerMode() {
   const { data: propsMap } = usePlayerAllProps(selectedPlayer?.player_id ?? null);
 
   const leagueSlug: string = (selectedPlayer?.league as any)?.slug ?? "nba";
+  const teamName: string = (selectedPlayer?.team as any)?.team_name ?? null;
+  const { data: gameContext } = usePlayerGameContext(teamName, leagueSlug);
   const statDefs = LEAGUE_STATS[leagueSlug] ?? LEAGUE_STATS.nba;
 
   const seasonSummaries = useMemo(() => {
@@ -521,17 +598,26 @@ function PlayerMode() {
                           <tr className="text-white/20 border-b border-white/[0.06]">
                             <th className="px-3 py-2 text-left font-medium">Date</th>
                             <th className="px-3 py-2 text-left font-medium">Opp</th>
+                            <th className="px-3 py-2 text-center font-medium">Score</th>
                             <th className="px-3 py-2 text-right font-medium">Min</th>
                             {statDefs.map((s) => (
                               <th key={s.key} className="px-3 py-2 text-right font-medium">
                                 {s.label}
                               </th>
                             ))}
+                            <th className="px-2 py-2 text-right font-medium text-white/15">Spread</th>
+                            <th className="px-2 py-2 text-right font-medium text-white/15">Total</th>
+                            <th className="px-2 py-2 text-right font-medium text-white/15">ML</th>
                           </tr>
                         </thead>
                         <tbody>
                           {ss.logs.map((log: any, i: number) => {
                             const dateProps = propsMap?.get(log.game_date) ?? [];
+                            const ctx = gameContext?.get(log.game_date);
+                            const odds = ctx?.odds;
+                            const espnUrl = ctx?.event_id ? `https://www.espn.com/${leagueSlug === "premier-league" ? "soccer" : leagueSlug}/game/_/gameId/${ctx.event_id}` : null;
+                            const scoreText = ctx?.home_score != null ? `${ctx.home_score}-${ctx.away_score}` : null;
+
                             return (
                               <Fragment key={i}>
                                 <tr className="border-b border-white/[0.03] hover:bg-white/[0.02]">
@@ -542,6 +628,14 @@ function PlayerMode() {
                                     )}
                                   </td>
                                   <td className="px-3 py-1.5 text-white/40">{log.opponent || "—"}</td>
+                                  <td className="px-3 py-1.5 text-center font-mono">
+                                    {espnUrl && scoreText ? (
+                                      <a href={espnUrl} target="_blank" rel="noopener noreferrer"
+                                         className="text-blue-400/60 hover:text-blue-400 text-[10px]">{scoreText}</a>
+                                    ) : scoreText ? (
+                                      <span className="text-white/30 text-[10px]">{scoreText}</span>
+                                    ) : <span className="text-white/15 text-[10px]">—</span>}
+                                  </td>
                                   <td className="px-3 py-1.5 text-right text-white/40 font-mono">
                                     {log.minutes != null ? Math.round(log.minutes) : "—"}
                                   </td>
@@ -550,6 +644,15 @@ function PlayerMode() {
                                       {log[s.key] != null ? log[s.key] : "—"}
                                     </td>
                                   ))}
+                                  <td className="px-2 py-1.5 text-right font-mono text-white/20 text-[10px]">
+                                    {odds?.spread_home_line != null ? fmtOdds(odds.spread_home_line) : "—"}
+                                  </td>
+                                  <td className="px-2 py-1.5 text-right font-mono text-white/20 text-[10px]">
+                                    {odds?.total_line ?? "—"}
+                                  </td>
+                                  <td className="px-2 py-1.5 text-right font-mono text-white/20 text-[10px]">
+                                    {odds?.h2h_home_price != null ? fmtOdds(odds.h2h_home_price) : "—"}
+                                  </td>
                                 </tr>
                                 {dateProps.length > 0 && <PropsSubRow props={dateProps} />}
                               </Fragment>
@@ -1264,7 +1367,118 @@ function CoverageMode() {
         )}
       </div>
 
+      {/* Player Stats Coverage */}
+      <div className="mb-8">
+        <h2 className="text-sm font-bold text-white/70 mb-2">Player Stats Coverage</h2>
+        <PlayerStatsCoverage />
+      </div>
+
     </>
+  );
+}
+
+/** Player stats coverage: pick league+season, see all players with game counts */
+function PlayerStatsCoverage() {
+  const [league, setLeague] = useState("nba");
+  const [season, setSeason] = useState(2024);
+
+  const expected: Record<string, number> = { nba: 82, nhl: 82, nfl: 17, mlb: 162 };
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["player-stats-coverage", league, season],
+    queryFn: async () => {
+      // Get all player game logs for this league+season, count per player
+      let allLogs: any[] = [];
+      let offset = 0;
+      const PAGE = 1000;
+      while (true) {
+        const { data: rows } = await supabase
+          .from("back_in_play_player_game_logs")
+          .select("player_id")
+          .eq("league_slug", league)
+          .eq("season", season)
+          .range(offset, offset + PAGE - 1);
+        if (!rows || rows.length === 0) break;
+        allLogs.push(...rows);
+        if (rows.length < PAGE) break;
+        offset += PAGE;
+      }
+      // Count per player
+      const counts: Record<string, number> = {};
+      for (const r of allLogs) {
+        counts[r.player_id] = (counts[r.player_id] ?? 0) + 1;
+      }
+      // Get player names
+      const playerIds = Object.keys(counts);
+      if (playerIds.length === 0) return [];
+      const names: Record<string, string> = {};
+      // Fetch in chunks
+      for (let i = 0; i < playerIds.length; i += 50) {
+        const chunk = playerIds.slice(i, i + 50);
+        const { data: players } = await supabase
+          .from("back_in_play_players")
+          .select("player_id, player_name")
+          .in("player_id", chunk);
+        if (players) {
+          for (const p of players) names[p.player_id] = p.player_name;
+        }
+      }
+      return playerIds.map(pid => ({
+        name: names[pid] ?? pid,
+        games: counts[pid],
+        pid,
+      })).sort((a, b) => a.name.localeCompare(b.name));
+    },
+    staleTime: 120_000,
+  });
+
+  const exp = expected[league] ?? 82;
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-3">
+        <select value={league} onChange={e => setLeague(e.target.value)}
+          className="bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/70">
+          <option value="nba">NBA</option>
+          <option value="nhl">NHL</option>
+          <option value="nfl">NFL</option>
+          <option value="mlb">MLB</option>
+        </select>
+        <select value={season} onChange={e => setSeason(parseInt(e.target.value))}
+          className="bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/70">
+          {Array.from({ length: 15 }, (_, i) => 2025 - i).map(yr => (
+            <option key={yr} value={yr}>{yr}-{String(yr + 1).slice(2)}</option>
+          ))}
+        </select>
+        <span className="text-[10px] text-white/30">{data?.length ?? 0} players, exp {exp} GP</span>
+      </div>
+      {isLoading ? (
+        <p className="text-white/30 text-xs animate-pulse">Loading...</p>
+      ) : data && data.length > 0 ? (
+        <div className="overflow-y-auto max-h-[400px] bg-white/[0.02] border border-white/[0.06] rounded-xl">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-[#0a0f1a]">
+              <tr className="text-white/30 border-b border-white/[0.06]">
+                <th className="px-2 py-1.5 text-left font-medium">Player</th>
+                <th className="px-2 py-1.5 text-right font-medium">Games</th>
+                <th className="px-2 py-1.5 text-right font-medium text-white/20">/{exp}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((p, i) => (
+                <tr key={i} className="border-b border-white/[0.02] hover:bg-white/[0.02]">
+                  <td className="px-2 py-0.5 text-white/50">{p.name}</td>
+                  <td className={`px-2 py-0.5 text-right font-mono ${covColor(p.games, exp)}`}>{p.games}</td>
+                  <td className="px-2 py-0.5 text-right font-mono text-white/15">{exp}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-white/20 text-xs">No data for this season</p>
+      )}
+    </div>
   );
 }
 
