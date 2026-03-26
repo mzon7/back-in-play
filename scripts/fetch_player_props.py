@@ -66,10 +66,19 @@ def resolve_player_id(player_name: str, league_slug: str) -> str | None:
     return None
 
 
+CREDIT_FLOOR = 5_000_000
+
+def _check_credits(r):
+    remaining = r.headers.get("x-requests-remaining")
+    if remaining and int(remaining) <= CREDIT_FLOOR:
+        print(f"\n  SAFETY STOP: Credits ({remaining}) at or below {CREDIT_FLOOR:,} floor. Exiting.")
+        import sys; sys.exit(1)
+
 def fetch_events(sport_key: str) -> list:
     """Get upcoming events for a sport."""
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events"
     r = requests.get(url, params={"apiKey": ODDS_API_KEY}, timeout=15)
+    _check_credits(r)
     if r.status_code != 200:
         print(f"  Events API error {r.status_code} for {sport_key}")
         return []
@@ -86,6 +95,7 @@ def fetch_props(sport_key: str, event_id: str, markets: list[str], regions: str 
         "oddsFormat": "american",
     }
     r = requests.get(url, params=params, timeout=15)
+    _check_credits(r)
     if r.status_code != 200:
         return None
     return r.json()

@@ -6,6 +6,11 @@ import { supabase } from "../lib/supabase";
 import { usePerformanceCurves } from "../features/performance-curves/lib/queries";
 import { computeEV, formatEV, parseOdds, oddsToProfit, type EVResult } from "../lib/evModel";
 import type { PerformanceCurve } from "../features/performance-curves/lib/types";
+import { EdgeValidation } from "../components/EdgeValidation";
+import { ModelFilters } from "../components/ModelFilters";
+import { ModelTable } from "../components/ModelTable";
+import { computePEdge, computeStability } from "../lib/modelAnalysisUtils";
+import type { MarketSummary, BacktestSummary, StatRow, OddsMode } from "../lib/modelAnalysisTypes";
 
 const MODEL_ANALYSIS_PASSWORD = "purplecobras";
 
@@ -303,7 +308,7 @@ interface BacktestBet {
   p_over?: number;
 }
 
-type OddsMode = "scrape" | "open" | "close";
+// OddsMode imported from modelAnalysisTypes
 
 /** Get the PnL for a bet based on the selected odds mode.
  * Models C/D: correct/pnl = open, scrape_pnl = scrape, close_pnl = close
@@ -346,6 +351,11 @@ const MODEL_SUFFIXES = [
   { suffix: "_model_d", label: "Model D", color: "bg-emerald-500/10 text-emerald-400/70" },
   { suffix: "_model_e", label: "Model E", color: "bg-rose-500/10 text-rose-400/70" },
   { suffix: "_model_f", label: "Model F", color: "bg-cyan-500/10 text-cyan-400/70" },
+  { suffix: "_model_g", label: "Model G", color: "bg-pink-500/10 text-pink-400/70" },
+  { suffix: "_model_f2", label: "Model F2", color: "bg-sky-500/10 text-sky-400/70" },
+  { suffix: "_model_h", label: "Model H", color: "bg-indigo-500/10 text-indigo-400/70" },
+  { suffix: "_general_a", label: "General A", color: "bg-lime-500/10 text-lime-400/70" },
+  { suffix: "_random", label: "Random", color: "bg-gray-500/10 text-gray-400/70" },
 ] as const;
 const ALL_RESULT_KEYS = BACKTEST_LEAGUES.flatMap((l) =>
   MODEL_SUFFIXES.map((m) => `${l}${m.suffix}`)
@@ -360,38 +370,69 @@ interface ModelMeta {
   total_bets?: number;
 }
 
-function useBacktestBets() {
-  return useQuery<{ bets: BacktestBet[]; byLeague: Record<string, BacktestBet[]>; modelMeta: Record<string, ModelMeta> }>({
-    queryKey: ["backtest-bets-all"],
+// MarketSummary and BacktestSummary imported from modelAnalysisTypes
+
+function useBacktestSummaries() {
+  return useQuery<{ summaries: Record<string, BacktestSummary>; modelMeta: Record<string, ModelMeta> }>({
+    queryKey: ["backtest-summaries-all"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("back_in_play_backtest_results")
-        .select("league, results")
-        .in("league", ALL_RESULT_KEYS);
-      if (error || !data) return { bets: [], byLeague: {}, modelMeta: {} };
-      const allBets: BacktestBet[] = [];
-      const byLeague: Record<string, BacktestBet[]> = {};
+        .select("league, summary")
+        .in("league", ALL_RESULT_KEYS)
+        .not("summary", "is", null);
+      if (error || !data) return { summaries: {}, modelMeta: {} };
+      const summaries: Record<string, BacktestSummary> = {};
       const modelMeta: Record<string, ModelMeta> = {};
       for (const row of data) {
-        const parsed = typeof row.results === "string" ? JSON.parse(row.results) : row.results;
-        const bets: BacktestBet[] = (parsed.bets ?? []).map((b: BacktestBet) => ({ ...b, league: row.league }));
-        // Only include heuristic (no suffix) bets in allBets for the top-level backtest view
-        if (!row.league.includes("_")) {
-          allBets.push(...bets);
-        }
-        byLeague[row.league] = bets;
-        if (parsed.features || parsed.feature_importance) {
+        const s: BacktestSummary = typeof row.summary === "string" ? JSON.parse(row.summary) : row.summary;
+        if (!s) continue;
+        summaries[row.league] = s;
+        if (s.features || s.feature_importance) {
           modelMeta[row.league] = {
-            features: parsed.features ?? [],
-            feature_importance: parsed.feature_importance ?? {},
-            accuracy: parsed.accuracy,
-            auc: parsed.auc,
-            skip_counts: parsed.skip_counts,
-            total_bets: parsed.total_bets,
+            features: s.features ?? [],
+            feature_importance: s.feature_importance ?? {},
+            accuracy: s.accuracy,
+            auc: s.auc,
+            skip_counts: s.skip_counts,
+            total_bets: s.total_bets,
           };
         }
       }
-      return { bets: allBets, byLeague, modelMeta };
+      return { summaries, modelMeta };
+    },
+    staleTime: 60 * 60 * 1000,
+  });
+}
+
+/** Lazy-load bets for a specific league key (for bankroll chart) */
+function useBacktestBetsForLeague(leagueKey: string | null) {
+  return useQuery<BacktestBet[]>({
+    queryKey: ["backtest-bets", leagueKey],
+    enabled: !!leagueKey,
+    queryFn: async () => {
+      if (!leagueKey) return [];
+      const { data, error } = await supabase
+        .from("back_in_play_backtest_results")
+        .select("results")
+        .eq("league", leagueKey)
+        .single();
+      if (error || !data) return [];
+      const parsed = typeof data.results === "string" ? JSON.parse(data.results) : data.results;
+      return (parsed.bets ?? []).map((b: BacktestBet) => ({ ...b, league: leagueKey }));
+    },
+    staleTime: 60 * 60 * 1000,
+  });
+}
+
+// Keep legacy hook for backward compatibility (used by bankroll chart)
+function useBacktestBets() {
+  const { data: summaryData } = useBacktestSummaries();
+  return useQuery<{ bets: BacktestBet[]; byLeague: Record<string, BacktestBet[]>; modelMeta: Record<string, ModelMeta> }>({
+    queryKey: ["backtest-bets-all-stub"],
+    queryFn: async () => {
+      // Return empty bets — summaries are used for the table now
+      return { bets: [], byLeague: {}, modelMeta: summaryData?.modelMeta ?? {} };
     },
     staleTime: 60 * 60 * 1000,
   });
@@ -447,19 +488,11 @@ function kellyProfit(bets: BacktestBet[], fraction: number, mode: OddsMode = "sc
   }, mode);
 }
 
-interface StatRow {
-  league: string;
-  market: string;
-  model: string;
-  bets: number;
-  wins: number;
-  winRate: number;
-  flatPnl: number;      // unit-based PnL (sum of bet outcomes)
-  flatRoi: number;       // unit ROI %
-  flatBr: number;        // bankroll sim return % (bet unitPct% per bet)
-  halfKellyPnl: number;  // half Kelly bankroll sim return %
-  fullKellyPnl: number;  // full Kelly bankroll sim return %
-}
+// StatRow imported from modelAnalysisTypes
+
+// computeStability imported from modelAnalysisUtils
+
+// normalCDF and computePEdge imported from modelAnalysisUtils
 
 function ModelFeatures({ meta }: { meta: ModelMeta }) {
   const sorted = Object.entries(meta.feature_importance).sort((a, b) => b[1] - a[1]);
@@ -572,7 +605,21 @@ function BankrollChart({ bets, unitPct, oddsMode, title, onClose }: {
   );
 }
 
-function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, BacktestBet[]>; modelMeta: Record<string, ModelMeta> }) {
+const FINAL_BETS_PASSWORD = "sonic_77";
+const isLocalhost = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+
+function requireFinalBetsAuth(): boolean {
+  if (isLocalhost) return true;
+  if (sessionStorage.getItem("final_bets_auth") === "1") return true;
+  const pw = prompt("Password required to modify Final Betting Models:");
+  if (pw === FINAL_BETS_PASSWORD) {
+    sessionStorage.setItem("final_bets_auth", "1");
+    return true;
+  }
+  return false;
+}
+
+function LeagueStatTable({ allData, modelMeta, summaries }: { allData: Record<string, BacktestBet[]>; modelMeta: Record<string, ModelMeta>; summaries?: Record<string, BacktestSummary> }) {
   const [evThreshold, setEvThreshold] = useState(0);
   const [selectedModels, setSelectedModels] = useState<string[]>(MODEL_SUFFIXES.map((m) => m.suffix));
   const [showFeatures, setShowFeatures] = useState<string | null>(null);
@@ -582,9 +629,54 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
   const [leagueFilter, setLeagueFilter] = useState<string>("all");
   const [selectedRow, setSelectedRow] = useState<StatRow | null>(null);
   const [maxGnFilter, setMaxGnFilter] = useState(10); // max games back filter
+  const [minGnFilter, setMinGnFilter] = useState(1); // min games back filter (1 = all)
   const [minBetsFilter, setMinBetsFilter] = useState(20); // min bets to show a row
   const [minFlatBr, setMinFlatBr] = useState<number>(0); // min flat BR% filter — default to positive only
+  const [minPEdge, setMinPEdge] = useState(0); // min P(Edge) % filter (0 = all)
+  const [bonfOnly, setBonfOnly] = useState(false); // only show Bonferroni-passing rows
+  const [minSeasonsOk, setMinSeasonsOk] = useState(0); // min profitable seasons (0 = all)
   const [showTableInfo, setShowTableInfo] = useState(false);
+
+  // Final Betting Models
+  interface SavedBet extends StatRow {
+    evMin: number;
+    maxGn: number;
+    minGn: number;
+    season: string;
+    oddsMode: OddsMode;
+  }
+  const [savedBets, setSavedBets] = useState<SavedBet[]>(() => {
+    // Load from localStorage as fast initial state; Supabase will overwrite
+    try { return JSON.parse(localStorage.getItem("ma_saved_bets") ?? "[]"); }
+    catch { return []; }
+  });
+  const [savedBetsLoaded, setSavedBetsLoaded] = useState(false);
+
+  // Load from Supabase on mount (source of truth)
+  useEffect(() => {
+    supabase.from("back_in_play_app_config")
+      .select("value")
+      .eq("key", "final_betting_models")
+      .single()
+      .then(({ data }) => {
+        if (data?.value && Array.isArray(data.value)) {
+          setSavedBets(data.value as SavedBet[]);
+          localStorage.setItem("ma_saved_bets", JSON.stringify(data.value));
+        }
+        setSavedBetsLoaded(true);
+      })
+      .catch(() => setSavedBetsLoaded(true));
+  }, []);
+
+  // Persist to both localStorage and Supabase
+  useEffect(() => {
+    localStorage.setItem("ma_saved_bets", JSON.stringify(savedBets));
+    if (savedBetsLoaded && savedBets.length >= 0) {
+      supabase.from("back_in_play_app_config")
+        .upsert({ key: "final_betting_models", value: savedBets, updated_at: new Date().toISOString() })
+        .then(() => {});
+    }
+  }, [savedBets, savedBetsLoaded]);
 
   // Derive season from bet date (e.g. "2024-11-05" → "2024-25", "2024-03-05" → "2023-24")
   const getBetSeason = (b: BacktestBet): string => {
@@ -598,28 +690,142 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
     return `${startYear}-${String(startYear + 1).slice(2)}`;
   };
 
-  // Collect all available seasons across all data
+  // Collect all available seasons from summaries
   const availableSeasons = useMemo(() => {
     const seasons = new Set<string>();
+    if (summaries) {
+      for (const s of Object.values(summaries)) {
+        for (const season of (s as any).seasons ?? []) {
+          seasons.add(season);
+        }
+      }
+    }
+    // Fallback to raw bets if no summaries
     for (const key of Object.keys(allData)) {
       for (const b of allData[key] ?? []) {
         seasons.add(getBetSeason(b));
       }
     }
     return ["all", ...Array.from(seasons).sort()];
-  }, [allData]);
+  }, [allData, summaries]);
 
   const rows = useMemo(() => {
     const result: StatRow[] = [];
+    // Find the closest pre-computed EV threshold
+    const EV_THRESHOLDS = [0, 5, 10, 15, 20, 30, 40, 50];
+    const MAX_GN_VALUES = [1, 2, 3, 5, 10];
+    const closestEv = EV_THRESHOLDS.reduce((prev, curr) =>
+      Math.abs(curr - evThreshold) < Math.abs(prev - evThreshold) ? curr : prev
+    );
+    const closestGn = MAX_GN_VALUES.reduce((prev, curr) =>
+      Math.abs(curr - maxGnFilter) < Math.abs(prev - maxGnFilter) ? curr : prev
+    );
+    const seasonSuffix = seasonFilter !== "all" ? `_s${seasonFilter}` : "";
+    const modeKey = `by_market_${oddsMode}_ev${closestEv}_gn${closestGn}${seasonSuffix}`;
+
     for (const leagueBase of BACKTEST_LEAGUES) {
       if (leagueFilter !== "all" && leagueBase !== leagueFilter) continue;
       for (const { suffix, label } of MODEL_SUFFIXES) {
         if (!selectedModels.includes(suffix)) continue;
         const key = `${leagueBase}${suffix}`;
+
+        // Use pre-computed summaries if available (fast path)
+        const summary = summaries?.[key];
+        if (summary) {
+          let marketData: Record<string, MarketSummary> | undefined;
+
+          if (minGnFilter <= 1) {
+            // Simple case: G1-N, use summary directly
+            marketData = (summary as any)[modeKey] as Record<string, MarketSummary> | undefined;
+          } else {
+            // Range case (e.g. G6-10): compute as gn(max) minus gn(minGn-1)
+            // gn10 includes G1-10, gn5 includes G1-5, so G6-10 = gn10 - gn5
+            const closestLower = MAX_GN_VALUES.reduce((prev, curr) =>
+              curr < minGnFilter && curr > prev ? curr : prev, 0
+            );
+            if (closestLower > 0) {
+              const upperKey = `by_market_${oddsMode}_ev${closestEv}_gn${closestGn}${seasonSuffix}`;
+              const lowerKey = `by_market_${oddsMode}_ev${closestEv}_gn${closestLower}${seasonSuffix}`;
+              const upper = (summary as any)[upperKey] as Record<string, MarketSummary> | undefined;
+              const lower = (summary as any)[lowerKey] as Record<string, MarketSummary> | undefined;
+              if (upper) {
+                marketData = {} as Record<string, MarketSummary>;
+                for (const [mkt, uStats] of Object.entries(upper)) {
+                  const lStats = lower?.[mkt];
+                  if (lStats && uStats.bets > lStats.bets) {
+                    const bets = uStats.bets - lStats.bets;
+                    const wins = uStats.wins - lStats.wins;
+                    const pnl = uStats.flat_pnl - lStats.flat_pnl;
+                    marketData[mkt] = {
+                      bets, wins,
+                      win_rate: bets > 0 ? wins / bets : 0,
+                      flat_pnl: pnl,
+                      flat_roi: bets > 0 ? (pnl / bets) * 100 : 0,
+                      flat_br: uStats.flat_br, // approximation — can't subtract BR sims
+                      half_kelly_br: uStats.half_kelly_br,
+                      full_kelly_br: uStats.full_kelly_br,
+                    };
+                  } else if (!lStats) {
+                    // Lower window has no data for this market — use upper as-is
+                    marketData[mkt] = uStats;
+                  }
+                }
+              }
+            } else {
+              // Can't compute range — fall through to raw bets
+              marketData = undefined;
+            }
+          }
+
+          if (!marketData) continue;
+
+          // Collect seasons for this model's summary
+          const modelSeasons = (summary as any).seasons as string[] | undefined;
+
+          for (const [market, stats] of Object.entries(marketData)) {
+            if (!stats || stats.bets === 0) continue;
+
+            // Check per-season profitability
+            let seasonsOk = 0, seasonsCounted = 0;
+            if (modelSeasons && modelSeasons.length > 0) {
+              for (const season of modelSeasons) {
+                const sKey = `by_market_${oddsMode}_ev${closestEv}_gn${closestGn}_s${season}`;
+                const sMkt = ((summary as any)[sKey] as Record<string, MarketSummary> | undefined)?.[market];
+                if (!sMkt || sMkt.bets < 10) continue;
+                seasonsCounted++;
+                if (sMkt.flat_br > 0) seasonsOk++;
+              }
+            }
+
+            result.push({
+              league: leagueBase, market, model: label,
+              bets: stats.bets, wins: stats.wins,
+              winRate: stats.wins / stats.bets,
+              flatPnl: stats.flat_pnl,
+              flatRoi: stats.flat_roi,
+              flatBr: stats.flat_br,
+              halfKellyPnl: stats.half_kelly_br,
+              fullKellyPnl: stats.full_kelly_br,
+              pEdge: computePEdge(stats.bets, stats.wins, stats.flat_pnl),
+              allSeasons: seasonsCounted >= 2 ? `${seasonsOk}/${seasonsCounted}` : "—",
+              stability: computeStability(summary, market, oddsMode, closestGn),
+              pctBeatClose: stats.pct_beat_close ?? -1,
+              avgClvProbEdge: stats.avg_clv_prob_edge ?? 0,
+              warnings: stats.flat_roi > 10 ? ["ROI > 10%"] : [],
+              maxDrawdown: stats.max_drawdown ?? -1,
+              turnover: stats.turnover ?? -1,
+              bookScore: "—",
+              booksCombos: { fdFd: null, fdDk: null, dkDk: null, dkFd: null },
+            });
+          }
+          continue;
+        }
+
+        // Fallback: compute from raw bets (legacy path)
         const bets = (allData[key] ?? []).filter((b) => {
           if (b.ev < evThreshold) return false;
           if (seasonFilter !== "all" && getBetSeason(b) !== seasonFilter) return false;
-          if (b.gn > maxGnFilter) return false;
+          if (b.gn > maxGnFilter || b.gn < minGnFilter) return false;
           return true;
         });
         if (bets.length === 0) continue;
@@ -633,21 +839,34 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
 
         const allBets = bets;
         const allWins = allBets.filter((b) => betCorrect(b, oddsMode)).length;
-        const wr = allWins / allBets.length;
         const allFlatPnl = allBets.reduce((s, b) => s + betPnl(b, oddsMode), 0);
+        const allClvBets = allBets.filter((b: any) => b.beat_close != null);
+        const allPctBcl = allClvBets.length > 0 ? allClvBets.filter((b: any) => b.beat_close).length / allClvBets.length * 100 : -1;
         result.push({
           league: leagueBase, market: "ALL", model: label,
-          bets: allBets.length, wins: allWins, winRate: wr,
+          bets: allBets.length, wins: allWins, winRate: allWins / allBets.length,
           flatPnl: allFlatPnl,
           flatRoi: allFlatPnl / allBets.length * 100,
           flatBr: flatBankrollPnl(allBets, unitPct, oddsMode),
           halfKellyPnl: kellyProfit(allBets, 0.5, oddsMode),
           fullKellyPnl: kellyProfit(allBets, 1.0, oddsMode),
+          pEdge: computePEdge(allBets.length, allWins, allFlatPnl),
+          allSeasons: "—",
+          stability: 0,
+          pctBeatClose: allPctBcl,
+          avgClvProbEdge: 0,
+          warnings: [],
+          maxDrawdown: -1,
+          turnover: -1,
+          bookScore: "—",
+          booksCombos: { fdFd: null, fdDk: null, dkDk: null, dkFd: null },
         });
 
         for (const [market, mBets] of Object.entries(byMarket)) {
           const mWins = mBets.filter((b) => betCorrect(b, oddsMode)).length;
           const mFlatPnl = mBets.reduce((s, b) => s + betPnl(b, oddsMode), 0);
+          const mClvBets = mBets.filter((b: any) => b.beat_close != null);
+          const mPctBcl = mClvBets.length > 0 ? mClvBets.filter((b: any) => b.beat_close).length / mClvBets.length * 100 : -1;
           result.push({
             league: leagueBase, market, model: label,
             bets: mBets.length, wins: mWins,
@@ -657,106 +876,128 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
             flatBr: flatBankrollPnl(mBets, unitPct, oddsMode),
             halfKellyPnl: kellyProfit(mBets, 0.5, oddsMode),
             fullKellyPnl: kellyProfit(mBets, 1.0, oddsMode),
+            pEdge: computePEdge(mBets.length, mWins, mFlatPnl),
+            allSeasons: "—",
+            stability: 0,
+            pctBeatClose: mPctBcl,
+            avgClvProbEdge: 0,
+            warnings: [],
+            maxDrawdown: -1,
+            turnover: -1,
+            bookScore: "—",
+            booksCombos: { fdFd: null, fdDk: null, dkDk: null, dkFd: null },
           });
         }
       }
     }
     // Sort: ALL rows first, then sub-rows; within each league group sort models by ROI (best first)
     result.sort((a, b) => {
-      // Primary: league order
       const la = BACKTEST_LEAGUES.indexOf(a.league as any);
       const lb = BACKTEST_LEAGUES.indexOf(b.league as any);
       if (la !== lb) return la - lb;
-      // Secondary: ALL rows before market sub-rows
-      if (a.market === "ALL" && b.market === "ALL") return b.flatRoi - a.flatRoi; // best ROI first
+      if (a.market === "ALL" && b.market === "ALL") return b.flatRoi - a.flatRoi;
       if (a.market === "ALL") return -1;
       if (b.market === "ALL") return 1;
-      // Same league sub-rows: same model group, then by market
       return b.flatRoi - a.flatRoi;
     });
-    // Filter out rows with fewer bets than minBetsFilter and below flat BR threshold
-    return result.filter((r) => r.bets >= minBetsFilter && (minFlatBr <= -999 || r.flatBr >= minFlatBr));
-  }, [allData, evThreshold, selectedModels, oddsMode, seasonFilter, leagueFilter, unitPct, maxGnFilter, minBetsFilter, minFlatBr]);
+    let filtered = result.filter((r) => r.bets >= minBetsFilter && (minFlatBr <= -999 || r.flatBr >= minFlatBr));
+    // P(Edge) filter
+    if (minPEdge > 0) filtered = filtered.filter((r) => r.pEdge * 100 >= minPEdge);
+    // Min seasons filter
+    if (minSeasonsOk > 0) {
+      filtered = filtered.filter((r) => {
+        if (r.allSeasons === "—") return false;
+        const ok = parseInt(r.allSeasons.split("/")[0]);
+        return ok >= minSeasonsOk;
+      });
+    }
+    return filtered;
+  }, [allData, summaries, evThreshold, selectedModels, oddsMode, seasonFilter, leagueFilter, unitPct, maxGnFilter, minGnFilter, minBetsFilter, minFlatBr, minPEdge, minSeasonsOk]);
 
-  const evOptions = [0, 5, 10, 15, 20, 30];
+  // Build lookup of random model by league+market to flag bad odds data
+  // Flag as bad odds if Random has positive BR% (bankroll growth = free money from odds bias)
+  const badOddsMarkets = useMemo(() => {
+    const bad = new Set<string>();
+    // Market name aliases — Random and ML models sometimes use different names for same stat
+    const MARKET_ALIASES: Record<string, string[]> = {
+      player_shots_on_target: ["player_shots", "player_shots_on_target", "SOG"],
+      player_shots: ["player_shots_on_target", "player_shots", "SOG"],
+    };
+    const addBad = (league: string, market: string) => {
+      bad.add(`${league}|${market}`);
+      for (const alias of MARKET_ALIASES[market] ?? []) {
+        bad.add(`${league}|${alias}`);
+      }
+    };
+    const modeKey = `by_market_${oddsMode}_ev0_gn10`;
+    for (const leagueBase of BACKTEST_LEAGUES) {
+      const randomSummary = summaries?.[`${leagueBase}_random`];
+      if (!randomSummary) continue;
+      const marketData = (randomSummary as any)[modeKey] as Record<string, MarketSummary> | undefined;
+      if (!marketData) continue;
+      for (const [market, stats] of Object.entries(marketData)) {
+        if (stats && stats.bets >= 50 && stats.flat_br > 0) {
+          addBad(leagueBase, market);
+          if (market === "ALL") {
+            for (const [m2] of Object.entries(marketData)) {
+              addBad(leagueBase, m2);
+            }
+          }
+        }
+      }
+    }
+    // Also check from rows for backward compat
+    for (const r of rows) {
+      if (r.model === "Random" && r.flatBr > 0 && r.bets >= 50) {
+        bad.add(`${r.league}|${r.market}`);
+        if (r.market === "ALL") {
+          for (const r2 of rows) {
+            if (r2.league === r.league) bad.add(`${r2.league}|${r2.market}`);
+          }
+        }
+      }
+    }
+    return bad;
+  }, [rows]);
+
+  // Total hypothesis count: all (model × league × market × EV threshold) combos
+  // that exist in the data for the selected models. This is what Bonferroni should
+  // divide by — not just the visible rows, which change with filters.
+  const totalHypotheses = useMemo(() => {
+    if (!summaries) return rows.length;
+    const EV_VALS = [0, 5, 10, 15, 20, 30, 40, 50];
+    const GN_VAL = 10; // user only uses G1-10
+    let count = 0;
+    for (const leagueBase of BACKTEST_LEAGUES) {
+      for (const { suffix } of MODEL_SUFFIXES) {
+        if (!selectedModels.includes(suffix)) continue;
+        const key = `${leagueBase}${suffix}`;
+        const summary = summaries[key];
+        if (!summary) continue;
+        for (const ev of EV_VALS) {
+          const modeKey = `by_market_${oddsMode}_ev${ev}_gn${GN_VAL}`;
+          const marketData = (summary as any)[modeKey] as Record<string, MarketSummary> | undefined;
+          if (!marketData) continue;
+          for (const stats of Object.values(marketData)) {
+            if (stats && stats.bets >= 20) count++;
+          }
+        }
+      }
+    }
+    return Math.max(count, rows.length);
+  }, [summaries, selectedModels, oddsMode, rows.length]);
+
+  const bonfThreshold = 0.05 / Math.max(totalHypotheses, 1);
+  const displayRows = useMemo(() => {
+    if (!bonfOnly) return rows;
+    return rows.filter((r) => (1 - r.pEdge) < bonfThreshold);
+  }, [rows, bonfOnly, bonfThreshold]);
 
   const getModelColor = (label: string) =>
     MODEL_SUFFIXES.find((m) => m.label === label)?.color ?? "bg-white/5 text-white/50";
 
   return (
     <div className="mb-8">
-      <div className="flex items-center gap-3 mb-4">
-        <h2 className="text-lg font-bold">League / Stat Breakdown</h2>
-        <button
-          onClick={() => setShowTableInfo(!showTableInfo)}
-          className="shrink-0 w-6 h-6 rounded-full border border-white/15 text-white/35 hover:text-white/70 hover:border-white/30 transition-colors text-xs font-semibold flex items-center justify-center"
-          title="Column explanations"
-        >
-          ?
-        </button>
-        <button
-          onClick={() => {
-            const header = "League\tStat\tModel\tBets\tWin%\tFlat ROI\tFlat BR%\tFlat PnL\t½K BR%\tFull K BR%";
-            const lines = rows.map((r) =>
-              `${LEAGUE_LABELS[r.league] ?? r.league}\t${r.market === "ALL" ? "ALL" : (MARKET_LABELS[r.market] ?? r.market)}\t${r.model}\t${r.bets}\t${(r.winRate * 100).toFixed(1)}%\t${r.flatRoi >= 0 ? "+" : ""}${r.flatRoi.toFixed(1)}%\t${r.flatBr >= 0 ? "+" : ""}${r.flatBr.toFixed(1)}%\t${r.flatPnl >= 0 ? "+" : ""}${r.flatPnl.toFixed(0)}u\t${r.halfKellyPnl >= 0 ? "+" : ""}${r.halfKellyPnl.toFixed(1)}%\t${r.fullKellyPnl >= 0 ? "+" : ""}${r.fullKellyPnl.toFixed(1)}%`
-            );
-            navigator.clipboard.writeText([header, ...lines].join("\n"));
-          }}
-          className="shrink-0 px-2 py-1 rounded-lg border border-white/10 text-white/30 hover:text-white/60 hover:border-white/20 transition-colors text-[10px]"
-          title="Copy table as tab-separated text"
-        >
-          Copy Table
-        </button>
-      </div>
-      {showTableInfo && (
-        <div className="rounded-lg bg-white/[0.04] border border-white/10 p-3 mb-4 text-[11px] text-white/50 space-y-1.5">
-          <p><span className="text-white/70 font-medium">League</span> — Sports league (NBA, NHL, MLB, EPL)</p>
-          <p><span className="text-white/70 font-medium">Stat</span> — Market type (ALL = combined, or specific like PTS, AST, etc.)</p>
-          <p><span className="text-white/70 font-medium">Model</span> — Which LightGBM model variant (C, D, E, F) with different feature sets</p>
-          <p><span className="text-white/70 font-medium">Bets</span> — Total number of bets placed in backtest</p>
-          <p><span className="text-white/70 font-medium">Win%</span> — Percentage of bets that hit (green if &gt;52.4%)</p>
-          <p><span className="text-white/70 font-medium">Flat ROI</span> — Return on investment per unit bet (flat staking)</p>
-          <p><span className="text-white/70 font-medium">Flat BR%</span> — Bankroll % change using flat unit sizing, with units won/lost in parentheses</p>
-          <p><span className="text-white/70 font-medium">Half Kelly BR%</span> — Bankroll % change using half-Kelly criterion sizing (conservative)</p>
-          <p><span className="text-white/70 font-medium">Full Kelly BR%</span> — Bankroll % change using full Kelly criterion (aggressive, higher variance)</p>
-        </div>
-      )}
-
-      {/* Model selector */}
-      <div className="mb-4">
-        <p className="text-[11px] text-white/40 mb-2">Models</p>
-        <div className="flex flex-wrap gap-1.5">
-          <button
-            onClick={() => setSelectedModels(MODEL_SUFFIXES.map((m) => m.suffix))}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-              selectedModels.length === MODEL_SUFFIXES.length
-                ? "bg-white/10 text-white border-white/20"
-                : "bg-white/[0.02] text-white/20 border-transparent"
-            }`}>
-            All
-          </button>
-          {MODEL_SUFFIXES.map((m) => (
-            <button key={m.suffix} onClick={() => {
-              setSelectedModels((prev) => {
-                if (prev.includes(m.suffix)) {
-                  // Don't allow deselecting the last model
-                  const next = prev.filter((s) => s !== m.suffix);
-                  return next.length > 0 ? next : prev;
-                }
-                return [...prev, m.suffix];
-              });
-            }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                selectedModels.includes(m.suffix)
-                  ? `${m.color} border-current`
-                  : "bg-white/[0.02] text-white/20 border-transparent"
-              }`}>
-              {m.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* Show features for a selected model */}
       <div className="mb-4">
         <p className="text-[11px] text-white/40 mb-2">View Model Variables</p>
@@ -784,159 +1025,47 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
         return metaKey ? <ModelFeatures meta={modelMeta[metaKey]} /> : null;
       })()}
 
-      {/* Odds mode toggle */}
-      <div className="mb-4">
-        <p className="text-[11px] text-white/40 mb-2">Bet at Odds</p>
-        <div className="flex flex-wrap gap-1.5">
-          {([
-            { value: "scrape" as OddsMode, label: "Scraped Odds" },
-            { value: "open" as OddsMode, label: "Opening Odds" },
-            { value: "close" as OddsMode, label: "Closing Odds" },
-          ]).map(({ value, label }) => (
-            <button key={value} onClick={() => setOddsMode(value)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                oddsMode === value
-                  ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border-[#1C7CFF]/30"
-                  : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
-              }`}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="text-[10px] text-white/25 mt-1">
-          {oddsMode === "scrape" ? "PnL at odds from when props were scraped" :
-           oddsMode === "open" ? "PnL if you bet at opening odds (best value)" :
-           "PnL if you bet at closing odds (market-adjusted)"}
-          {oddsMode !== "scrape" && " — only available for Model D bets with open/close data"}
-        </p>
-      </div>
-
-      {/* League filter */}
-      <div className="mb-4">
-        <p className="text-[11px] text-white/40 mb-2">League</p>
-        <div className="flex flex-wrap gap-1.5">
-          {["all", ...BACKTEST_LEAGUES].map((l) => (
-            <button key={l} onClick={() => setLeagueFilter(l)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                leagueFilter === l
-                  ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border-[#1C7CFF]/30"
-                  : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
-              }`}>
-              {LEAGUE_LABELS[l] ?? l}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Season filter */}
-      <div className="mb-4">
-        <p className="text-[11px] text-white/40 mb-2">Season</p>
-        <div className="flex flex-wrap gap-1.5">
-          {availableSeasons.map((s) => (
-            <button key={s} onClick={() => setSeasonFilter(s)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                seasonFilter === s
-                  ? "bg-amber-500/20 text-amber-400 border-amber-500/30"
-                  : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
-              }`}>
-              {s === "all" ? "All Seasons" : s}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="mb-4">
-        <p className="text-[11px] text-white/40 mb-2">Min EV % threshold</p>
-        <div className="flex flex-wrap gap-1.5">
-          {evOptions.map((t) => (
-            <button key={t} onClick={() => setEvThreshold(t)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                evThreshold === t ? "bg-[#1C7CFF]/20 text-[#1C7CFF] border border-[#1C7CFF]/30" : "bg-white/5 text-white/50 hover:text-white/70 border border-transparent"
-              }`}>
-              {t === 0 ? "All" : `>=${t}%`}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Unit size selector */}
-      <div className="mb-4">
-        <p className="text-[11px] text-white/40 mb-2">Unit Size (% of bankroll)</p>
-        <div className="flex flex-wrap gap-1.5">
-          {[0.5, 1, 2, 3, 5].map((pct) => (
-            <button key={pct} onClick={() => setUnitPct(pct)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                unitPct === pct
-                  ? "bg-[#3DFF8F]/20 text-[#3DFF8F] border-[#3DFF8F]/30"
-                  : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
-              }`}>
-              {pct}%
-            </button>
-          ))}
-        </div>
-        <p className="text-[10px] text-white/25 mt-1">1u = {unitPct}% of bankroll. Flat PnL shown as bankroll %.</p>
-        <p className="text-[10px] text-white/25 mt-0.5">Flat PnL bets a fixed amount each time. Kelly sizes each bet as a % of current bankroll — bets shrink as you lose, grow as you win. Kelly shows 0% when the edge isn't large enough to bet.</p>
-      </div>
-
-      {/* Games back filter */}
-      <div className="mb-4">
-        <p className="text-[11px] text-white/40 mb-2">Max Games Back From Injury</p>
-        <div className="flex flex-wrap gap-1.5">
-          {[1, 2, 3, 5, 10].map((gn) => (
-            <button key={gn} onClick={() => setMaxGnFilter(gn)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                maxGnFilter === gn
-                  ? "bg-[#3DFF8F]/20 text-[#3DFF8F] border-[#3DFF8F]/30"
-                  : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
-              }`}>
-              {gn === 1 ? "Game 1" : `Games 1-${gn}`}
-            </button>
-          ))}
-        </div>
-        <p className="text-[10px] text-white/25 mt-1">Only include bets from the first N games after injury return.</p>
-      </div>
-
-      {/* Min bets filter */}
-      <div className="mb-4">
-        <p className="text-[11px] text-white/40 mb-2">Min Bets to Show</p>
-        <div className="flex flex-wrap gap-1.5 items-center">
-          {[0, 10, 20, 50, 100].map((n) => (
-            <button key={n} onClick={() => setMinBetsFilter(n)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                minBetsFilter === n
-                  ? "bg-white/10 text-white border-white/20"
-                  : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
-              }`}>
-              {n === 0 ? "All" : `≥${n}`}
-            </button>
-          ))}
-        </div>
-        <p className="text-[10px] text-white/25 mt-1">Hide rows with fewer than {minBetsFilter} bets.</p>
-      </div>
-
-      {/* Min Flat BR% filter */}
-      <div className="mb-4">
-        <p className="text-[11px] text-white/40 mb-2">Min Flat BR%</p>
-        <div className="flex flex-wrap gap-1.5">
-          {[
-            { value: -999, label: "All" },
-            { value: 0, label: ">0%" },
-            { value: 5, label: ">5%" },
-            { value: 10, label: ">10%" },
-            { value: 20, label: ">20%" },
-          ].map((opt) => (
-            <button key={opt.value} onClick={() => setMinFlatBr(opt.value)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                minFlatBr === opt.value
-                  ? "bg-green-500/20 text-green-400 border-green-500/30"
-                  : "bg-white/5 text-white/50 hover:text-white/70 border-transparent"
-              }`}>
-              {opt.label}
-            </button>
-          ))}
-        </div>
-        <p className="text-[10px] text-white/25 mt-1">Only show rows with flat bankroll return above this threshold.</p>
-      </div>
+      <ModelFilters
+        modelDefs={MODEL_SUFFIXES}
+        leagues={BACKTEST_LEAGUES}
+        leagueLabels={LEAGUE_LABELS}
+        selectedModels={selectedModels}
+        setSelectedModels={setSelectedModels}
+        oddsMode={oddsMode}
+        setOddsMode={setOddsMode}
+        leagueFilter={leagueFilter}
+        setLeagueFilter={setLeagueFilter}
+        seasonFilter={seasonFilter}
+        setSeasonFilter={setSeasonFilter}
+        evThreshold={evThreshold}
+        setEvThreshold={setEvThreshold}
+        unitPct={unitPct}
+        setUnitPct={setUnitPct}
+        minBets={minBetsFilter}
+        setMinBets={setMinBetsFilter}
+        minFlatBr={minFlatBr}
+        setMinFlatBr={setMinFlatBr}
+        minPEdge={minPEdge}
+        setMinPEdge={setMinPEdge}
+        bonfOnly={bonfOnly}
+        setBonfOnly={setBonfOnly}
+        minSeasonsOk={minSeasonsOk}
+        setMinSeasonsOk={setMinSeasonsOk}
+        availableSeasons={availableSeasons}
+        bonfThreshold={bonfThreshold}
+        rows={rows}
+        showGamesBack={true}
+        minGnFilter={minGnFilter}
+        setMinGnFilter={setMinGnFilter}
+        maxGnFilter={maxGnFilter}
+        setMaxGnFilter={setMaxGnFilter}
+        oddsOptions={[
+          { value: "scrape" as OddsMode, label: "Scraped Odds" },
+          { value: "open" as OddsMode, label: "Opening Odds" },
+          { value: "close" as OddsMode, label: "Closing Odds" },
+        ]}
+        totalHypotheses={totalHypotheses}
+      />
 
       {/* Data Coverage */}
       {Object.keys(modelMeta).some((k) => modelMeta[k]?.skip_counts) && (
@@ -977,55 +1106,155 @@ function LeagueStatTable({ allData, modelMeta }: { allData: Record<string, Backt
         </div>
       )}
 
-      <div className="overflow-x-auto -mx-4 px-4">
-        <table className="w-full text-xs whitespace-nowrap">
-          <thead>
-            <tr className="text-white/40 border-b border-white/10">
-              <th className="text-left py-2 px-2">League</th>
-              <th className="text-left py-2 px-2">Stat</th>
-              <th className="text-left py-2 px-2">Model</th>
-              <th className="text-right py-2 px-2">Bets</th>
-              <th className="text-right py-2 px-2">Win%</th>
-              <th className="text-right py-2 px-2">Flat ROI</th>
-              <th className="text-right py-2 px-2">Flat BR%</th>
-              <th className="text-right py-2 px-2">½K BR%</th>
-              <th className="text-right py-2 px-2">Full K BR%</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => {
-              const isAll = r.market === "ALL";
-              return (
-                <tr key={i} className={`border-b border-white/5 ${isAll ? "bg-white/[0.03] font-medium" : ""} cursor-pointer hover:bg-white/[0.05]`}
-                    onClick={() => setSelectedRow(selectedRow === r ? null : r)}>
-                  <td className="py-1.5 px-2">{LEAGUE_LABELS[r.league] ?? r.league}</td>
-                  <td className="py-1.5 px-2">{isAll ? "ALL" : (MARKET_LABELS[r.market] ?? r.market)}</td>
-                  <td className="py-1.5 px-2">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${getModelColor(r.model)}`}>{r.model}</span>
-                  </td>
-                  <td className="py-1.5 px-2 text-right tabular-nums">{r.bets.toLocaleString()}</td>
-                  <td className={`py-1.5 px-2 text-right tabular-nums ${r.winRate > 0.524 ? "text-green-400" : "text-red-400/70"}`}>
-                    {(r.winRate * 100).toFixed(1)}%
-                  </td>
-                  <td className={`py-1.5 px-2 text-right tabular-nums ${r.flatRoi > 0 ? "text-green-400" : "text-red-400/70"}`}>
-                    {r.flatRoi >= 0 ? "+" : ""}{r.flatRoi.toFixed(1)}%
-                  </td>
-                  <td className={`py-1.5 px-2 text-right tabular-nums ${r.flatBr > 0 ? "text-green-400" : "text-red-400/70"}`}>
-                    {r.flatBr >= 0 ? "+" : ""}{r.flatBr.toFixed(1)}%
-                    <span className="text-white/20 ml-1">({r.flatPnl >= 0 ? "+" : ""}{r.flatPnl.toFixed(0)}u)</span>
-                  </td>
-                  <td className={`py-1.5 px-2 text-right tabular-nums ${r.halfKellyPnl > 0 ? "text-green-400" : "text-red-400/70"}`}>
-                    {r.halfKellyPnl >= 0 ? "+" : ""}{r.halfKellyPnl.toFixed(1)}%
-                  </td>
-                  <td className={`py-1.5 px-2 text-right tabular-nums ${r.fullKellyPnl > 0 ? "text-green-400" : "text-red-400/70"}`}>
-                    {r.fullKellyPnl >= 0 ? "+" : ""}{r.fullKellyPnl.toFixed(1)}%
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <ModelTable
+        rows={displayRows}
+        leagueLabels={LEAGUE_LABELS}
+        marketLabels={MARKET_LABELS}
+        modelDefs={MODEL_SUFFIXES}
+        bonfThreshold={bonfThreshold}
+        showTableInfo={showTableInfo}
+        setShowTableInfo={setShowTableInfo}
+        badOddsMarkets={badOddsMarkets}
+        onRowClick={(r) => setSelectedRow(selectedRow === r ? null : r)}
+        selectedRow={selectedRow}
+        statColumnLabel="Stat"
+        renderRowAction={(r) => (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!requireFinalBetsAuth()) return;
+              const already = savedBets.some((s) => s.league === r.league && s.market === r.market && s.model === r.model && s.evMin === evThreshold && s.maxGn === maxGnFilter);
+              if (!already) {
+                setSavedBets([...savedBets, { ...r, evMin: evThreshold, maxGn: maxGnFilter, minGn: minGnFilter, season: seasonFilter, oddsMode }]);
+              }
+            }}
+            className="w-5 h-5 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 text-[11px] font-bold leading-none"
+            title="Add to Final Betting Models"
+          >+</button>
+        )}
+      />
+
+      {/* Data quality notes */}
+      <div className="mt-4 p-4 bg-white/[0.03] rounded-xl text-[11px] text-white/40 space-y-2">
+        <p className="font-bold text-white/50 uppercase tracking-widest text-[10px] mb-2">Data Quality Notes</p>
+        <p><span className="text-orange-400">NFL:</span> player_rush_attempts, player_pass_completions, and player_pass_attempts are excluded from model results — stat columns only 33% populated. Needs ESPN re-scrape to backfill (nflverse fuzzy match produced unreliable data).</p>
+        <p><span className="text-orange-400">NBA:</span> player_threes has limited bets — stat_3pm is missing for all holdout-period games. Needs backfill from NBA-Betting/NBA_AI repo or ESPN re-scrape.</p>
+        <p><span className="text-yellow-400">EPL:</span> Odds data from non-DK/FD bookmakers may be unreliable. Only DraftKings/FanDuel odds used for random baseline. EPL has very few two-sided props from DK/FD.</p>
+        <p><span className="text-white/30">All leagues:</span> Random model uses DraftKings/FanDuel odds only, skips one-sided props. Kelly BR% is 0% for Random (no model probability to size bets).</p>
       </div>
+
+      {/* Final Betting Models */}
+      {savedBets.length > 0 && (
+        <div className="mt-6 p-4 bg-white/[0.03] rounded-xl">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-white/70 uppercase tracking-widest">Final Betting Models</h3>
+            <button onClick={() => { if (requireFinalBetsAuth()) setSavedBets([]); }} className="text-[10px] text-white/30 hover:text-white/50">Clear all</button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs whitespace-nowrap">
+              <thead>
+                <tr className="text-white/40 border-b border-white/10">
+                  <th className="text-left py-2 px-2">League</th>
+                  <th className="text-left py-2 px-2">Stat</th>
+                  <th className="text-left py-2 px-2">Model</th>
+                  <th className="text-right py-2 px-2">EV≥</th>
+                  <th className="text-right py-2 px-2">Games</th>
+                  <th className="text-right py-2 px-2">Odds</th>
+                  <th className="text-right py-2 px-2">Season</th>
+                  <th className="text-right py-2 px-2">Bets</th>
+                  <th className="text-right py-2 px-2">Win%</th>
+                  <th className="text-right py-2 px-2">Flat ROI</th>
+                  <th className="text-right py-2 px-2">Flat BR%</th>
+                  <th className="text-right py-2 px-2">½K BR%</th>
+                  <th className="text-right py-2 px-2">Full K BR%</th>
+                  <th className="text-right py-2 px-2">P(Edge)</th>
+                  <th className="text-center py-2 px-2">Bonf</th>
+                  <th className="text-center py-2 px-2">Seasons</th>
+                  <th className="text-center py-2 px-2">Stab</th>
+                  <th className="py-2 px-1 w-8"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {savedBets.map((s, i) => (
+                  <tr key={i} className="border-b border-white/5 hover:bg-white/[0.03]">
+                    <td className="py-1.5 px-2">{LEAGUE_LABELS[s.league] ?? s.league}</td>
+                    <td className="py-1.5 px-2">{s.market === "ALL" ? "ALL" : (MARKET_LABELS[s.market] ?? s.market)}</td>
+                    <td className="py-1.5 px-2">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] ${getModelColor(s.model)}`}>{s.model}</span>
+                    </td>
+                    <td className="py-1.5 px-2 text-right text-white/50">{s.evMin}%</td>
+                    <td className="py-1.5 px-2 text-right text-white/50">{(s.minGn ?? 1) > 1 ? `${s.minGn}-${s.maxGn}` : `1-${s.maxGn}`}</td>
+                    <td className="py-1.5 px-2 text-right text-white/50 capitalize">{s.oddsMode ?? "open"}</td>
+                    <td className="py-1.5 px-2 text-right text-white/50">{s.season === "all" ? "All" : s.season}</td>
+                    <td className="py-1.5 px-2 text-right tabular-nums">{s.bets.toLocaleString()}</td>
+                    <td className={`py-1.5 px-2 text-right tabular-nums ${s.winRate > 0.524 ? "text-green-400" : "text-red-400/70"}`}>
+                      {(s.winRate * 100).toFixed(1)}%
+                    </td>
+                    <td className={`py-1.5 px-2 text-right tabular-nums ${s.flatRoi > 0 ? "text-green-400" : "text-red-400/70"}`}>
+                      {s.flatRoi >= 0 ? "+" : ""}{s.flatRoi.toFixed(1)}%
+                    </td>
+                    <td className={`py-1.5 px-2 text-right tabular-nums ${s.flatBr > 0 ? "text-green-400" : "text-red-400/70"}`}>
+                      {s.flatBr >= 0 ? "+" : ""}{s.flatBr.toFixed(1)}%
+                    </td>
+                    <td className={`py-1.5 px-2 text-right tabular-nums ${s.halfKellyPnl > 0 ? "text-green-400" : "text-red-400/70"}`}>
+                      {s.halfKellyPnl >= 0 ? "+" : ""}{s.halfKellyPnl.toFixed(1)}%
+                    </td>
+                    <td className={`py-1.5 px-2 text-right tabular-nums ${s.fullKellyPnl > 0 ? "text-green-400" : "text-red-400/70"}`}>
+                      {s.fullKellyPnl >= 0 ? "+" : ""}{s.fullKellyPnl.toFixed(1)}%
+                    </td>
+                    <td className={`py-1.5 px-2 text-right tabular-nums font-medium ${
+                      s.pEdge >= 0.95 ? "text-green-400" :
+                      s.pEdge >= 0.80 ? "text-green-400/70" :
+                      s.pEdge >= 0.50 ? "text-yellow-400/70" :
+                      "text-red-400/50"
+                    }`}>
+                      {s.pEdge >= 0.9999 ? ">99.99%" : `${(s.pEdge * 100).toFixed(2)}%`}
+                    </td>
+                    <td className="py-1.5 px-2 text-right tabular-nums">
+                      {(() => {
+                        const pVal = 1 - s.pEdge;
+                        const bonf = 0.05 / Math.max(savedBets.length, 1);
+                        const pass = pVal < bonf;
+                        const display = pVal < 0.0001 ? "<.0001" : pVal.toFixed(4);
+                        return (
+                          <span className={`text-[10px] font-medium ${
+                            pass       ? "text-green-400" :
+                            pVal < 0.01 ? "text-green-400/70" :
+                            pVal < 0.05 ? "text-yellow-400/70" :
+                                          "text-white/25"
+                          }`}>
+                            {display}{pass && <span className="ml-0.5 text-[8px] text-green-400/50">B</span>}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    <td className={`py-1.5 px-2 text-center text-[10px] font-medium ${
+                      s.allSeasons === "—" ? "text-white/20" :
+                      s.allSeasons.split("/")[0] === s.allSeasons.split("/")[1] ? "text-green-400" :
+                      "text-yellow-400/70"
+                    }`}>
+                      {s.allSeasons}
+                    </td>
+                    <td className="py-1.5 px-2 text-center">
+                      <span className={`text-[10px] font-bold tabular-nums ${
+                        (s.stability ?? 0) >= 4 ? "text-green-400" :
+                        (s.stability ?? 0) >= 2 ? "text-yellow-400/70" :
+                        "text-red-400/50"
+                      }`}>{s.stability ?? 0}/5</span>
+                    </td>
+                    <td className="py-1.5 px-1 text-center">
+                      <button
+                        onClick={() => { if (requireFinalBetsAuth()) setSavedBets(savedBets.filter((_, j) => j !== i)); }}
+                        className="w-5 h-5 rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 text-[11px] font-bold leading-none"
+                      >×</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Bankroll chart for selected row */}
       {selectedRow && (() => {
@@ -1313,10 +1542,10 @@ function HistoricalBacktest() {
 }
 
 function LeagueStatTableWrapper() {
-  const { data, isLoading } = useBacktestBets();
-  if (isLoading) return <div className="text-white/30 text-center py-6">Loading...</div>;
-  if (!data || Object.keys(data.byLeague).length === 0) return null;
-  return <LeagueStatTable allData={data.byLeague} modelMeta={data.modelMeta} />;
+  const { data: summaryData, isLoading: summaryLoading } = useBacktestSummaries();
+  if (summaryLoading) return <div className="text-white/30 text-center py-6">Loading summaries...</div>;
+  if (!summaryData || Object.keys(summaryData.summaries).length === 0) return <div className="text-white/30 text-center py-6">No backtest data available</div>;
+  return <LeagueStatTable allData={{}} modelMeta={summaryData.modelMeta} summaries={summaryData.summaries} />;
 }
 
 // ─── Game Time Helper ────────────────────────────────────────────────────────
@@ -1371,7 +1600,7 @@ function useAllModelPredictions() {
   return useQuery<StoredPrediction[]>({
     queryKey: ["all-model-predictions"],
     queryFn: async () => {
-      const MODELS = ["model_c", "model_d", "model_e", "model_f"];
+      const MODELS = ["model_c", "model_d", "model_e", "model_f", "model_g", "model_h", "model_f2"];
       const predKeys = BACKTEST_LEAGUES.flatMap((l) => MODELS.map((m) => `${l}_${m}_predictions`));
       const { data, error } = await supabase
         .from("back_in_play_backtest_results")
@@ -1424,216 +1653,90 @@ function useAllModelPredictions() {
   });
 }
 
-interface LeagueConfig {
-  model: string;
-  maxGn: number;
-  minEv: number;
-  enabled: boolean;
-}
-
-const DEFAULT_LEAGUE_CONFIG: LeagueConfig = { model: "model_d", maxGn: 10, minEv: 0, enabled: true };
 const MODEL_CONFIG_PASSWORD = "sonic_77";
 
 function TodaysBets() {
   const { data: allPredictions = [], isLoading } = useAllModelPredictions();
-  const MODELS_WITH_BETS = MODEL_SUFFIXES.filter((m) => m.suffix.includes("model_"));
 
-  // Per-league configs — loaded from Supabase
-  const [leagueConfigs, setLeagueConfigs] = useState<Record<string, LeagueConfig>>(() => {
-    const init: Record<string, LeagueConfig> = {};
-    for (const l of BACKTEST_LEAGUES) init[l] = { ...DEFAULT_LEAGUE_CONFIG };
-    return init;
-  });
-  const [configLoaded, setConfigLoaded] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [savePassword, setSavePassword] = useState("");
-  const [showSavePrompt, setShowSavePrompt] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // Load Final Betting Models from Supabase (same source as LeagueStatTable)
+  const [finalModels, setFinalModels] = useState<SavedBetGlobal[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
 
-  // Load saved configs from Supabase on mount
   useEffect(() => {
     supabase.from("back_in_play_app_config")
       .select("value")
-      .eq("key", "model_league_configs")
+      .eq("key", "final_betting_models")
       .single()
       .then(({ data }) => {
-        if (data?.value && typeof data.value === "object") {
-          setLeagueConfigs((prev) => {
-            const merged = { ...prev };
-            for (const [league, cfg] of Object.entries(data.value as Record<string, LeagueConfig>)) {
-              if (merged[league]) merged[league] = { ...DEFAULT_LEAGUE_CONFIG, ...cfg };
-            }
-            return merged;
-          });
+        if (data?.value && Array.isArray(data.value)) {
+          setFinalModels(data.value as SavedBetGlobal[]);
         }
-        setConfigLoaded(true);
-      });
+        setModelsLoaded(true);
+      })
+      .catch(() => setModelsLoaded(true));
   }, []);
 
-  const updateLeague = (league: string, update: Partial<LeagueConfig>) => {
-    setLeagueConfigs((prev) => ({ ...prev, [league]: { ...prev[league], ...update } }));
-  };
-
-  // Save configs to Supabase
-  const handleSave = async () => {
-    if (savePassword !== MODEL_CONFIG_PASSWORD) {
-      setSaveMsg("Wrong password");
-      setTimeout(() => setSaveMsg(null), 2000);
-      return;
-    }
-    setSaving(true);
-    const { error } = await supabase.from("back_in_play_app_config")
-      .upsert({ key: "model_league_configs", value: leagueConfigs, updated_at: new Date().toISOString() });
-    setSaving(false);
-    setShowSavePrompt(false);
-    setSavePassword("");
-    setSaveMsg(error ? "Save failed" : "Saved!");
-    setTimeout(() => setSaveMsg(null), 2000);
-  };
-
-  // Filter predictions based on per-league configs
+  // Match predictions against Final Betting Models configs
   const filtered = useMemo(() => {
-    return allPredictions.filter((p) => {
-      const cfg = leagueConfigs[p.league];
-      if (!cfg || !cfg.enabled) return false;
-      if (p.model !== cfg.model) return false;
-      if (p.game_number_back > cfg.maxGn) return false;
-      if (cfg.minEv > 0 && Math.abs(p.ev) < cfg.minEv) return false;
-      return true;
-    });
-  }, [allPredictions, leagueConfigs]);
+    if (!finalModels.length || !allPredictions.length) return [];
 
-  if (isLoading || !configLoaded) return <div className="text-white/30 text-center py-6">Loading predictions...</div>;
+    return allPredictions.filter((p) => {
+      // Check if any Final Betting Model config matches this prediction
+      return finalModels.some((fm) => {
+        // Match league
+        if (fm.league !== p.league) return false;
+        // Match model (fm.model is like "Model D", p.model is like "model_d")
+        const fmModelKey = MODEL_SUFFIXES.find((m) => m.label === fm.model)?.suffix.replace(/^_/, "");
+        if (fmModelKey && fmModelKey !== p.model) return false;
+        // Match market (fm.market is like "player_points" or "ALL")
+        if (fm.market !== "ALL" && fm.market !== p.market) return false;
+        // EV threshold
+        if (fm.evMin > 0 && Math.abs(p.ev) < fm.evMin) return false;
+        // Games back range
+        const minGn = (fm as any).minGn ?? 1;
+        if (p.game_number_back < minGn || p.game_number_back > fm.maxGn) return false;
+        return true;
+      });
+    });
+  }, [allPredictions, finalModels]);
+
+  if (isLoading || !modelsLoaded) return <div className="text-white/30 text-center py-6">Loading predictions...</div>;
 
   return (
     <div className="mb-8">
-      <h2 className="text-lg font-bold mb-2">Today's & Tomorrow's Model Bets</h2>
+      <h2 className="text-lg font-bold mb-2">Today's & Tomorrow's Bets</h2>
       <p className="text-[11px] text-white/40 mb-4">
-        Configure model, games back, and EV threshold per league.
+        Filtered by your <span className="text-white/60">Final Betting Models</span> — {finalModels.length} active configs.
+        Add models in the League/Stat Breakdown table above.
       </p>
 
-      {/* Per-league config rows — show ALL leagues */}
-      <div className="space-y-3 mb-4">
-        {BACKTEST_LEAGUES.map((league) => {
-          const cfg = leagueConfigs[league];
-          const leagueCount = filtered.filter((p) => p.league === league).length;
-          const hasPredictions = allPredictions.some((p) => p.league === league);
-          return (
-            <div key={league} className={`rounded-xl border p-3 transition-colors ${cfg.enabled ? "border-white/10 bg-white/[0.02]" : "border-white/5 bg-white/[0.01] opacity-50"}`}>
-              <div className="flex items-center gap-3 mb-2">
-                <button onClick={() => updateLeague(league, { enabled: !cfg.enabled })}
-                  className={`w-4 h-4 rounded border transition-colors ${cfg.enabled ? "bg-[#3DFF8F]/30 border-[#3DFF8F]/50" : "bg-white/5 border-white/20"}`}>
-                  {cfg.enabled && <span className="text-[10px] text-[#3DFF8F] flex items-center justify-center">✓</span>}
-                </button>
-                <span className="text-sm font-bold">{LEAGUE_LABELS[league]}</span>
-                <span className="text-[10px] text-white/30">
-                  {hasPredictions ? `${leagueCount} bets` : "no predictions yet"}
-                </span>
-              </div>
-
-              {cfg.enabled && (
-                <div className="flex flex-wrap gap-3">
-                  {/* Model */}
-                  <div>
-                    <p className="text-[9px] text-white/30 mb-1">Model</p>
-                    <div className="flex gap-1">
-                      {MODELS_WITH_BETS.map((m) => {
-                        const modelKey = m.suffix.replace(/^_/, "");
-                        return (
-                          <button key={m.suffix} onClick={() => updateLeague(league, { model: modelKey })}
-                            className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
-                              cfg.model === modelKey ? `${m.color} border border-current` : "bg-white/[0.02] text-white/20 border border-transparent"
-                            }`}>
-                            {m.label.replace("Model ", "")}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Max Games Back */}
-                  <div>
-                    <p className="text-[9px] text-white/30 mb-1">Max Games</p>
-                    <div className="flex gap-1">
-                      {[1, 2, 3, 5, 10].map((gn) => (
-                        <button key={gn} onClick={() => updateLeague(league, { maxGn: gn })}
-                          className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
-                            cfg.maxGn === gn ? "bg-[#3DFF8F]/20 text-[#3DFF8F]" : "bg-white/5 text-white/30"
-                          }`}>
-                          {gn === 1 ? "G1" : `≤${gn}`}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Min EV */}
-                  <div>
-                    <p className="text-[9px] text-white/30 mb-1">Min EV%</p>
-                    <div className="flex gap-1">
-                      {[0, 5, 10, 15, 20].map((ev) => (
-                        <button key={ev} onClick={() => updateLeague(league, { minEv: ev })}
-                          className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
-                            cfg.minEv === ev ? "bg-[#1C7CFF]/20 text-[#1C7CFF]" : "bg-white/5 text-white/30"
-                          }`}>
-                          {ev === 0 ? "All" : `≥${ev}`}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Save config button */}
-      <div className="flex items-center gap-3 mb-5">
-        {!showSavePrompt ? (
-          <button onClick={() => setShowSavePrompt(true)}
-            className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-white/5 border border-white/10 text-white/50 hover:text-white/80 hover:border-white/20 transition-colors">
-            Save Configuration
-          </button>
-        ) : (
-          <div className="flex items-center gap-2">
-            <input type="password" value={savePassword} onChange={(e) => setSavePassword(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSave()}
-              placeholder="Password" autoFocus
-              className="px-2 py-1.5 rounded-lg text-[11px] bg-white/5 border border-white/15 text-white/70 placeholder-white/20 w-32 outline-none focus:border-white/30" />
-            <button onClick={handleSave} disabled={saving}
-              className="px-3 py-1.5 rounded-lg text-[11px] font-medium bg-[#3DFF8F]/15 border border-[#3DFF8F]/30 text-[#3DFF8F] hover:bg-[#3DFF8F]/25 transition-colors disabled:opacity-50">
-              {saving ? "Saving..." : "Save"}
-            </button>
-            <button onClick={() => { setShowSavePrompt(false); setSavePassword(""); }}
-              className="px-2 py-1.5 text-[10px] text-white/30 hover:text-white/50">Cancel</button>
-          </div>
-        )}
-        {saveMsg && <span className={`text-[11px] ${saveMsg === "Saved!" ? "text-[#3DFF8F]" : "text-red-400"}`}>{saveMsg}</span>}
-      </div>
-
-      {filtered.length === 0 ? (
+      {finalModels.length === 0 ? (
+        <div className="text-white/30 text-center py-8 bg-white/[0.02] rounded-xl">
+          No Final Betting Models configured. Add models from the table above using the + button.
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="text-white/30 text-center py-8 bg-white/[0.02] rounded-xl">
           {allPredictions.length === 0
-            ? "No predictions stored yet. Run predict_live.py on the droplet to generate."
-            : "No predictions match current filters."}
+            ? "No predictions stored yet. Run predict_live.py on the droplet."
+            : `No predictions match your ${finalModels.length} Final Betting Models.`}
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <p className="text-[10px] text-white/25 mb-2">{filtered.length} bets · Generated {allPredictions[0]?.predicted_at ? new Date(allPredictions[0].predicted_at).toLocaleString() : "—"}</p>
+          <p className="text-[10px] text-white/25 mb-2">
+            {filtered.length} bets from {finalModels.length} model configs ·
+            Generated {allPredictions[0]?.predicted_at ? new Date(allPredictions[0].predicted_at).toLocaleString() : "—"}
+          </p>
           <table className="w-full text-xs">
             <thead>
               <tr className="text-white/40 border-b border-white/10">
                 <th className="text-left py-2 px-2">Player</th>
                 <th className="text-left py-2 px-2">League</th>
                 <th className="text-left py-2 px-2">Injury</th>
-                <th className="text-center py-2 px-2">Game #</th>
+                <th className="text-center py-2 px-2">G#</th>
                 <th className="text-left py-2 px-2">Market</th>
                 <th className="text-right py-2 px-2">Line</th>
                 <th className="text-right py-2 px-2">Odds</th>
-                <th className="text-right py-2 px-2">Baseline</th>
-                <th className="text-right py-2 px-2">Recent</th>
                 <th className="text-center py-2 px-2">Rec</th>
-                <th className="text-right py-2 px-2">p(over)</th>
                 <th className="text-right py-2 px-2">EV</th>
                 <th className="text-right py-2 px-2">Kelly</th>
                 <th className="text-left py-2 px-2">Game</th>
@@ -1642,18 +1745,15 @@ function TodaysBets() {
             <tbody>
               {filtered.map((p, i) => {
                 const hasOdds = p.prop_line != null && (p.over_odds || p.under_odds);
+                const gt = formatGameTime(p.commence_time, p.game_date);
                 return (
                   <tr key={i} className={`border-b border-white/5 hover:bg-white/[0.03] ${
-                    (() => {
-                      const gt = formatGameTime(p.commence_time, p.game_date);
-                      if (gt.started) return "bg-green-500/[0.04] border-l-2 border-l-green-500/30";
-                      if (gt.soon) return "bg-amber-500/[0.04] border-l-2 border-l-amber-500/30";
-                      return "";
-                    })()
+                    gt.started ? "bg-green-500/[0.04] border-l-2 border-l-green-500/30" :
+                    gt.soon ? "bg-amber-500/[0.04] border-l-2 border-l-amber-500/30" : ""
                   }`}>
                     <td className="py-1.5 px-2 font-medium">{p.player_name}</td>
                     <td className="py-1.5 px-2 text-white/50">{LEAGUE_LABELS[p.league] ?? p.league}</td>
-                    <td className="py-1.5 px-2 text-white/40 max-w-[100px] truncate">{p.injury_type}</td>
+                    <td className="py-1.5 px-2 text-white/40 max-w-[80px] truncate">{p.injury_type}</td>
                     <td className="py-1.5 px-2 text-center">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
                         p.game_number_back <= 2 ? "bg-amber-500/20 text-amber-400" : "bg-white/5 text-white/50"
@@ -1661,23 +1761,16 @@ function TodaysBets() {
                     </td>
                     <td className="py-1.5 px-2">{MARKET_LABELS[p.market] ?? p.market}</td>
                     <td className="py-1.5 px-2 text-right tabular-nums">
-                      {hasOdds ? p.prop_line?.toFixed(1) : <span className="text-white/20 italic">no odds yet</span>}
+                      {hasOdds ? p.prop_line?.toFixed(1) : <span className="text-white/20 italic">—</span>}
                     </td>
                     <td className="py-1.5 px-2 text-right tabular-nums text-white/40">
-                      {hasOdds ? (
-                        <span>{p.over_odds ?? "—"} / {p.under_odds ?? "—"}</span>
-                      ) : (
-                        <span className="text-white/20">—</span>
-                      )}
+                      {hasOdds ? `${p.over_odds ?? "—"} / ${p.under_odds ?? "—"}` : "—"}
                     </td>
-                    <td className="py-1.5 px-2 text-right tabular-nums">{p.baseline ? p.baseline.toFixed(1) : "—"}</td>
-                    <td className="py-1.5 px-2 text-right tabular-nums">{p.recent_avg ? p.recent_avg.toFixed(1) : "—"}</td>
                     <td className="py-1.5 px-2 text-center">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                         p.recommendation === "OVER" ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"
                       }`}>{p.recommendation}</span>
                     </td>
-                    <td className="py-1.5 px-2 text-right tabular-nums text-white/50">{p.p_over.toFixed(3)}</td>
                     <td className={`py-1.5 px-2 text-right tabular-nums font-medium ${
                       p.ev > 0 ? "text-green-400" : "text-red-400/70"
                     }`}>
@@ -1687,21 +1780,16 @@ function TodaysBets() {
                       {p.kelly_fraction > 0 ? `${(p.kelly_fraction * 100).toFixed(1)}%` : "—"}
                     </td>
                     <td className="py-1.5 px-2">
-                      {(() => {
-                        const gt = formatGameTime(p.commence_time, p.game_date);
-                        return (
-                          <div className="flex flex-col gap-0.5">
-                            {p.home_team && p.away_team && (
-                              <span className="text-[9px] text-white/35 whitespace-nowrap">{p.away_team} @ {p.home_team}</span>
-                            )}
-                            <span className={`text-[10px] font-medium whitespace-nowrap ${gt.started ? "text-green-400" : gt.soon ? "text-amber-400" : "text-white/40"}`}>
-                              {gt.started && <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse mr-1 align-middle" />}
-                              {gt.soon && !gt.started && <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse mr-1 align-middle" />}
-                              {gt.label}
-                            </span>
-                          </div>
-                        );
-                      })()}
+                      <div className="flex flex-col gap-0.5">
+                        {p.home_team && p.away_team && (
+                          <span className="text-[9px] text-white/35 whitespace-nowrap">{p.away_team} @ {p.home_team}</span>
+                        )}
+                        <span className={`text-[10px] font-medium whitespace-nowrap ${gt.started ? "text-green-400" : gt.soon ? "text-amber-400" : "text-white/40"}`}>
+                          {gt.started && <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse mr-1 align-middle" />}
+                          {gt.soon && !gt.started && <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse mr-1 align-middle" />}
+                          {gt.label}
+                        </span>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1712,6 +1800,24 @@ function TodaysBets() {
       )}
     </div>
   );
+}
+
+/** Type for Final Betting Models loaded from Supabase (matches SavedBet from LeagueStatTable) */
+interface SavedBetGlobal {
+  league: string;
+  market: string;
+  model: string;
+  evMin: number;
+  maxGn: number;
+  minGn?: number;
+  season: string;
+  oddsMode?: string;
+  bets: number;
+  winRate: number;
+  flatRoi: number;
+  flatBr: number;
+  pEdge: number;
+  [key: string]: unknown;
 }
 
 // ─── Adaptive Strategies Section ─────────────────────────────────────────────
@@ -1746,24 +1852,12 @@ function useAdaptiveResults() {
   return useQuery<Record<string, AdaptiveResult>>({
     queryKey: ["adaptive-strategies"],
     queryFn: async () => {
-      // Build all possible adaptive keys
-      const keys: string[] = [];
-      for (const league of BACKTEST_LEAGUES) {
-        for (const model of ADAPTIVE_MODELS) {
-          for (const gn of ADAPTIVE_GN) {
-            for (const ev of ADAPTIVE_EV) {
-              const parts = [`model_${model}_adaptive`];
-              if (gn > 0) parts.push(`gn${gn}`);
-              if (ev > 0) parts.push(`ev${ev}`);
-              keys.push(`${league}_${parts.join("_")}`);
-            }
-          }
-        }
-      }
+      // Query all adaptive results using a LIKE filter instead of a massive in() list
       const { data, error } = await supabase
         .from("back_in_play_backtest_results")
         .select("league, results")
-        .in("league", keys);
+        .like("league", "%_adaptive%")
+        .limit(1000);
       if (error || !data) return {};
       const results: Record<string, AdaptiveResult> = {};
       for (const row of data) {
@@ -2085,15 +2179,18 @@ export default function ModelAnalysisPage() {
         <div className="flex items-center gap-3 mb-1">
           <h1 className="text-2xl font-bold">Model Analysis</h1>
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400/80 font-semibold">Local Only</span>
+          <a href="/model-analysis-all" className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400/60 hover:text-blue-400 transition-colors">
+            All Players →
+          </a>
+          <a href="/model-analysis-teams" className="text-[10px] px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400/60 hover:text-orange-400 transition-colors">
+            Teams →
+          </a>
         </div>
         <p className="text-sm text-white/40 mb-6">
           Historical backtest + live model tracking for injury-adjusted player props.
         </p>
 
-        {/* Historical backtest results */}
-        <HistoricalBacktest />
-
-        {/* League / Stat breakdown table */}
+        {/* League / Stat breakdown table (uses pre-computed summaries) */}
         <LeagueStatTableWrapper />
 
         {/* Today's / Tomorrow's Bets */}
@@ -2101,6 +2198,9 @@ export default function ModelAnalysisPage() {
 
         {/* Adaptive strategies */}
         <AdaptiveStrategiesWrapper />
+
+        {/* Edge Validation — statistical significance testing */}
+        <EdgeValidation />
 
         <h2 className="text-lg font-bold mb-1">Live Model Tracking</h2>
         <p className="text-[11px] text-white/40 mb-4">

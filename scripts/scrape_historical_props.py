@@ -205,6 +205,9 @@ def get_historical_events(sport, date_str):
         return [], 0
     resp.raise_for_status()
     remaining = int(resp.headers.get("x-requests-remaining", 0))
+    if remaining <= 5_000_000:
+        print(f"\n  SAFETY STOP: Credits ({remaining:,}) at or below 5M floor. Exiting.")
+        import sys; sys.exit(1)
     return resp.json().get("data", []), remaining
 
 
@@ -224,6 +227,9 @@ def get_historical_event_odds(sport, event_id, date_str, markets, league=None):
         return None, 0
     resp.raise_for_status()
     remaining = int(resp.headers.get("x-requests-remaining", 0))
+    if remaining <= 5_000_000:
+        print(f"\n  SAFETY STOP: Credits ({remaining:,}) at or below 5M floor. Exiting.")
+        import sys; sys.exit(1)
     return resp.json(), remaining
 
 
@@ -453,22 +459,10 @@ def scrape_league(league_slug):
         cp["total_credits"] = total_credits
         save_checkpoint(league_slug, cp)
 
-        # Double-check credits with a separate call before stopping
-        if remaining < 50000 and remaining > 0:
-            print(f"\n⚠ Low credits ({remaining:,}). Stopping.")
+        # Safety net: stop at 5M floor
+        if isinstance(remaining, int) and remaining <= 5_000_000:
+            print(f"\n  SAFETY STOP: Credits ({remaining:,}) at or below 5M floor. Stopping.")
             return False
-        if remaining == 0:
-            # Likely a glitch — verify with a fresh call
-            try:
-                check = requests.head(f"{BASE_URL}/sports/?apiKey={ODDS_API_KEY}", timeout=10)
-                real_remaining = int(check.headers.get("x-requests-remaining", 0))
-                if real_remaining < 50000:
-                    print(f"\n⚠ Confirmed low credits ({real_remaining:,}). Stopping.")
-                    return False
-                else:
-                    remaining = real_remaining  # False alarm
-            except:
-                pass
 
     print(f"\n{league_slug.upper()} done! Props: {total_props:,}, Credits: {total_credits:,}")
     return True
@@ -488,6 +482,9 @@ def main():
     resp = requests.head(f"{BASE_URL}/sports/?apiKey={ODDS_API_KEY}")
     remaining = int(resp.headers.get("x-requests-remaining", 0))
     print(f"API credits remaining: {remaining:,}")
+    if remaining <= 5_000_000:
+        print(f"SAFETY STOP: Credits at or below 5M floor. Exiting.")
+        sys.exit(1)
     print()
 
     if args.league:
