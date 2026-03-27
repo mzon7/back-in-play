@@ -9,7 +9,7 @@ import { supabase } from "../lib/supabase";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-type TabMode = "player" | "team" | "coverage";
+type TabMode = "player" | "team" | "coverage" | "injuries";
 
 const LEAGUE_STATS: Record<string, { key: string; label: string }[]> = {
   nba: [
@@ -1482,6 +1482,158 @@ function PlayerStatsCoverage() {
   );
 }
 
+// ─── Injury Review mode ─────────────────────────────────────────────────────
+
+function InjuryReviewMode() {
+  const [league, setLeague] = useState("nba");
+  const [gradeFilter, setGradeFilter] = useState<string>("all");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["injury-review", league, gradeFilter],
+    queryFn: async () => {
+      let query = supabase
+        .from("back_in_play_injuries_corrected")
+        .select("*")
+        .eq("league_slug", league)
+        .order("original_date_injured", { ascending: false })
+        .limit(500);
+      if (gradeFilter !== "all") {
+        query = query.eq("grade", gradeFilter);
+      }
+      const { data } = await query;
+      return data ?? [];
+    },
+    staleTime: 60_000,
+  });
+
+  // Grade summary counts
+  const { data: gradeCounts } = useQuery({
+    queryKey: ["injury-grade-counts", league],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("back_in_play_injuries_corrected")
+        .select("grade")
+        .eq("league_slug", league)
+        .limit(50000);
+      if (!data) return {};
+      const counts: Record<string, number> = {};
+      for (const r of data) {
+        counts[r.grade] = (counts[r.grade] ?? 0) + 1;
+      }
+      return counts;
+    },
+    staleTime: 60_000,
+  });
+
+  const gradeColor: Record<string, string> = {
+    A: "text-emerald-400", B: "text-blue-400", C: "text-yellow-400", D: "text-red-400", U: "text-white/30",
+  };
+  const _gradeLabel: Record<string, string> = {
+    A: "All 3 match", B: "2 of 3", C: "1 of 3", D: "None match", U: "Unmatched",
+  };
+  void _gradeLabel; // suppress unused warning
+
+  return (
+    <div>
+      {/* Filters */}
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
+        <select value={league} onChange={e => setLeague(e.target.value)}
+          className="bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white/70">
+          <option value="nba">NBA</option>
+          <option value="nhl">NHL</option>
+          <option value="nfl">NFL</option>
+          <option value="mlb">MLB</option>
+        </select>
+
+        <div className="flex gap-1">
+          {["all", "A", "B", "C", "D", "U"].map(g => (
+            <button key={g}
+              onClick={() => setGradeFilter(g)}
+              className={`px-2 py-1 rounded text-[10px] font-medium border transition-colors ${
+                gradeFilter === g
+                  ? "bg-white/10 border-white/20 text-white"
+                  : "bg-white/[0.02] border-white/5 text-white/30 hover:text-white/50"
+              }`}
+            >
+              {g === "all" ? "All" : g} {gradeCounts?.[g] != null ? `(${gradeCounts[g].toLocaleString()})` : ""}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Grade legend */}
+      <div className="flex gap-4 mb-4 text-[10px] text-white/30">
+        <span><span className="text-emerald-400 font-bold">A</span> = start ≤3d + return ≤7d + duration ≤30%</span>
+        <span><span className="text-blue-400 font-bold">B</span> = 2 of 3</span>
+        <span><span className="text-yellow-400 font-bold">C</span> = 1 of 3</span>
+        <span><span className="text-red-400 font-bold">D</span> = none</span>
+        <span><span className="text-white/30 font-bold">U</span> = unmatched</span>
+      </div>
+
+      {isLoading ? (
+        <p className="text-white/30 text-xs animate-pulse">Loading...</p>
+      ) : data && data.length > 0 ? (
+        <div className="overflow-x-auto bg-white/[0.02] border border-white/[0.06] rounded-xl">
+          <table className="w-full text-[10px]">
+            <thead className="sticky top-0 bg-[#0a0f1a]">
+              <tr className="text-white/30 border-b border-white/[0.06]">
+                <th className="px-2 py-1.5 text-center font-medium">Grade</th>
+                <th className="px-2 py-1.5 text-left font-medium">Player</th>
+                <th className="px-2 py-1.5 text-left font-medium">Injury</th>
+                <th className="px-2 py-1.5 text-left font-medium">Reported Start</th>
+                <th className="px-2 py-1.5 text-left font-medium">Detected Start</th>
+                <th className="px-2 py-1.5 text-right font-medium">Start Diff</th>
+                <th className="px-2 py-1.5 text-left font-medium">Reported End</th>
+                <th className="px-2 py-1.5 text-left font-medium">Detected End</th>
+                <th className="px-2 py-1.5 text-right font-medium">Ret Diff</th>
+                <th className="px-2 py-1.5 text-right font-medium">Det GP</th>
+                <th className="px-2 py-1.5 text-right font-medium">Dur %Off</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((r: any, i: number) => (
+                <tr key={i} className="border-b border-white/[0.02] hover:bg-white/[0.02]">
+                  <td className={`px-2 py-1 text-center font-bold ${gradeColor[r.grade] ?? "text-white/30"}`}>
+                    {r.grade}
+                  </td>
+                  <td className="px-2 py-1 text-white/60">{r.player_name}</td>
+                  <td className="px-2 py-1 text-white/40">{r.injury_type ?? "—"}</td>
+                  <td className="px-2 py-1 font-mono text-white/40">{r.original_date_injured ?? "—"}</td>
+                  <td className="px-2 py-1 font-mono text-white/60">{r.date_injured ?? "—"}</td>
+                  <td className={`px-2 py-1 text-right font-mono ${
+                    (r.start_day_diff ?? 99) <= 3 ? "text-emerald-400" : (r.start_day_diff ?? 99) <= 7 ? "text-yellow-400" : "text-red-400"
+                  }`}>
+                    {r.start_day_diff != null ? `${r.start_day_diff}d` : "—"}
+                  </td>
+                  <td className="px-2 py-1 font-mono text-white/40">{r.original_return_date ?? "—"}</td>
+                  <td className="px-2 py-1 font-mono text-white/60">{r.return_date ?? "—"}</td>
+                  <td className={`px-2 py-1 text-right font-mono ${
+                    (r.return_day_diff ?? 99) <= 7 ? "text-emerald-400" : (r.return_day_diff ?? 99) <= 14 ? "text-yellow-400" : "text-red-400"
+                  }`}>
+                    {r.return_day_diff != null ? `${r.return_day_diff}d` : "—"}
+                  </td>
+                  <td className="px-2 py-1 text-right font-mono text-white/50">
+                    {r.games_missed ?? "—"}
+                  </td>
+                  <td className={`px-2 py-1 text-right font-mono ${
+                    (r.duration_pct_off ?? 999) <= 30 ? "text-emerald-400" : (r.duration_pct_off ?? 999) <= 50 ? "text-yellow-400" : "text-red-400"
+                  }`}>
+                    {r.duration_pct_off != null ? `${r.duration_pct_off}%` : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-white/20 text-xs">No injury data for this league. Run detect_player_absences.py --save-to-db first.</p>
+      )}
+
+      <p className="text-[9px] text-white/15 mt-2">Showing up to 500 injuries. Filter by grade to see specific categories.</p>
+    </div>
+  );
+}
+
 // ─── Main page ──────────────────────────────────────────────────────────────
 
 export default function PlayerDataPage() {
@@ -1520,9 +1672,17 @@ export default function PlayerDataPage() {
           >
             Coverage
           </button>
+          <button
+            onClick={() => setTab("injuries")}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              tab === "injuries" ? "bg-white/10 text-white" : "text-white/40 hover:text-white/60"
+            }`}
+          >
+            Injuries
+          </button>
         </div>
 
-        {tab === "player" ? <PlayerMode /> : tab === "team" ? <TeamMode /> : <CoverageMode />}
+        {tab === "player" ? <PlayerMode /> : tab === "team" ? <TeamMode /> : tab === "coverage" ? <CoverageMode /> : <InjuryReviewMode />}
       </div>
     </div>
   );
