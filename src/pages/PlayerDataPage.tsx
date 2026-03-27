@@ -653,19 +653,27 @@ function PlayerMode() {
                             const dateProps = propsMap?.get(log.game_date) ?? [];
                             const ctx = gameContext?.get(log.game_date);
                             const odds = ctx?.odds;
-                            const espnUrl = ctx?.event_id ? `https://www.espn.com/${leagueSlug === "premier-league" ? "soccer" : leagueSlug}/game/_/gameId/${ctx.event_id}` : null;
-                            const scoreText = ctx?.home_score != null ? `${ctx.home_score}-${ctx.away_score}` : null;
+                            const espnUrl = log.event_id ? `https://www.espn.com/${leagueSlug === "premier-league" ? "soccer" : leagueSlug}/game/_/gameId/${log.event_id}` : (ctx?.event_id ? `https://www.espn.com/${leagueSlug === "premier-league" ? "soccer" : leagueSlug}/game/_/gameId/${ctx.event_id}` : null);
+                            const scoreText = (log.home_score != null ? `${log.home_score}-${log.away_score}` : null) ?? (ctx?.home_score != null ? `${ctx.home_score}-${ctx.away_score}` : null);
+                            const isDnp = log.played === false || log.played === "false";
+                            const dnpReason = log.dnp_reason || "";
 
                             return (
                               <Fragment key={i}>
-                                <tr className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                                <tr className={`border-b border-white/[0.03] ${isDnp ? "bg-red-500/[0.03]" : "hover:bg-white/[0.02]"}`}>
                                   <td className="px-3 py-1.5 text-white/50 font-mono">
                                     {log.game_date}
                                     {dateProps.length > 0 && (
                                       <span className="ml-1 text-[9px] text-blue-400/40">P</span>
                                     )}
                                   </td>
-                                  <td className="px-3 py-1.5 text-white/40">{log.opponent || "—"}</td>
+                                  <td className="px-3 py-1.5 text-white/40">
+                                    {isDnp ? (
+                                      <span className="text-red-400/50 text-[10px]">
+                                        DNP{dnpReason ? ` — ${dnpReason}` : ""}
+                                      </span>
+                                    ) : (log.opponent || log.away_team || "—")}
+                                  </td>
                                   <td className="px-3 py-1.5 text-center font-mono">
                                     {espnUrl && scoreText ? (
                                       <a href={espnUrl} target="_blank" rel="noopener noreferrer"
@@ -675,7 +683,7 @@ function PlayerMode() {
                                     ) : <span className="text-white/15 text-[10px]">—</span>}
                                   </td>
                                   <td className="px-3 py-1.5 text-right text-white/40 font-mono">
-                                    {log.minutes != null ? Math.round(log.minutes) : "—"}
+                                    {isDnp ? "" : (log.minutes != null ? Math.round(log.minutes) : "—")}
                                   </td>
                                   {statDefs.map((s) => (
                                     <td key={s.key} className="px-3 py-1.5 text-right font-mono text-white/50">
