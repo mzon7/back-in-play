@@ -49,6 +49,8 @@ SPORT_KEYS = {
 }
 
 # Map ESPN stat labels to our column names per sport
+# Map ALL ESPN stat labels to column names per sport
+# Includes skaters+goalies (NHL), batters+pitchers (MLB), all positions (NFL)
 NBA_STAT_MAP = {
     "MIN": "minutes", "PTS": "stat_pts", "REB": "stat_reb", "AST": "stat_ast",
     "STL": "stat_stl", "BLK": "stat_blk", "3PT": "stat_3pm", "TO": "turnovers",
@@ -57,10 +59,20 @@ NBA_STAT_MAP = {
 }
 
 NHL_STAT_MAP = {
+    # Skater stats
     "G": "stat_goals", "A": "stat_assists", "SOG": "stat_sog", "+/-": "plus_minus",
-    "TOI": "toi", "S": "stat_shots", "HT": "stat_hits", "BS": "stat_blocks",
-    "PIM": "stat_pim", "FW": "faceoff_wins", "FL": "faceoff_losses",
-    "GV": "stat_giveaways", "TK": "stat_takeaways",
+    "TOI": "toi", "S": "stat_shots", "SM": "stat_shots_missed",
+    "HT": "stat_hits", "BS": "stat_blocks", "TK": "stat_takeaways", "GV": "stat_giveaways",
+    "PIM": "stat_pim", "PN": "stat_penalties",
+    "FW": "faceoff_wins", "FL": "faceoff_losses", "FO%": "faceoff_pct",
+    "SHFT": "stat_shifts",
+    "PPTOI": "pp_toi", "SHTOI": "sh_toi", "ESTOI": "es_toi",
+    "YTDG": "ytd_goals",
+    # Goalie stats
+    "GA": "stat_goals_against", "SA": "stat_shots_against",
+    "SV": "stat_saves", "SV%": "stat_save_pct",
+    "ESSV": "stat_es_saves", "PPSV": "stat_pp_saves", "SHSV": "stat_sh_saves",
+    "SOS": "stat_shootout_saves", "SOSA": "stat_shootout_attempts",
 }
 
 NFL_STAT_MAP = {
@@ -68,13 +80,23 @@ NFL_STAT_MAP = {
     "INT": "stat_int", "SACKS": "stat_sacks", "QBR": "stat_qbr", "RTG": "stat_rtg",
     "CAR": "stat_rush_att", "AVG": "stat_avg",
     "REC": "stat_rec", "TGTS": "stat_targets", "LONG": "stat_long",
+    # Additional NFL stats
+    "FUM": "stat_fumbles", "LOST": "stat_fumbles_lost",
+    "YAC": "stat_yac", "Y/R": "stat_yds_per_rec",
+    "1DN": "stat_first_downs", "20+": "stat_20plus",
+    "40+": "stat_40plus", "FL": "stat_fumbles_lost_2",
 }
 
 MLB_STAT_MAP = {
+    # Batter stats
     "H": "stat_h", "R": "stat_r", "HR": "stat_hr", "RBI": "stat_rbi",
-    "BB": "stat_bb", "K": "stat_k", "AVG": "stat_avg",
-    "AB": "stat_ab", "SB": "stat_sb",
+    "BB": "stat_bb", "K": "stat_k", "AB": "stat_ab", "SB": "stat_sb",
+    "H-AB": "stat_h_ab", "#P": "stat_pitches_seen",
+    "AVG": "stat_avg", "OBP": "stat_obp", "SLG": "stat_slg",
+    # Pitcher stats
     "IP": "stat_ip", "ER": "stat_er", "SO": "stat_so",
+    "PC": "stat_pitch_count", "PC-ST": "stat_pc_strikes",
+    "ERA": "stat_era",
 }
 
 STAT_MAPS = {"nba": NBA_STAT_MAP, "nhl": NHL_STAT_MAP, "nfl": NFL_STAT_MAP, "mlb": MLB_STAT_MAP}
@@ -197,7 +219,7 @@ def build_master(league):
          "player_name", "player_espn_id", "player_team", "player_position"]
         + stat_cols
         + ODDS_COLS
-        + ["has_odds", "source"]
+        + ["has_odds", "source", "raw_stats"]
     )
 
     master_rows = []
@@ -279,12 +301,15 @@ def build_master(league):
                     "source": "espn_boxscore",
                 }
 
-                # Parse stats
+                # Parse stats — map known ones to typed columns
                 for espn_label, col_name in stat_map.items():
                     if espn_label in raw_stats:
                         row[col_name] = parse_stat_value(raw_stats[espn_label])
                     else:
                         row[col_name] = None
+
+                # Store ALL raw stats as JSON (captures goalie, pitcher, and any other stats)
+                row["raw_stats"] = json.dumps(raw_stats) if raw_stats else None
 
                 # Add odds
                 if odds:

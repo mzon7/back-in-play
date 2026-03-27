@@ -58,6 +58,9 @@ CSV_TO_DB = {
 
 INT_COLS = {"season", "home_score", "away_score"}
 
+# Dynamic: any CSV column that matches a DB column gets imported
+# No need to maintain CSV_TO_DB manually — just use column names as-is
+
 def clean_val(val, col_name=""):
     if val is None or val == "" or val == "None":
         return None
@@ -89,12 +92,17 @@ def import_league(league, conn):
         reader = csv.DictReader(f)
         csv_cols = reader.fieldnames
 
-        # Map CSV columns to DB columns
+        # Get DB column names to know which CSV cols can be imported
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'back_in_play_master_games'")
+        db_columns = {r[0] for r in cur.fetchall()}
+
+        # Map CSV columns to DB columns — use CSV_TO_DB if mapped, else use column name directly
         db_cols = ["league_slug"]
         csv_keys = []
         for csv_col in csv_cols:
-            if csv_col in CSV_TO_DB:
-                db_cols.append(CSV_TO_DB[csv_col])
+            mapped = CSV_TO_DB.get(csv_col, csv_col)  # try mapping, fallback to same name
+            if mapped in db_columns:
+                db_cols.append(mapped)
                 csv_keys.append(csv_col)
 
         col_names = ", ".join(db_cols)
