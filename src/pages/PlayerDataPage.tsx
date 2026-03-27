@@ -870,6 +870,7 @@ function TeamMode() {
                           <th className="px-3 py-2 text-left font-medium">Home</th>
                           <th className="px-3 py-2 text-center font-medium">Score</th>
                           <th className="px-3 py-2 text-left font-medium">Away</th>
+                          <th className="px-2 py-2 text-center font-medium">ESPN</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -892,10 +893,20 @@ function TeamMode() {
                                 <td className={`px-3 py-1.5 ${!isHome ? "text-blue-300/70 font-medium" : "text-white/40"}`}>
                                   {g.away_team}
                                 </td>
+                                <td className="px-2 py-1.5 text-center">
+                                  {g.event_id ? (
+                                    <a href={`https://www.espn.com/${leagueSlug === "premier-league" ? "soccer" : leagueSlug}/game/_/gameId/${g.event_id}`}
+                                       target="_blank" rel="noopener noreferrer"
+                                       className="text-blue-400/50 hover:text-blue-400 text-[9px]"
+                                       onClick={(e) => e.stopPropagation()}>
+                                      ESPN
+                                    </a>
+                                  ) : ""}
+                                </td>
                               </tr>
                               {isExpanded && g.event_id && (
                                 <tr>
-                                  <td colSpan={4} className="p-0">
+                                  <td colSpan={5} className="p-0">
                                     <GameBoxScore eventId={g.event_id} leagueSlug={leagueSlug} />
                                   </td>
                                 </tr>

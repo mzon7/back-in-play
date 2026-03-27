@@ -62,7 +62,7 @@ INT_COLS = {"season", "home_score", "away_score"}
 # No need to maintain CSV_TO_DB manually — just use column names as-is
 
 def clean_val(val, col_name=""):
-    if val is None or val == "" or val == "None":
+    if val is None or val == "" or val == "None" or val == "---" or val == "--" or val == "-":
         return None
     # Integer columns: strip .0 from floats
     if col_name in INT_COLS:
