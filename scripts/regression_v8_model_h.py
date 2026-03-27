@@ -814,6 +814,10 @@ def make_bets(test_samples, y_proba, model_name, season_label):
         else:
             continue
 
+        # Skip if player didn't play (DNP/void — money returned in real betting)
+        if s.get("actual") is None or (s.get("minutes") is not None and s["minutes"] == 0):
+            continue
+
         open_line = s.get("open_line") or s["line"]
         open_actual_side = "OVER" if s["actual"] > open_line else "UNDER"
         if s["actual"] == open_line:
