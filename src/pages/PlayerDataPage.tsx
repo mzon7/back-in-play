@@ -420,12 +420,14 @@ function buildSeasonSummaries(logs: any[], leagueSlug: string): SeasonSummary[] 
 
   const summaries: SeasonSummary[] = [];
   for (const [season, seasonLogs] of bySeason) {
+    // Only count games where player actually played (not DNP)
+    const playedLogs = seasonLogs.filter((l: any) => l.played === true || l.played === "true");
     const averages: Record<string, number> = {};
     for (const stat of statDefs) {
-      const vals = seasonLogs.map((l: any) => l[stat.key]).filter((v: any) => v != null && v !== 0);
+      const vals = playedLogs.map((l: any) => l[stat.key]).filter((v: any) => v != null && v !== 0);
       averages[stat.key] = vals.length > 0 ? vals.reduce((a: number, b: number) => a + b, 0) / vals.length : 0;
     }
-    summaries.push({ season, games: seasonLogs.length, averages, logs: seasonLogs });
+    summaries.push({ season, games: playedLogs.length, averages, logs: seasonLogs });
   }
 
   summaries.sort((a, b) => b.season - a.season);
