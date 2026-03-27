@@ -48,6 +48,40 @@ const LEAGUE_STATS: Record<string, { key: string; label: string }[]> = {
   ],
 };
 
+// Full box score stats (used in team game box score popup)
+const BOXSCORE_STATS: Record<string, { key: string; label: string }[]> = {
+  nba: [
+    { key: "minutes", label: "MIN" }, { key: "stat_pts", label: "PTS" },
+    { key: "stat_reb", label: "REB" }, { key: "stat_ast", label: "AST" },
+    { key: "stat_stl", label: "STL" }, { key: "stat_blk", label: "BLK" },
+    { key: "stat_3pm", label: "3PM" }, { key: "fg", label: "FG" },
+    { key: "ft", label: "FT" }, { key: "turnovers", label: "TO" },
+    { key: "plus_minus", label: "+/-" },
+  ],
+  nhl: [
+    { key: "toi", label: "TOI" }, { key: "stat_goals", label: "G" },
+    { key: "stat_assists", label: "A" }, { key: "stat_sog", label: "SOG" },
+    { key: "stat_hits", label: "HIT" }, { key: "stat_blocks", label: "BLK" },
+    { key: "stat_pim", label: "PIM" }, { key: "plus_minus", label: "+/-" },
+    { key: "stat_takeaways", label: "TK" }, { key: "stat_giveaways", label: "GV" },
+  ],
+  nfl: [
+    { key: "pass_catt", label: "C/A" }, { key: "stat_pass_yds", label: "PYD" },
+    { key: "stat_pass_td", label: "PTD" }, { key: "stat_int", label: "INT" },
+    { key: "stat_rush_att", label: "CAR" }, { key: "stat_avg", label: "AVG" },
+    { key: "stat_rec", label: "REC" }, { key: "stat_targets", label: "TGT" },
+    { key: "stat_long", label: "LNG" }, { key: "stat_qbr", label: "QBR" },
+  ],
+  mlb: [
+    { key: "stat_ab", label: "AB" }, { key: "stat_h", label: "H" },
+    { key: "stat_r", label: "R" }, { key: "stat_hr", label: "HR" },
+    { key: "stat_rbi", label: "RBI" }, { key: "stat_bb", label: "BB" },
+    { key: "stat_k", label: "K" }, { key: "stat_sb", label: "SB" },
+    { key: "stat_ip", label: "IP" }, { key: "stat_so", label: "SO" },
+    { key: "stat_er", label: "ER" },
+  ],
+};
+
 // Expected regular-season game counts per league
 const EXPECTED_GAMES: Record<string, number> = {
   nba: 82,
@@ -882,7 +916,7 @@ function TeamMode() {
 
 /** Box score for a single game — shows all players with stats */
 function GameBoxScore({ eventId, leagueSlug }: { eventId: string; leagueSlug: string }) {
-  const statDefs = LEAGUE_STATS[leagueSlug] ?? LEAGUE_STATS.nba;
+  const statDefs = BOXSCORE_STATS[leagueSlug] ?? BOXSCORE_STATS.nba;
   const { data, isLoading } = useQuery({
     queryKey: ["game-boxscore", eventId],
     queryFn: async () => {
