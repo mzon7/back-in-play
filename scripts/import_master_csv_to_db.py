@@ -115,7 +115,7 @@ def import_league(league, conn):
         for row in reader:
             values = [league]  # league_slug
             for csv_col in csv_keys:
-                db_col = CSV_TO_DB[csv_col]
+                db_col = CSV_TO_DB.get(csv_col, csv_col)
                 values.append(clean_val(row.get(csv_col), db_col))
             batch.append(values)
 
