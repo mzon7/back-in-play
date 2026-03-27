@@ -166,6 +166,9 @@ def get_box_score(sport_path, event_id):
                     "name": athlete.get("displayName", ""),
                     "position": athlete.get("position", {}).get("abbreviation", "") if isinstance(athlete.get("position"), dict) else "",
                     "stats": {},
+                    "starter": athlete_data.get("starter", False),
+                    "didNotPlay": athlete_data.get("didNotPlay", False),
+                    "dnp_reason": athlete_data.get("reason", ""),
                 }
 
                 # Map stats using labels

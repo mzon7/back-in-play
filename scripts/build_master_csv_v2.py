@@ -284,6 +284,8 @@ def build_master(league):
                 espn_id = player.get("espn_id", "")
                 position = player.get("position", "")
                 raw_stats = player.get("stats", {})
+                is_starter = player.get("starter", None)
+                dnp_reason = player.get("dnp_reason", "") or ""
 
                 row = {
                     "game_date": game_date,
@@ -310,6 +312,8 @@ def build_master(league):
 
                 # Store ALL raw stats as JSON (captures goalie, pitcher, and any other stats)
                 row["raw_stats"] = json.dumps(raw_stats) if raw_stats else None
+                row["starter"] = is_starter
+                row["dnp_reason"] = dnp_reason if dnp_reason else None
 
                 # Add odds
                 if odds:
