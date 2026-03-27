@@ -344,13 +344,12 @@ function useTeamSchedule(teamName: string | null, leagueSlug: string | null) {
     queryKey: ["team-schedule-master", teamName, leagueSlug],
     queryFn: async () => {
       if (!teamName) return [];
-      // Get distinct games for this team from master data
       const allGames: any[] = [];
       let offset = 0;
       const PAGE = 1000;
       while (true) {
         const { data } = await supabase
-          .from("back_in_play_master_games")
+          .from("back_in_play_master_schedule")
           .select("game_date, home_team, away_team, home_score, away_score, season, event_id")
           .or(`home_team.eq.${teamName},away_team.eq.${teamName}`)
           .eq("league_slug", leagueSlug ?? "nba")
@@ -361,13 +360,7 @@ function useTeamSchedule(teamName: string | null, leagueSlug: string | null) {
         if (data.length < PAGE) break;
         offset += PAGE;
       }
-      // Deduplicate by game_date + home + away (many player rows per game)
-      const seen = new Map<string, any>();
-      for (const g of allGames) {
-        const key = `${g.game_date}|${g.home_team}|${g.away_team}`;
-        if (!seen.has(key)) seen.set(key, g);
-      }
-      return Array.from(seen.values());
+      return allGames;
     },
     enabled: !!teamName,
   });
