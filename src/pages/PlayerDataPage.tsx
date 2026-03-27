@@ -57,8 +57,7 @@ const EXPECTED_GAMES: Record<string, number> = {
   "premier-league": 38,
 };
 
-const ALL_STAT_COLS =
-  "player_id, game_date, season, opponent, started, minutes, stat_pts, stat_reb, stat_ast, stat_stl, stat_blk, stat_sog, stat_goals, stat_assists, stat_pass_yds, stat_rush_yds, stat_rec, stat_rec_yds, stat_pass_td, stat_rush_td, stat_h, stat_rbi, stat_r, stat_hr, stat_sb, stat_k, stat_ip";
+
 
 // ─── Shared helpers ─────────────────────────────────────────────────────────
 
@@ -133,19 +132,20 @@ function usePlayerSearch(query: string) {
   });
 }
 
-function usePlayerGameLogs(playerId: string | null) {
+function usePlayerGameLogs(playerName: string | null, leagueSlug: string | null) {
   return useQuery({
-    queryKey: ["player-game-logs", playerId],
+    queryKey: ["player-game-logs-master", playerName, leagueSlug],
     queryFn: async () => {
-      if (!playerId) return [];
+      if (!playerName) return [];
       const allLogs: any[] = [];
       let offset = 0;
       const PAGE = 1000;
       while (true) {
         const { data } = await supabase
-          .from("back_in_play_player_game_logs")
-          .select(ALL_STAT_COLS)
-          .eq("player_id", playerId)
+          .from("back_in_play_master_games")
+          .select("*")
+          .eq("player_name", playerName)
+          .eq("league_slug", leagueSlug ?? "nba")
           .order("game_date", { ascending: false })
           .range(offset, offset + PAGE - 1);
         if (!data || data.length === 0) break;
@@ -155,7 +155,7 @@ function usePlayerGameLogs(playerId: string | null) {
       }
       return allLogs;
     },
-    enabled: !!playerId,
+    enabled: !!playerName,
   });
 }
 
@@ -465,12 +465,12 @@ function PlayerMode() {
   const [expandedSeason, setExpandedSeason] = useState<number | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
 
-  const { data: searchResults, isLoading: searching } = usePlayerSearch(searchText);
-  const { data: gameLogs, isLoading: loadingLogs } = usePlayerGameLogs(selectedPlayer?.player_id ?? null);
-  const { data: propsMap } = usePlayerAllProps(selectedPlayer?.player_id ?? null);
-
   const leagueSlug: string = (selectedPlayer?.league as any)?.slug ?? "nba";
   const teamName: string = (selectedPlayer?.team as any)?.team_name ?? null;
+
+  const { data: searchResults, isLoading: searching } = usePlayerSearch(searchText);
+  const { data: gameLogs, isLoading: loadingLogs } = usePlayerGameLogs(selectedPlayer?.player_name ?? null, leagueSlug);
+  const { data: propsMap } = usePlayerAllProps(selectedPlayer?.player_id ?? null);
   const { data: gameContext } = usePlayerGameContext(teamName, leagueSlug);
   const statDefs = LEAGUE_STATS[leagueSlug] ?? LEAGUE_STATS.nba;
 
