@@ -98,10 +98,22 @@ def load_injuries(league, player_filter=None):
 
 
 def consolidate_injuries(injuries):
-    """Merge consecutive same-type injuries for the same player within CONSOLIDATION_WINDOW days."""
+    """Deduplicate across sources, then merge consecutive same-type injuries within CONSOLIDATION_WINDOW days."""
+    # Step 0: Deduplicate — same player + same date + same injury type = one entry
+    dedup_key = set()
+    deduped = []
+    for inj in injuries:
+        key = (inj.get("player_name", ""), str(inj.get("date_injured", "")),
+               (inj.get("injury_type") or "").lower().strip())
+        if key not in dedup_key:
+            dedup_key.add(key)
+            deduped.append(inj)
+    dedup_removed = len(injuries) - len(deduped)
+    print(f"    Deduped across sources: {len(injuries):,} → {len(deduped):,} ({dedup_removed:,} cross-source duplicates)")
+
     # Group by player
     by_player = defaultdict(list)
-    for inj in injuries:
+    for inj in deduped:
         by_player[(inj.get("player_name", ""), str(inj.get("player_id", "")))].append(inj)
 
     consolidated = []

@@ -298,54 +298,62 @@ function usePlayerGameContext(playerTeamName: string | null, leagueSlug: string 
 
 function useTeamSearch(query: string) {
   return useQuery({
-    queryKey: ["team-search", query],
+    queryKey: ["team-search-master", query],
     queryFn: async () => {
       if (query.length < 2) return [];
       const { data } = await supabase
-        .from("back_in_play_teams")
-        .select(
-          "team_id, team_name, espn_team_id, league:back_in_play_leagues(slug, league_name)"
-        )
+        .from("back_in_play_master_teams")
+        .select("team_name, league_slug")
         .ilike("team_name", `%${query}%`)
-        .neq("team_name", "Unknown")
         .limit(20);
-      return data ?? [];
+      if (!data) return [];
+      return data.map((r: any) => ({
+        team_name: r.team_name,
+        league: { slug: r.league_slug },
+      }));
     },
     enabled: query.length >= 2,
   });
 }
 
-function useTeamRoster(teamId: string | null) {
+function useTeamRoster(teamName: string | null, leagueSlug: string | null) {
   return useQuery({
-    queryKey: ["team-roster", teamId],
+    queryKey: ["team-roster-master", teamName, leagueSlug],
     queryFn: async () => {
-      if (!teamId) return [];
+      if (!teamName) return [];
+      // Get distinct players from master games for this team
       const { data } = await supabase
-        .from("back_in_play_players")
-        .select("player_id, player_name, position, is_star, is_starter")
-        .eq("team_id", teamId)
+        .from("back_in_play_master_players")
+        .select("player_name, player_position")
+        .eq("player_team", teamName)
+        .eq("league_slug", leagueSlug ?? "nba")
         .order("player_name")
         .limit(200);
-      return data ?? [];
+      if (!data) return [];
+      return data.map((r: any) => ({
+        player_name: r.player_name,
+        position: r.player_position,
+      }));
     },
-    enabled: !!teamId,
+    enabled: !!teamName,
   });
 }
 
 function useTeamSchedule(teamName: string | null, leagueSlug: string | null) {
   return useQuery({
-    queryKey: ["team-schedule", teamName, leagueSlug],
+    queryKey: ["team-schedule-master", teamName, leagueSlug],
     queryFn: async () => {
       if (!teamName) return [];
-      // Query back_in_play_games where team is home or away
+      // Get distinct games for this team from master data
       const allGames: any[] = [];
       let offset = 0;
       const PAGE = 1000;
       while (true) {
         const { data } = await supabase
-          .from("back_in_play_games")
-          .select("game_date, home_team, away_team, home_score, away_score, season")
-          .or(`home_team.ilike.%${teamName}%,away_team.ilike.%${teamName}%`)
+          .from("back_in_play_master_games")
+          .select("game_date, home_team, away_team, home_score, away_score, season, event_id")
+          .or(`home_team.eq.${teamName},away_team.eq.${teamName}`)
+          .eq("league_slug", leagueSlug ?? "nba")
           .order("game_date", { ascending: false })
           .range(offset, offset + PAGE - 1);
         if (!data || data.length === 0) break;
@@ -353,7 +361,13 @@ function useTeamSchedule(teamName: string | null, leagueSlug: string | null) {
         if (data.length < PAGE) break;
         offset += PAGE;
       }
-      return allGames;
+      // Deduplicate by game_date + home + away (many player rows per game)
+      const seen = new Map<string, any>();
+      for (const g of allGames) {
+        const key = `${g.game_date}|${g.home_team}|${g.away_team}`;
+        if (!seen.has(key)) seen.set(key, g);
+      }
+      return Array.from(seen.values());
     },
     enabled: !!teamName,
   });
@@ -675,14 +689,14 @@ function TeamMode() {
   const [showDropdown, setShowDropdown] = useState(false);
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null);
 
+  const leagueSlug: string = (selectedTeam?.league as any)?.slug ?? "";
+
   const { data: searchResults, isLoading: searching } = useTeamSearch(searchText);
-  const { data: roster, isLoading: loadingRoster } = useTeamRoster(selectedTeam?.team_id ?? null);
+  const { data: roster, isLoading: loadingRoster } = useTeamRoster(selectedTeam?.team_name ?? null, leagueSlug || null);
   const { data: schedule, isLoading: loadingSchedule } = useTeamSchedule(
     selectedTeam?.team_name ?? null,
-    (selectedTeam?.league as any)?.slug ?? null
+    leagueSlug || null
   );
-
-  const leagueSlug: string = (selectedTeam?.league as any)?.slug ?? "";
 
   // Group schedule by season
   const scheduleBySeason = useMemo(() => {
@@ -726,16 +740,15 @@ function TeamMode() {
             {!searching && searchResults && searchResults.length === 0 && (
               <p className="px-4 py-3 text-xs text-white/30">No teams found</p>
             )}
-            {searchResults?.map((t: any) => (
+            {searchResults?.map((t: any, i: number) => (
               <button
-                key={t.team_id}
+                key={`${t.team_name}-${i}`}
                 onClick={() => selectTeam(t)}
                 className="w-full text-left px-4 py-2.5 hover:bg-white/5 flex items-center gap-3 border-b border-white/5 last:border-0"
               >
                 <span className="text-sm text-white">{t.team_name}</span>
                 <span className="text-[10px] text-white/30">
                   {((t.league as any)?.slug ?? "").toUpperCase()}
-                  {t.espn_team_id ? ` · ESPN: ${t.espn_team_id}` : ""}
                 </span>
               </button>
             ))}
