@@ -56,9 +56,17 @@ CSV_TO_DB = {
 }
 
 
-def clean_val(val):
+INT_COLS = {"season", "home_score", "away_score"}
+
+def clean_val(val, col_name=""):
     if val is None or val == "" or val == "None":
         return None
+    # Integer columns: strip .0 from floats
+    if col_name in INT_COLS:
+        try:
+            return int(float(val))
+        except:
+            return None
     return val
 
 
@@ -99,7 +107,8 @@ def import_league(league, conn):
         for row in reader:
             values = [league]  # league_slug
             for csv_col in csv_keys:
-                values.append(clean_val(row.get(csv_col)))
+                db_col = CSV_TO_DB[csv_col]
+                values.append(clean_val(row.get(csv_col), db_col))
             batch.append(values)
 
             if len(batch) >= CHUNK:

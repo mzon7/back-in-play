@@ -116,17 +116,30 @@ function qualityColor(games: number, leagueSlug: string): string {
 
 function usePlayerSearch(query: string) {
   return useQuery({
-    queryKey: ["player-search", query],
+    queryKey: ["player-search-master", query],
     queryFn: async () => {
       if (query.length < 2) return [];
+      // Search from master games table — ESPN box scores only, no duplicates
       const { data } = await supabase
-        .from("back_in_play_players")
-        .select(
-          "player_id, player_name, position, team:back_in_play_teams(team_name), league:back_in_play_leagues!back_in_play_players_league_id_fkey(slug)"
-        )
+        .from("back_in_play_master_games")
+        .select("player_name, player_team, player_position, league_slug")
         .ilike("player_name", `%${query}%`)
-        .limit(20);
-      return data ?? [];
+        .limit(200);
+      if (!data) return [];
+      // Deduplicate by name + league (many rows per player, we just need one)
+      const seen = new Map<string, any>();
+      for (const row of data) {
+        const key = `${row.player_name}|${row.league_slug}`;
+        if (!seen.has(key)) {
+          seen.set(key, {
+            player_name: row.player_name,
+            position: row.player_position,
+            team: { team_name: row.player_team },
+            league: { slug: row.league_slug },
+          });
+        }
+      }
+      return Array.from(seen.values()).slice(0, 20);
     },
     enabled: query.length >= 2,
   });
@@ -159,23 +172,25 @@ function usePlayerGameLogs(playerName: string | null, leagueSlug: string | null)
   });
 }
 
-function usePlayerInjuries(playerId: string | null) {
+function usePlayerInjuries(playerName: string | null, leagueSlug: string | null) {
   return useQuery({
-    queryKey: ["player-injuries", playerId],
+    queryKey: ["player-injuries-corrected", playerName, leagueSlug],
     queryFn: async () => {
-      if (!playerId) return [];
+      if (!playerName) return [];
       const { data, error } = await supabase
-        .from("back_in_play_injuries")
+        .from("back_in_play_injuries_corrected")
         .select(
-          "date_injured, return_date, injury_type, injury_description, games_missed, recovery_days, status, side, injury_location"
+          "date_injured, return_date, injury_type, games_missed, grade, start_day_diff, return_day_diff, match_notes, original_date_injured, original_return_date"
         )
-        .eq("player_id", playerId)
+        .eq("player_name", playerName)
+        .eq("league_slug", leagueSlug ?? "nba")
+        .in("grade", ["A", "B"])
         .order("date_injured", { ascending: false })
         .limit(200);
       if (error) throw error;
       return data ?? [];
     },
-    enabled: !!playerId,
+    enabled: !!playerName,
   });
 }
 
@@ -387,51 +402,40 @@ function buildSeasonSummaries(logs: any[], leagueSlug: string): SeasonSummary[] 
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
 
-function InjuryHistorySection({ playerId }: { playerId: string }) {
-  const { data: injuries, isLoading } = usePlayerInjuries(playerId);
+function InjuryHistorySection({ playerName, leagueSlug }: { playerName: string; leagueSlug: string }) {
+  const { data: injuries, isLoading } = usePlayerInjuries(playerName, leagueSlug);
 
   if (isLoading) return <p className="text-white/20 text-xs py-2 animate-pulse">Loading injuries...</p>;
   if (!injuries || injuries.length === 0) return null;
 
   return (
     <div className="bg-amber-500/[0.06] border border-amber-500/20 rounded-xl p-4 mb-6">
-      <h3 className="text-sm font-bold text-amber-400 mb-2">Injury History ({injuries.length})</h3>
+      <h3 className="text-sm font-bold text-amber-400 mb-2">Verified Injury History ({injuries.length})</h3>
+      <p className="text-[10px] text-amber-400/30 mb-2">Grade A+B injuries verified against ESPN box scores. Dates corrected from actual game absences.</p>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr className="text-amber-400/50 border-b border-amber-500/10">
-              <th className="px-2 py-1.5 text-left font-medium">Date Injured</th>
+              <th className="px-2 py-1.5 text-center font-medium">Grade</th>
+              <th className="px-2 py-1.5 text-left font-medium">Injured</th>
               <th className="px-2 py-1.5 text-left font-medium">Returned</th>
               <th className="px-2 py-1.5 text-left font-medium">Injury</th>
-              <th className="px-2 py-1.5 text-left font-medium">Detail</th>
-              <th className="px-2 py-1.5 text-right font-medium">Games</th>
-              <th className="px-2 py-1.5 text-right font-medium">Days</th>
-              <th className="px-2 py-1.5 text-left font-medium">Status</th>
+              <th className="px-2 py-1.5 text-right font-medium">GP Missed</th>
+              <th className="px-2 py-1.5 text-left font-medium text-white/20">Original Dates</th>
             </tr>
           </thead>
           <tbody>
             {injuries.map((inj: any, i: number) => (
               <tr key={i} className="border-b border-amber-500/[0.06] hover:bg-amber-500/[0.04]">
-                <td className="px-2 py-1 font-mono text-amber-300/70">{inj.date_injured}</td>
+                <td className="px-2 py-1 text-center">
+                  <span className={`text-[10px] font-bold ${inj.grade === "A" ? "text-emerald-400" : "text-blue-400"}`}>{inj.grade}</span>
+                </td>
+                <td className="px-2 py-1 font-mono text-amber-300/70">{inj.date_injured || "—"}</td>
                 <td className="px-2 py-1 font-mono text-white/40">{inj.return_date || "—"}</td>
                 <td className="px-2 py-1 text-amber-300/80">{inj.injury_type || "—"}</td>
-                <td className="px-2 py-1 text-white/30 max-w-[200px] truncate" title={inj.injury_description ?? ""}>
-                  {[inj.side, inj.injury_location, inj.injury_description].filter(Boolean).join(" · ") || "—"}
-                </td>
                 <td className="px-2 py-1 text-right font-mono text-white/50">{inj.games_missed ?? "—"}</td>
-                <td className="px-2 py-1 text-right font-mono text-white/50">{inj.recovery_days ?? "—"}</td>
-                <td className="px-2 py-1">
-                  <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded ${
-                      inj.status === "returned" || inj.status === "back_in_play" || inj.status === "active"
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : inj.status === "out"
-                          ? "bg-red-500/20 text-red-400"
-                          : "bg-amber-500/20 text-amber-400"
-                    }`}
-                  >
-                    {inj.status}
-                  </span>
+                <td className="px-2 py-1 text-[10px] text-white/15 font-mono" title={inj.match_notes ?? ""}>
+                  {inj.original_date_injured ?? ""} → {inj.original_return_date ?? ""}
                 </td>
               </tr>
             ))}
@@ -537,7 +541,7 @@ function PlayerMode() {
       )}
 
       {/* Injury History */}
-      {selectedPlayer && <InjuryHistorySection playerId={selectedPlayer.player_id} />}
+      {selectedPlayer && <InjuryHistorySection playerName={selectedPlayer.player_name} leagueSlug={leagueSlug} />}
 
       {/* Loading */}
       {loadingLogs && selectedPlayer && (
