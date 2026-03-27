@@ -922,7 +922,7 @@ function GameBoxScore({ eventId, leagueSlug }: { eventId: string; leagueSlug: st
     queryFn: async () => {
       const { data } = await supabase
         .from("back_in_play_master_games")
-        .select("player_name, player_team, player_position, played, minutes, stat_pts, stat_reb, stat_ast, stat_stl, stat_blk, stat_3pm, stat_goals, stat_assists, stat_sog, toi, stat_pass_yds, stat_pass_td, stat_rush_att, stat_rec, stat_h, stat_rbi, stat_hr, stat_k, stat_ip")
+        .select("*")
         .eq("event_id", eventId)
         .eq("league_slug", leagueSlug)
         .order("player_team")
