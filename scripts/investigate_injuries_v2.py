@@ -98,90 +98,100 @@ def load_injuries(league, player_filter=None):
 
 
 def consolidate_injuries(injuries):
-    """Deduplicate across sources, then merge consecutive same-type injuries within CONSOLIDATION_WINDOW days."""
-    # Step 0: Deduplicate — same player + same date + same injury type = one entry
-    dedup_key = set()
-    deduped = []
-    for inj in injuries:
-        key = (inj.get("player_name", ""), str(inj.get("date_injured", "")),
-               (inj.get("injury_type") or "").lower().strip())
-        if key not in dedup_key:
-            dedup_key.add(key)
-            deduped.append(inj)
-    dedup_removed = len(injuries) - len(deduped)
-    print(f"    Deduped across sources: {len(injuries):,} → {len(deduped):,} ({dedup_removed:,} cross-source duplicates)")
-
-    # Group by player
+    """Merge all same-type injury reports for a player within CONSOLIDATION_WINDOW days.
+    Uses earliest start date and latest return date across all sources."""
+    # Group by player NAME only (not player_id — some players have duplicate IDs)
     by_player = defaultdict(list)
-    for inj in deduped:
-        by_player[(inj.get("player_name", ""), str(inj.get("player_id", "")))].append(inj)
+    for inj in injuries:
+        by_player[inj.get("player_name", "")].append(inj)
 
     consolidated = []
-    merge_count = 0
+    total_merged = 0
 
-    for (player_name, player_id), player_injuries in by_player.items():
-        # Sort by date
-        sorted_inj = sorted(player_injuries, key=lambda x: str(x.get("date_injured", "")))
+    for player_name, player_injuries in by_player.items():
+        # Sort by injury type then date
+        sorted_inj = sorted(player_injuries, key=lambda x: (
+            (x.get("injury_type") or "").lower().strip(),
+            str(x.get("date_injured", ""))
+        ))
 
         i = 0
         while i < len(sorted_inj):
             current = sorted_inj[i]
             injury_type = (current.get("injury_type") or "").lower().strip()
-            date_injured = str(current.get("date_injured", ""))
-            return_date = str(current.get("return_date") or "")
 
-            # Look ahead for same-type injuries within the window
-            merged_ids = [str(current.get("injury_id", ""))]
-            merged_count = 1
-            last_return = return_date
-
+            # Collect all same-type injuries within the consolidation window
+            group = [current]
             j = i + 1
             while j < len(sorted_inj):
                 next_inj = sorted_inj[j]
                 next_type = (next_inj.get("injury_type") or "").lower().strip()
-                next_date = str(next_inj.get("date_injured", ""))
-                next_return = str(next_inj.get("return_date") or "")
 
-                # Same injury type?
                 if next_type != injury_type:
                     break
 
-                # Within consolidation window of last return or last injury date?
-                try:
-                    anchor = last_return if last_return and last_return != "None" and last_return < "2028" else date_injured
-                    gap = (datetime.strptime(next_date, "%Y-%m-%d") - datetime.strptime(anchor, "%Y-%m-%d")).days
-                except:
+                next_date = str(next_inj.get("date_injured", ""))
+
+                # Check if within window of ANY injury in the group
+                in_window = False
+                for g in group:
+                    g_date = str(g.get("date_injured", ""))
+                    g_return = str(g.get("return_date") or "")
+                    # Use the later of injury date or return date as anchor
+                    anchor = g_return if g_return and g_return != "None" and g_return < "2028" else g_date
+                    try:
+                        gap = (datetime.strptime(next_date, "%Y-%m-%d") - datetime.strptime(anchor, "%Y-%m-%d")).days
+                        if abs(gap) <= CONSOLIDATION_WINDOW:
+                            in_window = True
+                            break
+                    except:
+                        pass
+                    # Also check if next_date is within window of g_date directly
+                    try:
+                        gap2 = (datetime.strptime(next_date, "%Y-%m-%d") - datetime.strptime(g_date, "%Y-%m-%d")).days
+                        if abs(gap2) <= CONSOLIDATION_WINDOW:
+                            in_window = True
+                            break
+                    except:
+                        pass
+
+                if not in_window:
                     break
 
-                if gap > CONSOLIDATION_WINDOW:
-                    break
-
-                # Merge
-                merged_ids.append(str(next_inj.get("injury_id", "")))
-                merged_count += 1
-                if next_return and next_return != "None" and next_return < "2028":
-                    last_return = next_return
+                group.append(next_inj)
                 j += 1
 
-            if merged_count > 1:
-                merge_count += merged_count - 1
+            # Build consolidated entry: earliest start, latest return
+            all_ids = [str(g.get("injury_id", "")) for g in group]
+            all_sources = list(set(str(g.get("source", "")) for g in group))
+            all_dates = [str(g.get("date_injured", "")) for g in group if g.get("date_injured")]
+            all_returns = []
+            for g in group:
+                ret = str(g.get("return_date") or "")
+                if ret and ret != "None" and ret < "2028":
+                    all_returns.append(ret)
 
-            # Build consolidated injury
+            earliest_start = min(all_dates) if all_dates else None
+            latest_return = max(all_returns) if all_returns else None
+
+            if len(group) > 1:
+                total_merged += len(group) - 1
+
             consolidated.append({
-                "injury_ids": merged_ids,
-                "player_id": player_id,
+                "injury_ids": all_ids,
+                "player_id": str(current.get("player_id", "")),
                 "player_name": player_name,
                 "espn_id": str(current.get("espn_id") or ""),
                 "injury_type": current.get("injury_type"),
-                "source": current.get("source"),
-                "date_injured": date_injured,
-                "return_date": last_return if last_return and last_return != "None" else None,
-                "original_count": merged_count,
+                "source": ", ".join(all_sources[:3]),
+                "date_injured": earliest_start,
+                "return_date": latest_return,
+                "original_count": len(group),
             })
 
-            i = j  # skip merged entries
+            i = j
 
-    print(f"  Consolidated: {len(injuries):,} → {len(consolidated):,} ({merge_count:,} merged)")
+    print(f"  Consolidated: {len(injuries):,} → {len(consolidated):,} ({total_merged:,} merged)")
     return consolidated
 
 

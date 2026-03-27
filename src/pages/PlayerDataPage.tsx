@@ -681,6 +681,7 @@ function TeamMode() {
   const [selectedTeam, setSelectedTeam] = useState<any>(null);
   const [showDropdown, setShowDropdown] = useState(false);
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null);
+  const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
 
   const leagueSlug: string = (selectedTeam?.league as any)?.slug ?? "";
 
@@ -838,21 +839,32 @@ function TeamMode() {
                       <tbody>
                         {ss.games.map((g: any, i: number) => {
                           const isHome = (g.home_team ?? "").toLowerCase().includes((selectedTeam?.team_name ?? "").toLowerCase());
+                          const isExpanded = expandedGameId === g.event_id;
                           return (
-                            <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-                              <td className="px-3 py-1.5 text-white/50 font-mono">{g.game_date}</td>
-                              <td className={`px-3 py-1.5 ${isHome ? "text-blue-300/70 font-medium" : "text-white/40"}`}>
-                                {g.home_team}
-                              </td>
-                              <td className="px-3 py-1.5 text-center font-mono text-white/50">
-                                {g.home_score != null && g.away_score != null
-                                  ? `${g.home_score} - ${g.away_score}`
-                                  : "—"}
-                              </td>
-                              <td className={`px-3 py-1.5 ${!isHome ? "text-blue-300/70 font-medium" : "text-white/40"}`}>
-                                {g.away_team}
-                              </td>
-                            </tr>
+                            <Fragment key={i}>
+                              <tr className="border-b border-white/[0.03] hover:bg-white/[0.02] cursor-pointer"
+                                  onClick={() => setExpandedGameId(isExpanded ? null : g.event_id)}>
+                                <td className="px-3 py-1.5 text-white/50 font-mono">{g.game_date}</td>
+                                <td className={`px-3 py-1.5 ${isHome ? "text-blue-300/70 font-medium" : "text-white/40"}`}>
+                                  {g.home_team}
+                                </td>
+                                <td className="px-3 py-1.5 text-center font-mono text-white/50">
+                                  {g.home_score != null && g.away_score != null
+                                    ? `${g.home_score} - ${g.away_score}`
+                                    : "—"}
+                                </td>
+                                <td className={`px-3 py-1.5 ${!isHome ? "text-blue-300/70 font-medium" : "text-white/40"}`}>
+                                  {g.away_team}
+                                </td>
+                              </tr>
+                              {isExpanded && g.event_id && (
+                                <tr>
+                                  <td colSpan={4} className="p-0">
+                                    <GameBoxScore eventId={g.event_id} leagueSlug={leagueSlug} />
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
                           );
                         })}
                       </tbody>
@@ -865,6 +877,70 @@ function TeamMode() {
         </div>
       )}
     </>
+  );
+}
+
+/** Box score for a single game — shows all players with stats */
+function GameBoxScore({ eventId, leagueSlug }: { eventId: string; leagueSlug: string }) {
+  const statDefs = LEAGUE_STATS[leagueSlug] ?? LEAGUE_STATS.nba;
+  const { data, isLoading } = useQuery({
+    queryKey: ["game-boxscore", eventId],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("back_in_play_master_games")
+        .select("player_name, player_team, player_position, played, minutes, stat_pts, stat_reb, stat_ast, stat_stl, stat_blk, stat_3pm, stat_goals, stat_assists, stat_sog, toi, stat_pass_yds, stat_pass_td, stat_rush_att, stat_rec, stat_h, stat_rbi, stat_hr, stat_k, stat_ip")
+        .eq("event_id", eventId)
+        .eq("league_slug", leagueSlug)
+        .order("player_team")
+        .order("player_name");
+      return data ?? [];
+    },
+    staleTime: 120_000,
+  });
+
+  if (isLoading) return <div className="px-4 py-2 text-[10px] text-white/30 animate-pulse">Loading box score...</div>;
+  if (!data || data.length === 0) return <div className="px-4 py-2 text-[10px] text-white/20">No box score data</div>;
+
+  // Group by team
+  const teams = new Map<string, any[]>();
+  for (const p of data) {
+    const team = p.player_team || "Unknown";
+    if (!teams.has(team)) teams.set(team, []);
+    teams.get(team)!.push(p);
+  }
+
+  return (
+    <div className="bg-white/[0.02] max-h-[400px] overflow-y-auto">
+      {Array.from(teams.entries()).map(([team, players]) => (
+        <div key={team}>
+          <div className="px-3 py-1 bg-white/[0.04] text-[10px] text-white/40 font-medium sticky top-0">{team}</div>
+          <table className="w-full text-[10px]">
+            <thead>
+              <tr className="text-white/20">
+                <th className="px-2 py-0.5 text-left">Player</th>
+                <th className="px-2 py-0.5 text-left">Pos</th>
+                {statDefs.map(s => (
+                  <th key={s.key} className="px-1 py-0.5 text-right">{s.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {players.filter((p: any) => p.played !== false).map((p: any, i: number) => (
+                <tr key={i} className="border-b border-white/[0.02] hover:bg-white/[0.02]">
+                  <td className="px-2 py-0.5 text-white/50">{p.player_name}</td>
+                  <td className="px-2 py-0.5 text-white/25">{p.player_position || ""}</td>
+                  {statDefs.map(s => (
+                    <td key={s.key} className="px-1 py-0.5 text-right font-mono text-white/40">
+                      {p[s.key] != null ? p[s.key] : ""}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
   );
 }
 
