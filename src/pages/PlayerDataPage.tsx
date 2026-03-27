@@ -119,27 +119,18 @@ function usePlayerSearch(query: string) {
     queryKey: ["player-search-master", query],
     queryFn: async () => {
       if (query.length < 2) return [];
-      // Search from master games table — ESPN box scores only, no duplicates
       const { data } = await supabase
-        .from("back_in_play_master_games")
+        .from("back_in_play_master_players")
         .select("player_name, player_team, player_position, league_slug")
         .ilike("player_name", `%${query}%`)
-        .limit(200);
+        .limit(20);
       if (!data) return [];
-      // Deduplicate by name + league (many rows per player, we just need one)
-      const seen = new Map<string, any>();
-      for (const row of data) {
-        const key = `${row.player_name}|${row.league_slug}`;
-        if (!seen.has(key)) {
-          seen.set(key, {
-            player_name: row.player_name,
-            position: row.player_position,
-            team: { team_name: row.player_team },
-            league: { slug: row.league_slug },
-          });
-        }
-      }
-      return Array.from(seen.values()).slice(0, 20);
+      return data.map((row: any) => ({
+        player_name: row.player_name,
+        position: row.player_position,
+        team: { team_name: row.player_team },
+        league: { slug: row.league_slug },
+      }));
     },
     enabled: query.length >= 2,
   });
