@@ -29,26 +29,7 @@ import json, os, re, sys, time, urllib.request, urllib.error
 from datetime import date, datetime
 from pathlib import Path
 
-
-# -- Load env -----------------------------------------------------------------
-def load_env():
-    for envfile in ["/root/.daemon-env", ".env", "../.env"]:
-        p = Path(envfile)
-        if p.exists():
-            for line in p.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip().strip("'\""))
-
-load_env()
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("ERROR: Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY")
-    sys.exit(1)
+from db_writer import pg_upsert, SB_URL as SUPABASE_URL, SB_KEY as SUPABASE_KEY
 
 MAX_RETRIES = 3
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -101,52 +82,6 @@ def _strip_unknown_columns(table, rows):
         return rows
     return [{k: v for k, v in row.items() if k in known} for row in rows]
 
-
-def sb_upsert(table, rows, conflict=""):
-    if not rows:
-        return 0
-    if conflict:
-        keys = conflict.split(",")
-        seen = set()
-        unique = []
-        for r in rows:
-            k = tuple(r.get(c) for c in keys)
-            if k not in seen:
-                seen.add(k)
-                unique.append(r)
-        rows = unique
-    # Strip columns that don't exist yet (migration not run)
-    rows = _strip_unknown_columns(table, rows)
-    hdrs = sb_headers("return=representation,resolution=merge-duplicates")
-    url = SUPABASE_URL + "/rest/v1/" + table
-    if conflict:
-        url += "?on_conflict=" + conflict
-    total = 0
-    for i in range(0, len(rows), 50):
-        batch = rows[i:i+50]
-        for attempt in range(MAX_RETRIES):
-            try:
-                req = urllib.request.Request(url, data=json.dumps(batch).encode(),
-                                             headers=hdrs, method="POST")
-                resp = urllib.request.urlopen(req, timeout=60)
-                result = json.loads(resp.read().decode())
-                total += len(result) if isinstance(result, list) else 1
-                break
-            except Exception as e:
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(2 ** attempt)
-                else:
-                    for row in batch:
-                        try:
-                            req2 = urllib.request.Request(url, data=json.dumps([row]).encode(),
-                                                          headers=hdrs, method="POST")
-                            resp2 = urllib.request.urlopen(req2, timeout=30)
-                            resp2.read()
-                            total += 1
-                        except Exception:
-                            pass
-                    break
-    return total
 
 def sb_get(table, params=""):
     url = SUPABASE_URL + "/rest/v1/" + table + "?" + params
@@ -368,8 +303,8 @@ def scrape_espn(league_key):
 
     for team_entry in teams_data:
         team_info = team_entry.get("team", {})
-        team_name = team_info.get("displayName") or team_info.get("name", "Unknown")
-        team_abbr = team_info.get("abbreviation", "")
+        team_name = team_info.get("displayName") or team_info.get("name") or team_entry.get("displayName") or team_entry.get("name", "Unknown")
+        team_abbr = team_info.get("abbreviation", team_entry.get("abbreviation", ""))
         team_logo = team_info.get("logo", team_info.get("logos", [{}])[0].get("href", "") if team_info.get("logos") else "")
 
         team_id = get_or_create_team(team_name, league_id)
@@ -394,59 +329,94 @@ def scrape_espn(league_key):
             athlete_links = athlete.get("links", [])
             espn_profile_url = athlete_links[0].get("href", "") if athlete_links else ""
 
-            # Injury type details
+            # --- Details object (richest source: details.type = body part, details.detail = specifics) ---
+            details = inj.get("details", {})
+            if not isinstance(details, dict):
+                details = {}
+            detail_body_part = details.get("type", "")        # e.g. "Knee", "Shoulder"
+            detail_specifics = details.get("detail", "")      # e.g. "Strain", "Sprain"
+            detail_side = details.get("side", "")
+            detail_returnDate = details.get("returnDate", "")
+
+            # --- Type object (often just status echo like "out") ---
             inj_type_obj = inj.get("type", {})
             if isinstance(inj_type_obj, dict):
-                inj_desc = inj_type_obj.get("description", inj_type_obj.get("detail", ""))
+                type_desc = inj_type_obj.get("description", "")
                 inj_abbreviation = inj_type_obj.get("abbreviation", "")
             else:
-                inj_desc = str(inj_type_obj) if inj_type_obj else ""
+                type_desc = str(inj_type_obj) if inj_type_obj else ""
                 inj_abbreviation = ""
 
-            # Details object
-            details = inj.get("details", {})
-            if isinstance(details, dict):
-                detail_text = details.get("detail", details.get("type", ""))
-                detail_side = details.get("side", "")
-                detail_returnDate = details.get("returnDate", "")
-                if detail_text and not inj_desc:
-                    inj_desc = detail_text
-            else:
-                detail_side = ""
-                detail_returnDate = ""
-                detail_text = ""
+            # --- Athlete notes (RotoWire narratives — most descriptive) ---
+            notes = athlete.get("notes", {})
+            note_items = notes.get("items", []) if isinstance(notes, dict) else []
+            best_narrative = ""
+            for note in note_items:
+                note_text = note.get("text", "")
+                # Pick the longest note — it has the real description
+                if len(note_text) > len(best_narrative):
+                    best_narrative = note_text
 
-            # Status
+            # --- Athlete-level team (fallback if parent team_entry has no team info) ---
+            athlete_team = athlete.get("team", {})
+            if isinstance(athlete_team, dict) and athlete_team.get("displayName"):
+                athlete_team_name = athlete_team["displayName"]
+                # Re-resolve team if parent was "Unknown"
+                if team_name == "Unknown" and athlete_team_name != "Unknown":
+                    resolved_tid = get_or_create_team(athlete_team_name, league_id)
+                    if resolved_tid:
+                        team_id = resolved_tid
+
+            # --- Status ---
             status_raw = inj.get("status", "")
             if isinstance(status_raw, dict):
                 status_type = status_raw.get("type", "")
                 status_desc = status_raw.get("description", "")
-                status_detail = status_raw.get("detail", "")
                 status_raw = status_type or status_desc
             else:
                 status_desc = ""
-                status_detail = ""
             status = normalize_status(str(status_raw))
 
-            # Comments
+            # --- Comments ---
             long_comment = inj.get("longComment", "")
             short_comment = inj.get("shortComment", "")
 
-            # Determine date of injury if available
+            # --- Date ---
             inj_date = inj.get("date", "")
             if inj_date:
-                inj_date = inj_date[:10]  # YYYY-MM-DD
+                inj_date = inj_date[:10]
             else:
                 inj_date = today
 
-            # Extract side from description if not in details
+            # --- Build rich description ---
+            # Prefer: narrative > detail_body_part + detail_specifics > type_desc > comments
+            inj_desc = ""
+            if detail_body_part and detail_specifics:
+                inj_desc = "%s — %s" % (detail_body_part, detail_specifics)
+            elif detail_body_part:
+                inj_desc = detail_body_part
+            elif detail_specifics:
+                inj_desc = detail_specifics
+            elif type_desc and type_desc.lower() not in ("out", "day-to-day", "d2d", "questionable", "doubtful", "probable"):
+                inj_desc = type_desc
+
+            # Use narrative as long_comment if it's richer
+            if best_narrative and len(best_narrative) > len(long_comment):
+                long_comment = best_narrative
+
+            # Build full description: body part + specifics + short_comment (deduped)
+            desc_parts = [d for d in [inj_desc, short_comment] if d and d.lower() not in ("out", "day-to-day")]
+            full_desc = " — ".join(dict.fromkeys(desc_parts))
+
             side = detail_side or extract_side(inj_desc) or extract_side(long_comment)
 
-            # Build full description
-            desc_parts = [d for d in [inj_desc, detail_text, short_comment] if d]
-            full_desc = " — ".join(dict.fromkeys(desc_parts))  # dedup while preserving order
-
-            injury_type, injury_slug = classify_injury(full_desc or long_comment)
+            # Classify injury from the richest source
+            classify_input = detail_body_part or full_desc or long_comment
+            injury_type, injury_slug = classify_injury(classify_input)
+            # Override with detail_body_part if classify gave generic result
+            if detail_body_part and injury_type in ("Other", "Unknown", "Unspecified"):
+                injury_type = detail_body_part.title()
+                injury_slug = slugify(detail_body_part)
 
             player_id = get_or_create_player(pname, team_id, pos_abbr, league_id)
             if not player_id:
@@ -456,7 +426,7 @@ def scrape_espn(league_key):
                 "player_id": player_id,
                 "injury_type": injury_type,
                 "injury_type_slug": injury_slug,
-                "injury_description": full_desc[:500],
+                "injury_description": full_desc[:500] if full_desc else (inj_desc[:500] or None),
                 "date_injured": inj_date,
                 "status": status.lower(),
                 "source": "espn.com/%s" % cfg["league"],
@@ -464,7 +434,7 @@ def scrape_espn(league_key):
                 "side": side or None,
                 "long_comment": long_comment[:1000] if long_comment else None,
                 "short_comment": short_comment[:500] if short_comment else None,
-                "injury_location": inj_desc[:200] if inj_desc else None,
+                "injury_location": (detail_body_part or inj_desc)[:200] or None,
             })
 
     print("    ESPN %s: %d injured players" % (cfg["name"], len(injuries)), flush=True)
@@ -1158,8 +1128,8 @@ def ingest_league(league_key, sources, use_diff=False, state=None):
 
         # Only upsert the changed ones
         stamp_ranks(changed)
-        count = sb_upsert("back_in_play_injuries", changed,
-                          "player_id,date_injured,injury_type_slug")
+        count = pg_upsert("back_in_play_injuries", changed,
+                          conflict_cols=["player_id", "date_injured", "injury_type_slug"])
         print("  UPSERTED: %d changed injuries for %s" % (count, league_key.upper()), flush=True)
 
         # Log status changes to the feed table
@@ -1175,8 +1145,8 @@ def ingest_league(league_key, sources, use_diff=False, state=None):
     else:
         # Full mode — upsert everything
         stamp_ranks(all_injuries)
-        count = sb_upsert("back_in_play_injuries", all_injuries,
-                          "player_id,date_injured,injury_type_slug")
+        count = pg_upsert("back_in_play_injuries", all_injuries,
+                          conflict_cols=["player_id", "date_injured", "injury_type_slug"])
         print("  UPSERTED: %d injuries for %s" % (count, league_key.upper()), flush=True)
         return count
 

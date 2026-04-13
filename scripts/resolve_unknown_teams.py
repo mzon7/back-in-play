@@ -76,9 +76,11 @@ def sb_patch(table, filter_params, body):
 
 
 def normalize_name(name):
+<<<<<<< HEAD
     import re
-    # Strip leading position prefixes (e.g. "LWs ", "/ ", "RW ")
-    name = re.sub(r'^[A-Z/]{1,4}s?\s+', '', name.strip())
+    # Strip leading slashes and known position prefixes
+    name = re.sub(r'^/\s*', '', name.strip())
+    name = re.sub(r'^(LWs|RWs|LW|RW|SS|CF|RF|LF|SP|RP|DH)\s+', '', name)
     name = name.lstrip('/ ')
     nfkd = unicodedata.normalize("NFKD", name)
     ascii_name = "".join(c for c in nfkd if not unicodedata.combining(c))
@@ -86,6 +88,12 @@ def normalize_name(name):
     # Strip apostrophes, hyphens, periods for matching
     n = n.replace("'", "").replace("'", "").replace("-", "").replace(".", "")
     for suffix in [" jr", " sr", " iii", " ii", " iv", " v"]:
+=======
+    nfkd = unicodedata.normalize("NFKD", name)
+    ascii_name = "".join(c for c in nfkd if not unicodedata.combining(c))
+    n = ascii_name.lower().strip()
+    for suffix in [" jr.", " sr.", " jr", " sr", " iii", " ii", " iv", " v"]:
+>>>>>>> 9929eda (auto: uncommitted changes)
         if n.endswith(suffix):
             n = n[:-len(suffix)].strip()
     return n

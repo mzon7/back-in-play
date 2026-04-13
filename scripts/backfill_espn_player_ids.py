@@ -75,9 +75,10 @@ def sb_patch(table, filter_params, body):
 
 def normalize_name(name):
     """Normalize player name for matching: lowercase, strip accents, punctuation, suffixes."""
-    # Strip leading position prefixes (e.g. "LWs ", "/ ", "RW ")
+    # Strip leading slashes and known position prefixes
     import re
-    name = re.sub(r'^[A-Z/]{1,4}s?\s+', '', name.strip())
+    name = re.sub(r'^/\s*', '', name.strip())
+    name = re.sub(r'^(LWs|RWs|LW|RW|SS|CF|RF|LF|SP|RP|DH)\s+', '', name)
     name = name.lstrip('/ ')
     # Remove accents
     nfkd = unicodedata.normalize("NFKD", name)

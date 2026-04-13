@@ -6,6 +6,7 @@ export interface RecoveryStat {
   league_name: string;
   average_recovery_days: number | null;
   median_recovery_days: number | null;
+  stddev_recovery_days: number | null;
   min_recovery_days: number | null;
   max_recovery_days: number | null;
   sample_size: number;

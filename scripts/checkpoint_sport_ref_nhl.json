@@ -1,0 +1,26 @@
+{
+  "resolved": {
+    "ac72aba2-ac3c-4c57-8d94-59065475b1a4": "noesest01",
+    "13e50440-85f3-4df3-af17-e2fd7d3c9654": "muzzija01",
+    "e306bb4f-badd-4494-b745-86c4977457e8": "varlasi01",
+    "7f0601e1-bd74-4d8e-8f18-741b6239fcca": "palmiky01",
+    "3c4bf1e6-e06f-4fe7-8887-2b9648d43213": "pescebr01",
+    "ad033698-706b-4e8c-85be-791e3ab012ea": "milleco02",
+    "a5c49e32-1fdf-4bb6-8582-e17435a5fc0d": "schwico01",
+    "35ef982c-7fd1-43f6-b013-43fec4de48a3": "demkoth01",
+    "d14c4a85-006d-43b3-8b90-b02e86f379c3": "hayeske01",
+    "42a93ceb-f747-4e79-8117-a919a94add62": "wilsbad01",
+    "157caf84-0ac0-4925-b9a0-f39450d4a6eb": "stonema01",
+    "048fdca9-3a3d-4650-ad94-37d8cdf91358": "jonesse01",
+    "52dbeabd-08f5-4dc1-9d74-09c906d72f41": "greenjo02",
+    "bd69038f-4537-4a6f-85f3-67ddf540698d": "girarsa01",
+    "08bf8e73-0731-4291-9d1c-6fddc7c9c620": "faksara01"
+  },
+  "failed": [
+    "412b4c0c-78c4-4f1f-835d-eac592d37e19",
+    "1d29e387-c1a6-4d2f-bd5d-b14853053def",
+    "24f97695-16f1-4bd7-92af-3a60dd03450c",
+    "868bbb14-d973-497c-8f4c-ad5c42b0ade0",
+    "6d013ce4-30c7-4031-9d1f-088b9682f0f3"
+  ]
+}

@@ -10,9 +10,17 @@ html {
 
 body {
   overscroll-behavior: none;
+  overflow-x: hidden;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+}
+
+/* Bottom padding for mobile tab bar */
+@media (max-width: 767px) {
+  body {
+    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
+  }
 }
 
 /* Allow text selection in inputs, textareas, and content areas */
@@ -28,6 +36,29 @@ input, textarea, [contenteditable="true"], pre, code, .selectable {
     scrollbar-width: none;
   }
   *::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Headline card hover: scale + brighter border + CTA */
+.headline-card {
+  will-change: transform;
+}
+.headline-card:hover {
+  transform: scale(1.02);
+  border-color: var(--hover-border) !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+.headline-card:hover .headline-cta {
+  color: rgba(255,255,255,0.55);
+}
+
+/* Hide scrollbar on headline carousel (desktop) */
+@media (pointer: fine) {
+  .headline-carousel {
+    scrollbar-width: none;
+  }
+  .headline-carousel::-webkit-scrollbar {
     display: none;
   }
 }
