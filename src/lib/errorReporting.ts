@@ -103,6 +103,10 @@ export function installFrontendErrorCapture(
       message.includes("Rendered more hooks") ||
       message.includes("Rendered fewer hooks")
     ) return;
+    // Browsers with stale service worker registrations emit "sw.js load failed"
+    // unhandled rejections while trying to update. This is a browser-side
+    // artifact of old SW registrations — not an application error.
+    if (message.includes("sw.js") && message.toLowerCase().includes("load failed")) return;
     reportSelfHealError(supabase, {
       category: "frontend",
       source: "unhandledrejection",

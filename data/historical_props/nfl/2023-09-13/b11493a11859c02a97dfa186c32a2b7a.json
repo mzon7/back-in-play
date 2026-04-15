@@ -1,0 +1,32 @@
+[
+  {
+    "league": "nfl",
+    "event_id": "b11493a11859c02a97dfa186c32a2b7a",
+    "game_date": "2023-09-13",
+    "home_team": "Cincinnati Bengals",
+    "away_team": "Baltimore Ravens",
+    "commence_time": "2023-09-17T17:01:00Z",
+    "player_name": "Joe Burrow",
+    "market": "player_pass_tds",
+    "line": 1.5,
+    "over_price": -182,
+    "under_price": 136,
+    "bookmaker": "fanduel",
+    "snapshot_time": "2023-09-13T11:55:42Z"
+  },
+  {
+    "league": "nfl",
+    "event_id": "b11493a11859c02a97dfa186c32a2b7a",
+    "game_date": "2023-09-13",
+    "home_team": "Cincinnati Bengals",
+    "away_team": "Baltimore Ravens",
+    "commence_time": "2023-09-17T17:01:00Z",
+    "player_name": "Lamar Jackson",
+    "market": "player_pass_tds",
+    "line": 1.5,
+    "over_price": 134,
+    "under_price": -180,
+    "bookmaker": "fanduel",
+    "snapshot_time": "2023-09-13T11:55:42Z"
+  }
+]
