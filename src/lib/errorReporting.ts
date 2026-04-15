@@ -88,6 +88,10 @@ export function installFrontendErrorCapture(
       event.message?.includes("Rendered more hooks") ||
       event.message?.includes("Rendered fewer hooks")
     ) return;
+    // Service worker script load failures (stale SW registrations trying to update)
+    // are browser-side artifacts, not application errors — suppress them.
+    const msg = event.message ?? "";
+    if (msg.includes("sw.js") && msg.toLowerCase().includes("load failed")) return;
     reportSelfHealError(supabase, {
       category: "frontend",
       source: event.filename ?? "window.onerror",
