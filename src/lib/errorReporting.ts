@@ -90,8 +90,13 @@ export function installFrontendErrorCapture(
     ) return;
     // Service worker script load failures (stale SW registrations trying to update)
     // are browser-side artifacts, not application errors — suppress them.
+    // Cross-origin error events set message to "Script error." and put the URL in filename.
     const msg = event.message ?? "";
-    if (msg.includes("sw.js") && msg.toLowerCase().includes("load failed")) return;
+    const filename = event.filename ?? "";
+    const isSWLoadFailure =
+      (msg.includes("sw.js") && msg.toLowerCase().includes("load failed")) ||
+      (filename.includes("sw.js") && (msg === "" || msg === "Script error." || msg.toLowerCase().includes("load failed")));
+    if (isSWLoadFailure) return;
     reportSelfHealError(supabase, {
       category: "frontend",
       source: event.filename ?? "window.onerror",
