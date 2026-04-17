@@ -115,7 +115,16 @@ export function installFrontendErrorCapture(
     // Browsers with stale service worker registrations emit "sw.js load failed"
     // unhandled rejections while trying to update. This is a browser-side
     // artifact of old SW registrations — not an application error.
-    if (message.includes("sw.js") && message.toLowerCase().includes("load failed")) return;
+    // Check both the .message string and the full reason string (some browsers
+    // put the URL in toString() but not in .message).
+    const reasonStr = String(event.reason);
+    const isSWRejection =
+      (message.includes("sw.js") || reasonStr.includes("sw.js")) &&
+      (message.toLowerCase().includes("load failed") || reasonStr.toLowerCase().includes("load failed"));
+    if (isSWRejection) return;
+    // Also suppress bare "Load failed" rejections that originate from the SW
+    // update pipeline (no URL in the message in some browsers/environments).
+    if (/^(script\s+)?load\s+failed\.?$/i.test(message.trim())) return;
     reportSelfHealError(supabase, {
       category: "frontend",
       source: "unhandledrejection",
