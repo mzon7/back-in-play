@@ -1,7 +1,7 @@
 {
   "headers": [
     {
-      "source": "/",
+      "source": "/((?!assets/|workbox-[^/]+\\.js|sw\\.js|registerSW\\.js|manifest\\.webmanifest).*)",
       "headers": [
         { "key": "Clear-Site-Data", "value": "\"serviceworker\"" }
       ]

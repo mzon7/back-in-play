@@ -127,7 +127,9 @@ export function installFrontendErrorCapture(
     }
     // Also suppress bare "Load failed" rejections that originate from the SW
     // update pipeline (no URL in the message in some browsers/environments).
-    if (/^(script\s+)?load\s+failed\.?$/i.test(message.trim())) {
+    // Also catches "Script https://...sw.js load failed" patterns.
+    if (/^(script\s+\S*)?load\s+failed\.?$/i.test(message.trim()) ||
+        /script\s+https?:\/\/\S*sw\.js\s+load\s+failed/i.test(message.trim())) {
       event.preventDefault();
       return;
     }
