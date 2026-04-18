@@ -116,9 +116,12 @@ export function installFrontendErrorCapture(
     // The app no longer uses a service worker, so ANY rejection that mentions
     // sw.js is a stale-registration artifact and should be suppressed regardless
     // of the exact message format (varies across browsers/versions).
-    const reasonStr = String(event.reason ?? "");
-    const allText = message + " " + reasonStr;
-    if (allText.includes("sw.js")) return;
+    const reason = event.reason;
+    const reasonStr = String(reason ?? "");
+    // Also check filename/url properties present on some browser error objects.
+    const reasonUrl = String((reason as any)?.filename ?? (reason as any)?.url ?? "");
+    const allText = message + " " + reasonStr + " " + reasonUrl;
+    if (allText.includes("sw.js") || allText.includes("registerSW") || allText.includes("workbox")) return;
     // Also suppress bare "Load failed" rejections that originate from the SW
     // update pipeline (no URL in the message in some browsers/environments).
     if (/^(script\s+)?load\s+failed\.?$/i.test(message.trim())) return;

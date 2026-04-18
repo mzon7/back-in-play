@@ -40,6 +40,27 @@
           }
         }
       }, true);
+      // Suppress service worker update errors that fire before the app's error
+      // handlers are installed. Browsers with stale SW registrations emit
+      // "sw.js load failed" unhandled rejections — suppress them early so they
+      // never reach the self-heal monitoring system.
+      window.addEventListener('unhandledrejection', function(e) {
+        var r = e.reason;
+        var msg = (r && r.message) ? String(r.message) : String(r || '');
+        var str = msg + ' ' + String(r || '');
+        if (str.indexOf('sw.js') !== -1 ||
+            str.indexOf('registerSW') !== -1 ||
+            str.indexOf('workbox') !== -1 ||
+            /load\s+failed/i.test(msg)) {
+          e.preventDefault();
+        }
+      });
+      window.addEventListener('error', function(e) {
+        var src = (e.filename || '') + ' ' + (e.message || '');
+        if (src.indexOf('sw.js') !== -1 || src.indexOf('registerSW') !== -1) {
+          e.preventDefault();
+        }
+      });
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
