@@ -7,6 +7,6 @@ self.addEventListener("install", (event) => {
 });
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    self.clients.claim().then(() => self.registration.unregister())
+    self.clients.claim().then(() => self.registration.unregister()).catch(() => {})
   );
 });
