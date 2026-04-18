@@ -128,3 +128,8 @@
 - Error: Error messages (most recent):
 - Attempted: 1 fix(es), verdict: The code diff shows a change in `public/sw.js` that adds error handling to the service worker unregistration process, which addresses the loading failure issue.
 - Status: unresolved
+
+## [2026-04-18 22:22] Unresolved: unhandledrejection
+- Error: Error messages (most recent):
+- Attempted: 1 fix(es), verdict: The code diff includes changes to `vercel.json` that add a header to clear stale service worker registrations, addressing the root cause of the `sw.js load failed` error.
+- Status: unresolved
