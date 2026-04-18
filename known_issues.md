@@ -113,3 +113,8 @@
 - Error: Error messages (most recent):
 - Attempted: 1 fix(es), verdict: The changes made do not address the root cause of the 'sw.js load failed' error; they only suppress the error messages without fixing the underlying issue.
 - Status: unresolved
+
+## [2026-04-18 13:08] Unresolved: unhandledrejection
+- Error: Error messages (most recent):
+- Attempted: 1 fix(es), verdict: The code diff shows changes in `index.html` that modify the error handling for the service worker, which directly addresses the loading failure of `sw.js` by preventing further propagation of the error event.
+- Status: unresolved
