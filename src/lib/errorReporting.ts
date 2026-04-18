@@ -90,13 +90,11 @@ export function installFrontendErrorCapture(
     ) return;
     // Service worker script load failures (stale SW registrations trying to update)
     // are browser-side artifacts, not application errors — suppress them.
-    // Cross-origin error events set message to "Script error." and put the URL in filename.
+    // The app no longer uses a service worker, so ANY error mentioning sw.js
+    // (in the message or filename) is a stale-registration artifact.
     const msg = event.message ?? "";
     const filename = event.filename ?? "";
-    const isSWLoadFailure =
-      (msg.includes("sw.js") && msg.toLowerCase().includes("load failed")) ||
-      (filename.includes("sw.js") && (msg === "" || msg === "Script error." || msg.toLowerCase().includes("load failed")));
-    if (isSWLoadFailure) return;
+    if (msg.includes("sw.js") || filename.includes("sw.js")) return;
     reportSelfHealError(supabase, {
       category: "frontend",
       source: event.filename ?? "window.onerror",
@@ -115,13 +113,12 @@ export function installFrontendErrorCapture(
     // Browsers with stale service worker registrations emit "sw.js load failed"
     // unhandled rejections while trying to update. This is a browser-side
     // artifact of old SW registrations — not an application error.
-    // Check both the .message string and the full reason string (some browsers
-    // put the URL in toString() but not in .message).
-    const reasonStr = String(event.reason);
-    const isSWRejection =
-      (message.includes("sw.js") || reasonStr.includes("sw.js")) &&
-      (message.toLowerCase().includes("load failed") || reasonStr.toLowerCase().includes("load failed"));
-    if (isSWRejection) return;
+    // The app no longer uses a service worker, so ANY rejection that mentions
+    // sw.js is a stale-registration artifact and should be suppressed regardless
+    // of the exact message format (varies across browsers/versions).
+    const reasonStr = String(event.reason ?? "");
+    const allText = message + " " + reasonStr;
+    if (allText.includes("sw.js")) return;
     // Also suppress bare "Load failed" rejections that originate from the SW
     // update pipeline (no URL in the message in some browsers/environments).
     if (/^(script\s+)?load\s+failed\.?$/i.test(message.trim())) return;
