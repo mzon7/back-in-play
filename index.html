@@ -50,17 +50,18 @@
         var str = msg + ' ' + String(r || '');
         if (str.indexOf('sw.js') !== -1 ||
             str.indexOf('registerSW') !== -1 ||
-            str.indexOf('workbox') !== -1 ||
-            /load\s+failed/i.test(msg)) {
+            str.indexOf('workbox') !== -1) {
           e.preventDefault();
+          e.stopImmediatePropagation();
         }
-      });
+      }, true);
       window.addEventListener('error', function(e) {
         var src = (e.filename || '') + ' ' + (e.message || '');
         if (src.indexOf('sw.js') !== -1 || src.indexOf('registerSW') !== -1) {
           e.preventDefault();
+          e.stopImmediatePropagation();
         }
-      });
+      }, true);
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -121,10 +121,16 @@ export function installFrontendErrorCapture(
     // Also check filename/url properties present on some browser error objects.
     const reasonUrl = String((reason as any)?.filename ?? (reason as any)?.url ?? "");
     const allText = message + " " + reasonStr + " " + reasonUrl;
-    if (allText.includes("sw.js") || allText.includes("registerSW") || allText.includes("workbox")) return;
+    if (allText.includes("sw.js") || allText.includes("registerSW") || allText.includes("workbox")) {
+      event.preventDefault();
+      return;
+    }
     // Also suppress bare "Load failed" rejections that originate from the SW
     // update pipeline (no URL in the message in some browsers/environments).
-    if (/^(script\s+)?load\s+failed\.?$/i.test(message.trim())) return;
+    if (/^(script\s+)?load\s+failed\.?$/i.test(message.trim())) {
+      event.preventDefault();
+      return;
+    }
     reportSelfHealError(supabase, {
       category: "frontend",
       source: "unhandledrejection",
