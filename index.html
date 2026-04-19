@@ -27,6 +27,14 @@
   <body>
     <div id="root"></div>
     <script>
+      // Proactively unregister any stale service workers as early as possible.
+      // This runs before any module script and reduces the window in which the
+      // browser's background SW update-check can fire an "sw.js load failed" error.
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(regs) {
+          regs.forEach(function(r) { r.unregister(); });
+        }).catch(function() {});
+      }
       // When a hashed JS chunk fails to load (stale HTML after a new deploy),
       // reload the page once to fetch fresh HTML with updated chunk hashes.
       window.addEventListener('error', function(e) {
@@ -44,13 +52,23 @@
       // handlers are installed. Browsers with stale SW registrations emit
       // "sw.js load failed" unhandled rejections — suppress them early so they
       // never reach the self-heal monitoring system.
+      function _isSWError(r) {
+        try {
+          var parts = [
+            r && r.message ? String(r.message) : '',
+            String(r || ''),
+            r && r.stack ? String(r.stack) : '',
+            r && r.filename ? String(r.filename) : '',
+            r && r.url ? String(r.url) : ''
+          ].join(' ');
+          return parts.indexOf('sw.js') !== -1 ||
+                 parts.indexOf('registerSW') !== -1 ||
+                 parts.indexOf('workbox') !== -1 ||
+                 /\bload\s+failed\b/i.test(parts) && parts.indexOf('backinplay') !== -1;
+        } catch(e) { return false; }
+      }
       window.addEventListener('unhandledrejection', function(e) {
-        var r = e.reason;
-        var msg = (r && r.message) ? String(r.message) : String(r || '');
-        var str = msg + ' ' + String(r || '');
-        if (str.indexOf('sw.js') !== -1 ||
-            str.indexOf('registerSW') !== -1 ||
-            str.indexOf('workbox') !== -1) {
+        if (_isSWError(e.reason)) {
           e.preventDefault();
           e.stopImmediatePropagation();
         }

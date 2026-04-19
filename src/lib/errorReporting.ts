@@ -118,9 +118,10 @@ export function installFrontendErrorCapture(
     // of the exact message format (varies across browsers/versions).
     const reason = event.reason;
     const reasonStr = String(reason ?? "");
-    // Also check filename/url properties present on some browser error objects.
+    // Also check filename/url/stack properties present on some browser error objects.
     const reasonUrl = String((reason as any)?.filename ?? (reason as any)?.url ?? "");
-    const allText = message + " " + reasonStr + " " + reasonUrl;
+    const reasonStack = String((reason as any)?.stack ?? "");
+    const allText = message + " " + reasonStr + " " + reasonUrl + " " + reasonStack;
     if (allText.includes("sw.js") || allText.includes("registerSW") || allText.includes("workbox")) {
       event.preventDefault();
       return;
