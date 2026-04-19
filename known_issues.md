@@ -133,3 +133,8 @@
 - Error: Error messages (most recent):
 - Attempted: 1 fix(es), verdict: The code diff includes changes to `vercel.json` that add a header to clear stale service worker registrations, addressing the root cause of the `sw.js load failed` error.
 - Status: unresolved
+
+## [2026-04-19 04:48] Unresolved: unhandledrejection
+- Error: Error messages (most recent):
+- Attempted: 1 fix(es), verdict: The code diff includes changes that proactively unregister stale service workers and improves error handling for service worker load failures, directly addressing the original error.
+- Status: unresolved
