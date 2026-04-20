@@ -95,6 +95,14 @@ export function installFrontendErrorCapture(
     const msg = event.message ?? "";
     const filename = event.filename ?? "";
     if (msg.includes("sw.js") || filename.includes("sw.js")) return;
+    // Chunk load failures (stale deploy hashes) are handled by lazyWithReload which
+    // triggers a hard reload. Suppress them here to avoid false-positive self-heal alerts.
+    if (
+      msg.includes("Importing a module script failed") ||
+      msg.includes("Failed to fetch dynamically imported module") ||
+      msg.includes("Unable to preload CSS") ||
+      (filename.includes("/assets/") && msg.toLowerCase().includes("load"))
+    ) return;
     reportSelfHealError(supabase, {
       category: "frontend",
       source: event.filename ?? "window.onerror",
@@ -135,8 +143,10 @@ export function installFrontendErrorCapture(
       /failed.*update.*service\s*worker/i.test(allText) ||
       // "A bad HTTP response code (404) was received when fetching the script"
       /bad\s+http\s+response.*fetching.*script/i.test(allText) ||
-      // Any mention of the site domain combined with script fetch failures
-      (allText.includes("backinplay") && /fetch|script|load/.test(allText))
+      // Chunk load failures (stale deploy hashes) handled by lazyWithReload
+      allText.includes("importing a module script failed") ||
+      allText.includes("failed to fetch dynamically imported module") ||
+      allText.includes("unable to preload css")
     ) {
       event.preventDefault();
       return;

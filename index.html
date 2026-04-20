@@ -38,13 +38,17 @@
       // When a hashed JS chunk fails to load (stale HTML after a new deploy),
       // reload the page once to fetch fresh HTML with updated chunk hashes.
       window.addEventListener('error', function(e) {
-        if (e.target && e.target.tagName === 'SCRIPT' && e.target.type === 'module') {
-          var key = 'bip_chunk_reload';
-          var last = sessionStorage.getItem(key);
-          var now = Date.now();
-          if (!last || (now - parseInt(last, 10)) > 30000) {
-            sessionStorage.setItem(key, String(now));
-            window.location.reload();
+        if (e.target && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK')) {
+          var src = e.target.src || e.target.href || '';
+          if (src.indexOf('/assets/') !== -1 || (e.target.tagName === 'SCRIPT' && e.target.type === 'module')) {
+            e.stopImmediatePropagation();
+            var key = 'bip_chunk_reload';
+            var last = sessionStorage.getItem(key);
+            var now = Date.now();
+            if (!last || (now - parseInt(last, 10)) > 30000) {
+              sessionStorage.setItem(key, String(now));
+              window.location.reload();
+            }
           }
         }
       }, true);

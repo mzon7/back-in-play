@@ -654,18 +654,17 @@ function LeagueStatTable({ allData, modelMeta, summaries }: { allData: Record<st
 
   // Load from Supabase on mount (source of truth)
   useEffect(() => {
-    supabase.from("back_in_play_app_config")
+    Promise.resolve(supabase.from("back_in_play_app_config")
       .select("value")
       .eq("key", "final_betting_models")
       .single()
-      .then(({ data }) => {
-        if (data?.value && Array.isArray(data.value)) {
-          setSavedBets(data.value as SavedBet[]);
-          localStorage.setItem("ma_saved_bets", JSON.stringify(data.value));
-        }
-        setSavedBetsLoaded(true);
-      })
-      .catch(() => setSavedBetsLoaded(true));
+    ).then(({ data }) => {
+      if (data?.value && Array.isArray(data.value)) {
+        setSavedBets(data.value as SavedBet[]);
+        localStorage.setItem("ma_saved_bets", JSON.stringify(data.value));
+      }
+      setSavedBetsLoaded(true);
+    }).catch(() => setSavedBetsLoaded(true));
   }, []);
 
   // Persist to both localStorage and Supabase
@@ -1663,17 +1662,16 @@ function TodaysBets() {
   const [modelsLoaded, setModelsLoaded] = useState(false);
 
   useEffect(() => {
-    supabase.from("back_in_play_app_config")
+    Promise.resolve(supabase.from("back_in_play_app_config")
       .select("value")
       .eq("key", "final_betting_models")
       .single()
-      .then(({ data }) => {
-        if (data?.value && Array.isArray(data.value)) {
-          setFinalModels(data.value as SavedBetGlobal[]);
-        }
-        setModelsLoaded(true);
-      })
-      .catch(() => setModelsLoaded(true));
+    ).then(({ data }) => {
+      if (data?.value && Array.isArray(data.value)) {
+        setFinalModels(data.value as SavedBetGlobal[]);
+      }
+      setModelsLoaded(true);
+    }).catch(() => setModelsLoaded(true));
   }, []);
 
   // Match predictions against Final Betting Models configs
