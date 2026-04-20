@@ -105,7 +105,7 @@ export function installFrontendErrorCapture(
 
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
     // Same filter as onError — React re-dispatches caught hooks errors as rejections too.
-    const message = String(event.reason?.message ?? event.reason);
+    const message = String(event.reason?.message ?? event.reason ?? "");
     if (
       message.includes("Rendered more hooks") ||
       message.includes("Rendered fewer hooks")
@@ -118,19 +118,26 @@ export function installFrontendErrorCapture(
     // of the exact message format (varies across browsers/versions).
     const reason = event.reason;
     const reasonStr = String(reason ?? "");
-    // Also check filename/url/stack properties present on some browser error objects.
+    // Also check filename/url/stack/name properties present on some browser error objects.
     const reasonUrl = String((reason as any)?.filename ?? (reason as any)?.url ?? "");
     const reasonStack = String((reason as any)?.stack ?? "");
-    const allText = message + " " + reasonStr + " " + reasonUrl + " " + reasonStack;
-    if (allText.includes("sw.js") || allText.includes("registerSW") || allText.includes("workbox")) {
-      event.preventDefault();
-      return;
-    }
-    // Also suppress bare "Load failed" rejections that originate from the SW
-    // update pipeline (no URL in the message in some browsers/environments).
-    // Also catches "Script https://...sw.js load failed" patterns.
-    if (/^(script\s+\S*)?load\s+failed\.?$/i.test(message.trim()) ||
-        /script\s+https?:\/\/\S*sw\.js\s+load\s+failed/i.test(message.trim())) {
+    const reasonName = String((reason as any)?.name ?? "");
+    const allText = (message + " " + reasonStr + " " + reasonUrl + " " + reasonStack + " " + reasonName).toLowerCase();
+    if (
+      allText.includes("sw.js") ||
+      allText.includes("registersw") ||
+      allText.includes("workbox") ||
+      allText.includes("serviceworker") ||
+      allText.includes("service-worker") ||
+      // "Load failed" (Safari) or "Script ... load failed" (Chrome/Firefox) for SW update checks
+      /load\s+failed/.test(allText) ||
+      // "Failed to update a ServiceWorker" (Chrome verbose message)
+      /failed.*update.*service\s*worker/i.test(allText) ||
+      // "A bad HTTP response code (404) was received when fetching the script"
+      /bad\s+http\s+response.*fetching.*script/i.test(allText) ||
+      // Any mention of the site domain combined with script fetch failures
+      (allText.includes("backinplay") && /fetch|script|load/.test(allText))
+    ) {
       event.preventDefault();
       return;
     }

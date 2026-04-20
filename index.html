@@ -59,12 +59,16 @@
             String(r || ''),
             r && r.stack ? String(r.stack) : '',
             r && r.filename ? String(r.filename) : '',
-            r && r.url ? String(r.url) : ''
-          ].join(' ');
+            r && r.url ? String(r.url) : '',
+            r && r.name ? String(r.name) : ''
+          ].join(' ').toLowerCase();
           return parts.indexOf('sw.js') !== -1 ||
-                 parts.indexOf('registerSW') !== -1 ||
+                 parts.indexOf('registersw') !== -1 ||
                  parts.indexOf('workbox') !== -1 ||
-                 /\bload\s+failed\b/i.test(parts) && parts.indexOf('backinplay') !== -1;
+                 parts.indexOf('serviceworker') !== -1 ||
+                 parts.indexOf('service-worker') !== -1 ||
+                 /load\s+failed/.test(parts) ||
+                 /failed.*update.*service/.test(parts);
         } catch(e) { return false; }
       }
       window.addEventListener('unhandledrejection', function(e) {
