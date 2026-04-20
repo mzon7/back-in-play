@@ -30,9 +30,17 @@
       // Proactively unregister any stale service workers as early as possible.
       // This runs before any module script and reduces the window in which the
       // browser's background SW update-check can fire an "sw.js load failed" error.
+      // Also calls r.update().catch() to claim the browser's internal update promise
+      // so it never becomes an unhandled rejection.
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.getRegistrations().then(function(regs) {
-          regs.forEach(function(r) { r.unregister(); });
+          regs.forEach(function(r) {
+            // Claim the update promise before unregistering so any rejection
+            // (Script load failed) is caught here rather than becoming an
+            // unhandledrejection on the window.
+            try { r.update().catch(function() {}); } catch(e) {}
+            r.unregister().catch(function() {});
+          });
         }).catch(function() {});
       }
       // When a hashed JS chunk fails to load (stale HTML after a new deploy),
@@ -77,6 +85,13 @@
       }
       window.addEventListener('unhandledrejection', function(e) {
         if (_isSWError(e.reason)) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          return;
+        }
+        // Final fallback: if reason is null/undefined with no useful info,
+        // it is almost certainly a browser-internal SW update artifact.
+        if (e.reason == null || e.reason === undefined) {
           e.preventDefault();
           e.stopImmediatePropagation();
         }

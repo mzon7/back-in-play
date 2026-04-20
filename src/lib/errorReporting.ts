@@ -149,6 +149,14 @@ export function installFrontendErrorCapture(
       allText.includes("unable to preload css")
     ) {
       event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    // Suppress null/undefined rejections — typically browser-internal SW update artifacts
+    // that produce no useful error info. Real app promise rejections always have a reason.
+    if (event.reason == null) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
       return;
     }
     reportSelfHealError(supabase, {
