@@ -80,7 +80,9 @@
                  parts.indexOf('serviceworker') !== -1 ||
                  parts.indexOf('service-worker') !== -1 ||
                  /load\s+failed/.test(parts) ||
-                 /failed.*update.*service/.test(parts);
+                 /failed.*update.*service/.test(parts) ||
+                 /failed.*register.*service/.test(parts) ||
+                 parts.indexOf('unknown error occurred when fetching the script') !== -1;
         } catch(e) { return false; }
       }
       window.addEventListener('unhandledrejection', function(e) {

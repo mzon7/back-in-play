@@ -141,6 +141,11 @@ export function installFrontendErrorCapture(
       /load\s+failed/.test(allText) ||
       // "Failed to update a ServiceWorker" (Chrome verbose message)
       /failed.*update.*service\s*worker/i.test(allText) ||
+      // "Failed to register a ServiceWorker" — Safari/Firefox where String(DOMException)
+      // doesn't include the full message so "sw.js" may not appear in allText
+      /failed.*register.*service\s*worker/i.test(allText) ||
+      // "An unknown error occurred when fetching the script" — Safari generic SW fetch error
+      allText.includes("unknown error occurred when fetching the script") ||
       // "A bad HTTP response code (404) was received when fetching the script"
       /bad\s+http\s+response.*fetching.*script/i.test(allText) ||
       // Chunk load failures (stale deploy hashes) handled by lazyWithReload
