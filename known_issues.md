@@ -168,3 +168,8 @@
 - Error: Error messages (most recent):
 - Attempted: 1 fix(es), verdict: The code diff shows concrete changes in `src/main.tsx` and `src/lib/errorReporting.ts` that address the error by handling potential unhandled promise rejections and adding a regex check for the specific error message.
 - Status: unresolved
+
+## [2026-04-21 23:49] Unresolved: unhandledrejection
+- Error: Error messages (most recent):
+- Attempted: 1 fix(es), verdict: The code diff includes changes to the error handling logic in `index.html` and `errorReporting.ts`, specifically adding checks for the service worker load failure, which directly addresses the original error.
+- Status: unresolved
