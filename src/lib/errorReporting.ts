@@ -164,6 +164,13 @@ export function installFrontendErrorCapture(
       event.stopImmediatePropagation();
       return;
     }
+    // Explicit guard for the exact Chrome/Chromium pattern: "Script <url> load failed"
+    // where the URL contains sw.js. Belt-and-suspenders on top of the allText check above.
+    if (/script\s+https?:\/\/[^\s]*sw\.js\s+load\s+failed/i.test(message)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     reportSelfHealError(supabase, {
       category: "frontend",
       source: "unhandledrejection",

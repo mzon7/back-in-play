@@ -20,10 +20,16 @@ installFrontendErrorCapture(supabase, "back_in_play_");
 // VitePWA-based deployment. The app no longer uses a service worker; stale
 // registrations cause "sw.js load failed" errors when the browser tries to
 // update them against the new self-unregistering public/sw.js.
+//
+// IMPORTANT: call reg.update().catch() BEFORE unregistering so we attach a
+// rejection handler to any in-flight update promise. Without this, cancelling
+// a pending update fetch via unregister() can produce an unhandled rejection
+// with message "Script https://backinplay.ai/sw.js load failed".
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.getRegistrations().then((registrations) => {
     for (const reg of registrations) {
-      reg.unregister();
+      try { reg.update().catch(() => {}); } catch (_e) {}
+      reg.unregister().catch(() => {});
     }
   }).catch(() => {/* ignore */});
 }
