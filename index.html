@@ -66,9 +66,13 @@
       // never reach the self-heal monitoring system.
       function _isSWError(r) {
         try {
+          var msg = r && r.message ? String(r.message) : String(r || '');
+          // Chrome: "Script <url> load failed" — fast path, no need to scan all fields
+          if (/^Script\s+https?:\/\/\S+\s+load\s+failed$/i.test(msg)) return true;
+          // Safari: bare "Load failed" TypeError from SW fetch
+          if (msg === 'Load failed') return true;
           var parts = [
-            r && r.message ? String(r.message) : '',
-            String(r || ''),
+            msg,
             r && r.stack ? String(r.stack) : '',
             r && r.filename ? String(r.filename) : '',
             r && r.url ? String(r.url) : '',

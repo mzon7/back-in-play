@@ -112,6 +112,24 @@ export function installFrontendErrorCapture(
   };
 
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    // Fast-path: Chrome/Chromium emits "Script <url> load failed" for SW update failures.
+    // Safari emits "Load failed" (bare TypeError). Both are browser-internal SW artifacts.
+    // Check these FIRST before any other logic so they are always suppressed.
+    const rawMessage: string =
+      event.reason instanceof Error
+        ? event.reason.message
+        : String(event.reason ?? "");
+    if (
+      // Chrome: "Script https://backinplay.ai/sw.js load failed"
+      /^Script\s+https?:\/\/\S+\s+load\s+failed$/i.test(rawMessage) ||
+      // Safari: bare "Load failed" TypeError from SW fetch
+      rawMessage === "Load failed"
+    ) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+
     // Same filter as onError — React re-dispatches caught hooks errors as rejections too.
     const message = String(event.reason?.message ?? event.reason ?? "");
     if (
