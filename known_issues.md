@@ -163,3 +163,8 @@
 - Error: Error messages (most recent):
 - Attempted: 1 fix(es), verdict: The code diff shows that new patterns were added to handle specific error messages related to the ServiceWorker registration failure, addressing the original error.
 - Status: unresolved
+
+## [2026-04-21 16:08] Unresolved: unhandledrejection
+- Error: Error messages (most recent):
+- Attempted: 1 fix(es), verdict: The code diff shows concrete changes in `src/main.tsx` and `src/lib/errorReporting.ts` that address the error by handling potential unhandled promise rejections and adding a regex check for the specific error message.
+- Status: unresolved
