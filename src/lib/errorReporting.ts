@@ -97,12 +97,23 @@ export function installFrontendErrorCapture(
     if (msg.includes("sw.js") || filename.includes("sw.js")) return;
     // Chunk load failures (stale deploy hashes) are handled by lazyWithReload which
     // triggers a hard reload. Suppress them here to avoid false-positive self-heal alerts.
+    // Note: some browsers emit an empty message for cross-origin module load failures,
+    // so we suppress any error from a /assets/ file when the message is empty or
+    // contains load/fetch/import/module keywords.
     if (
       msg.includes("Importing a module script failed") ||
       msg.includes("error loading dynamically imported module") ||
       msg.includes("Failed to fetch dynamically imported module") ||
+      msg.includes("Failed to load module script") ||
+      msg.includes("Module script load failed") ||
       msg.includes("Unable to preload CSS") ||
-      (filename.includes("/assets/") && msg.toLowerCase().includes("load"))
+      (filename.includes("/assets/") && (
+        msg === "" ||
+        msg.toLowerCase().includes("load") ||
+        msg.toLowerCase().includes("fetch") ||
+        msg.toLowerCase().includes("import") ||
+        msg.toLowerCase().includes("module")
+      ))
     ) return;
     reportSelfHealError(supabase, {
       category: "frontend",

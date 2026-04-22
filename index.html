@@ -47,6 +47,7 @@
       // reload the page once to fetch fresh HTML with updated chunk hashes.
       function _triggerChunkReload(e) {
         if (e && e.stopImmediatePropagation) e.stopImmediatePropagation();
+        if (e && e.preventDefault) e.preventDefault();
         var key = 'bip_chunk_reload';
         var last = sessionStorage.getItem(key);
         var now = Date.now();
