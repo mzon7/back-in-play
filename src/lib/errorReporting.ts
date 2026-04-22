@@ -99,6 +99,7 @@ export function installFrontendErrorCapture(
     // triggers a hard reload. Suppress them here to avoid false-positive self-heal alerts.
     if (
       msg.includes("Importing a module script failed") ||
+      msg.includes("error loading dynamically imported module") ||
       msg.includes("Failed to fetch dynamically imported module") ||
       msg.includes("Unable to preload CSS") ||
       (filename.includes("/assets/") && msg.toLowerCase().includes("load"))
@@ -168,6 +169,7 @@ export function installFrontendErrorCapture(
       /bad\s+http\s+response.*fetching.*script/i.test(allText) ||
       // Chunk load failures (stale deploy hashes) handled by lazyWithReload
       allText.includes("importing a module script failed") ||
+      allText.includes("error loading dynamically imported module") ||
       allText.includes("failed to fetch dynamically imported module") ||
       allText.includes("unable to preload css")
     ) {
