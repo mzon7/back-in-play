@@ -127,15 +127,22 @@ export function installFrontendErrorCapture(
     // Fast-path: Chrome/Chromium emits "Script <url> load failed" for SW update failures.
     // Safari emits "Load failed" (bare TypeError). Both are browser-internal SW artifacts.
     // Check these FIRST before any other logic so they are always suppressed.
+    //
+    // IMPORTANT: always prefer event.reason.message over String(event.reason).
+    // When reason is a DOMException, String(reason) gives "[object DOMException]"
+    // in some browsers and strips the actual message text. Using .message directly
+    // ensures the regex fast-path correctly matches "Script <url> load failed".
     const rawMessage: string =
-      event.reason instanceof Error
-        ? event.reason.message
+      event.reason?.message != null
+        ? String(event.reason.message)
         : String(event.reason ?? "");
     if (
       // Chrome: "Script https://backinplay.ai/sw.js load failed"
       /^Script\s+https?:\/\/\S+\s+load\s+failed$/i.test(rawMessage) ||
       // Safari: bare "Load failed" TypeError from SW fetch
-      rawMessage === "Load failed"
+      rawMessage === "Load failed" ||
+      // Belt-and-suspenders: any rawMessage mentioning sw.js is a SW artifact
+      rawMessage.toLowerCase().includes("sw.js")
     ) {
       event.preventDefault();
       event.stopImmediatePropagation();
