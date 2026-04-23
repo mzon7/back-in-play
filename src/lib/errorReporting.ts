@@ -124,6 +124,18 @@ export function installFrontendErrorCapture(
   };
 
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    // Earliest possible check: stringify the raw reason object and look for "sw.js".
+    // This catches browsers where reason.message is unavailable or non-standard
+    // (e.g., DOMException, non-Error objects) but String(reason) still contains the URL.
+    try {
+      const rawReason = event.reason != null ? String(event.reason) : "";
+      if (rawReason.toLowerCase().includes("sw.js") || rawReason.toLowerCase().includes("registersw")) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+    } catch (_) { /* ignore */ }
+
     // Fast-path: Chrome/Chromium emits "Script <url> load failed" for SW update failures.
     // Safari emits "Load failed" (bare TypeError). Both are browser-internal SW artifacts.
     // Check these FIRST before any other logic so they are always suppressed.

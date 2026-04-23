@@ -82,6 +82,11 @@
       // never reach the self-heal monitoring system.
       function _isSWError(r) {
         try {
+          // Check the full stringified reason first — catches TypeError objects where
+          // String(r) = "TypeError: Script https://backinplay.ai/sw.js load failed"
+          // even when r.message extraction is inconsistent across browsers.
+          var full = r != null ? String(r) : '';
+          if (full.toLowerCase().indexOf('sw.js') !== -1 || full.toLowerCase().indexOf('registersw') !== -1) return true;
           var msg = r && r.message ? String(r.message) : String(r || '');
           // Chrome: "Script <url> load failed" — fast path, no need to scan all fields
           if (/^Script\s+https?:\/\/\S+\s+load\s+failed$/i.test(msg)) return true;
