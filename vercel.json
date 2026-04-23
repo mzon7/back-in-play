@@ -1,12 +1,6 @@
 {
   "headers": [
     {
-      "source": "/((?!assets/|workbox-[^/]+\\.js|sw\\.js|registerSW\\.js|manifest\\.webmanifest).*)",
-      "headers": [
-        { "key": "Clear-Site-Data", "value": "\"serviceworker\"" }
-      ]
-    },
-    {
       "source": "/((?!assets/|workbox-[^/]+\\.js).*)",
       "headers": [
         { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
