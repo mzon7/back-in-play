@@ -27,6 +27,19 @@ export function reportSelfHealError(
   supabase: SupabaseClient,
   payload: SelfHealErrorPayload,
 ): void {
+  // Never report service worker script load errors. These are browser artifacts
+  // from stale SW registrations left by the old VitePWA deployment. The app no
+  // longer uses a service worker, so any error mentioning sw.js or matching the
+  // "Script <url> load failed" pattern is a harmless browser background check.
+  const msgLower = payload.errorMessage.toLowerCase();
+  if (
+    msgLower.includes("sw.js") ||
+    msgLower.includes("registersw") ||
+    msgLower.includes("workbox") ||
+    msgLower === "load failed" ||
+    /script\s+https?:\/\/\S+\s+load\s+failed/i.test(payload.errorMessage)
+  ) return;
+
   if (import.meta.env.DEV) {
     console.error(
       `[self-heal:${payload.category}] ${payload.source}: ${payload.errorMessage}`,
@@ -223,6 +236,14 @@ export function installFrontendErrorCapture(
     // Explicit guard for the exact Chrome/Chromium pattern: "Script <url> load failed"
     // where the URL contains sw.js. Belt-and-suspenders on top of the allText check above.
     if (/script\s+https?:\/\/[^\s]*sw\.js\s+load\s+failed/i.test(message)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    // Final catch-all: if the full stringified reason or allText mentions sw.js
+    // in any form we haven't matched above, suppress it. reportSelfHealError has
+    // its own gate too, but this avoids unnecessary Supabase calls entirely.
+    if (allText.includes("sw.js") || /script\s+https?:\/\/\S+\s+load\s+failed/i.test(allText)) {
       event.preventDefault();
       event.stopImmediatePropagation();
       return;
