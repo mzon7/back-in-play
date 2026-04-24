@@ -124,6 +124,12 @@ export function installFrontendErrorCapture(
   };
 
   const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    // If an earlier listener (e.g. the inline script in index.html) already called
+    // preventDefault() on this event — which it does for SW errors — skip reporting.
+    // This is the most reliable cross-browser guard: stopImmediatePropagation() may
+    // not always prevent bubble listeners from firing, but defaultPrevented is always set.
+    if (event.defaultPrevented) return;
+
     // Earliest possible check: stringify the raw reason object and look for "sw.js".
     // This catches browsers where reason.message is unavailable or non-standard
     // (e.g., DOMException, non-Error objects) but String(reason) still contains the URL.
