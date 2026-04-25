@@ -218,3 +218,8 @@
 - Error: Error messages (most recent):
 - Attempted: 1 fix(es), verdict: The code diff shows concrete changes that implement chunk-failure detection and a reload mechanism in response to the original error, addressing the issue of stale-deploy errors.
 - Status: unresolved
+
+## [2026-04-25 22:57] Unresolved: unhandledrejection
+- Error: Error messages (most recent):
+- Attempted: 1 fix(es), verdict: The code diff includes changes in `index.html` that add handling for empty-message errors, which addresses the issue of service worker script load failures not being caught.
+- Status: unresolved
