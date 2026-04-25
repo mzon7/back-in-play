@@ -1,12 +1,12 @@
 // @refresh reset
-import { lazy } from "react";
+import { lazyWithReload } from "../lib/lazyWithReload";
 import { useParams } from "react-router-dom";
 import PlayerReturnDatePage from "./player/PlayerReturnDatePage";
 import LeagueInjuryPage from "./league/LeagueInjuryPage";
 
-const LeagueInjuryPerformancePage = lazy(() => import("./league/LeagueInjuryPerformancePage"));
-const LeagueInjuryAnalysisPage = lazy(() => import("./league/LeagueInjuryAnalysisPage"));
-const InjuryReportPage = lazy(() => import("./InjuryReportPage"));
+const LeagueInjuryPerformancePage = lazyWithReload(() => import("./league/LeagueInjuryPerformancePage"));
+const LeagueInjuryAnalysisPage = lazyWithReload(() => import("./league/LeagueInjuryAnalysisPage"));
+const InjuryReportPage = lazyWithReload(() => import("./InjuryReportPage"));
 
 /**
  * Handles top-level /:slug routes, dispatching to the right page:

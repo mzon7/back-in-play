@@ -116,6 +116,21 @@
           e.stopImmediatePropagation();
           return;
         }
+        // Chunk load failure from a stale deploy hash (dynamic import of a
+        // hashed asset that no longer exists). Trigger a transparent reload so
+        // the user gets fresh HTML + chunk hashes rather than a broken screen.
+        var reason = e.reason;
+        var chunkMsg = reason && reason.message ? String(reason.message) : String(reason || '');
+        var chunkMsgLower = chunkMsg.toLowerCase();
+        if (
+          chunkMsgLower.indexOf('importing a module script failed') !== -1 ||
+          chunkMsgLower.indexOf('error loading dynamically imported module') !== -1 ||
+          chunkMsgLower.indexOf('failed to fetch dynamically imported module') !== -1 ||
+          chunkMsgLower.indexOf('unable to preload css') !== -1
+        ) {
+          _triggerChunkReload(e);
+          return;
+        }
         // Final fallback: if reason is null/undefined with no useful info,
         // it is almost certainly a browser-internal SW update artifact.
         if (e.reason == null || e.reason === undefined) {

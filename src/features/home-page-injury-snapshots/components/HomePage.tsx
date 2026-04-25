@@ -1,5 +1,6 @@
 // @refresh reset
-import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, Suspense } from "react";
+import { lazyWithReload } from "../../../lib/lazyWithReload";
 import { Link, useParams } from "react-router-dom";
 import {
   useLeagues,
@@ -28,8 +29,8 @@ import { SiteHeader } from "../../../components/SiteHeader";
 import { trackPlayerAnalysisView } from "../../../lib/analytics";
 import { useQuery } from "@tanstack/react-query";
 
-const LazyReturningToday = lazy(() => import("../../../pages/ReturningTodayEmbed"));
-const LazyRecoveryStats = lazy(() => import("../../../pages/RecoveryStatsPageEmbed"));
+const LazyReturningToday = lazyWithReload(() => import("../../../pages/ReturningTodayEmbed"));
+const LazyRecoveryStats = lazyWithReload(() => import("../../../pages/RecoveryStatsPageEmbed"));
 
 type HomeSection = "injuries" | "returning" | "recovery";
 

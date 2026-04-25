@@ -1,5 +1,5 @@
 // @refresh reset
-import React, { Fragment, lazy, Suspense } from "react";
+import React, { Fragment, Suspense } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { OAuthCallback } from "./components/OAuthCallback";
 import { supabase } from "./lib/supabase";
@@ -10,20 +10,7 @@ import { RecoveryStatsPage } from "./features/historical-injury-data-system/comp
 import { HooksErrorBoundary } from "./components/HooksErrorBoundary";
 import { MobileTabBar } from "./components/MobileTabBar";
 import { usePageTracking, useVisitorTracking } from "./lib/analytics";
-
-// Wraps lazy() so that chunk-load failures (stale deploy hashes) trigger a
-// hard reload instead of leaving the user on a broken blank screen.
-function lazyWithReload<T extends React.ComponentType<unknown>>(
-  factory: () => Promise<{ default: T }>,
-) {
-  return lazy(() =>
-    factory().catch(() => {
-      window.location.reload();
-      // Never resolves — reload fires before React needs the module.
-      return new Promise<{ default: T }>(() => {});
-    }),
-  );
-}
+import { lazyWithReload } from "./lib/lazyWithReload";
 
 const PlayerInjuryPage = lazyWithReload(() => import("./pages/player/PlayerInjuryPage"));
 const PlayerReturnPage = lazyWithReload(() => import("./pages/player/PlayerReturnAliasPage"));

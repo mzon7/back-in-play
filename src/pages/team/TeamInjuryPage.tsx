@@ -1,5 +1,5 @@
 // @refresh reset
-import { lazy } from "react";
+import { lazyWithReload } from "../../lib/lazyWithReload";
 import { useParams, Link, Navigate } from "react-router-dom";
 import { SiteHeader } from "../../components/SiteHeader";
 import { useTeamPage } from "../../hooks/useTeamPage";
@@ -9,10 +9,10 @@ import { teamJsonLd } from "../../components/seo/seoHelpers";
 import { StatusBadge } from "../../components/StatusBadge";
 import { PlayerAvatar } from "../../components/PlayerAvatar";
 
-const LeagueInjuryTypePerformancePage = lazy(() => import("../league/LeagueInjuryTypePerformancePage"));
-const RecoveryStatsPage = lazy(() => import("../../features/historical-injury-data-system/components/RecoveryStatsPage").then(m => ({ default: m.RecoveryStatsPage })));
-const PositionInjuryHubPage = lazy(() => import("../position/PositionInjuryHubPage"));
-const SeasonalInjuryAnalysisPage = lazy(() => import("../league/SeasonalInjuryAnalysisPage"));
+const LeagueInjuryTypePerformancePage = lazyWithReload(() => import("../league/LeagueInjuryTypePerformancePage"));
+const RecoveryStatsPage = lazyWithReload(() => import("../../features/historical-injury-data-system/components/RecoveryStatsPage").then(m => ({ default: m.RecoveryStatsPage })));
+const PositionInjuryHubPage = lazyWithReload(() => import("../position/PositionInjuryHubPage"));
+const SeasonalInjuryAnalysisPage = lazyWithReload(() => import("../league/SeasonalInjuryAnalysisPage"));
 
 const LEAGUE_LABELS: Record<string, string> = {
   nba: "NBA", nfl: "NFL", mlb: "MLB", nhl: "NHL", "premier-league": "EPL",

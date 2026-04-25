@@ -1,4 +1,5 @@
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
+import { lazyWithReload } from "../../lib/lazyWithReload";
 import { Link, useParams } from "react-router-dom";
 import { SiteHeader } from "../../components/SiteHeader";
 import { SEO } from "../../components/seo/SEO";
@@ -14,7 +15,7 @@ import type { PerformanceCurve } from "../../features/performance-curves/lib/typ
 import { useQuery } from "@tanstack/react-query";
 import { supabase, dbTable } from "../../lib/supabase";
 
-const PositionInjuryRecoveryPage = lazy(() => import("../position/PositionInjuryRecoveryPage"));
+const PositionInjuryRecoveryPage = lazyWithReload(() => import("../position/PositionInjuryRecoveryPage"));
 
 /** Known position plural slugs that appear in URLs like /nba/guards/acl-recovery */
 const KNOWN_POSITION_PLURALS = new Set([
