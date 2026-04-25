@@ -39,6 +39,9 @@ export function reportSelfHealError(
     msgLower === "load failed" ||
     /script\s+https?:\/\/\S+\s+load\s+failed/i.test(payload.errorMessage)
   ) return;
+  // Empty-message unhandledrejection events are browser-internal artifacts (SW updates,
+  // aborted navigations). Real app errors always have a non-empty message.
+  if (!payload.errorMessage.trim() && payload.source === "unhandledrejection") return;
 
   if (import.meta.env.DEV) {
     console.error(
@@ -229,6 +232,16 @@ export function installFrontendErrorCapture(
     // Suppress null/undefined rejections — typically browser-internal SW update artifacts
     // that produce no useful error info. Real app promise rejections always have a reason.
     if (event.reason == null) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    // Suppress Error/TypeError/DOMException rejections with an empty message.
+    // Some browsers (mobile Chrome, Safari) emit SW update failures as a TypeError
+    // with an empty or whitespace-only message — no URL, no stack — making it
+    // impossible to identify them by content. Real application rejections always
+    // carry a non-empty, meaningful message string.
+    if (event.reason instanceof Error && !message.trim()) {
       event.preventDefault();
       event.stopImmediatePropagation();
       return;

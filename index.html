@@ -88,6 +88,11 @@
           var full = r != null ? String(r) : '';
           if (full.toLowerCase().indexOf('sw.js') !== -1 || full.toLowerCase().indexOf('registersw') !== -1) return true;
           var msg = r && r.message ? String(r.message) : String(r || '');
+          // Some browsers emit SW fetch failures as a bare TypeError/DOMException with
+          // an empty message — no URL in String(reason), nothing to pattern-match on.
+          // Treat any empty-message Error-like rejection as a SW artifact since real
+          // application rejections always carry a meaningful message string.
+          if (r && (r instanceof Error || (r && r.name && /Error|Exception/i.test(r.name))) && !msg.trim()) return true;
           // Chrome: "Script <url> load failed" — fast path, no need to scan all fields
           if (/^Script\s+https?:\/\/\S+\s+load\s+failed$/i.test(msg)) return true;
           // Safari: bare "Load failed" TypeError from SW fetch
