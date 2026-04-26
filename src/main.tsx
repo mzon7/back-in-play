@@ -17,13 +17,12 @@ import "./index.css";
 installFrontendErrorCapture(supabase, "back_in_play_");
 
 // Unregister any stale service worker registrations left over from the previous
-// VitePWA-based deployment. The app no longer uses a service worker.
-// We do NOT call reg.update() before unregistering — that would start a new
-// sw.js fetch which is immediately aborted by unregister(), potentially
-// producing a "Script load failed" unhandledrejection.
+// VitePWA-based deployment. Call update() first with a catch so the browser's
+// internal update-check promise is always handled before we unregister.
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.getRegistrations().then((registrations) => {
     for (const reg of registrations) {
+      try { if (reg.update) reg.update().catch(() => {}); } catch (_) {}
       reg.unregister().catch(() => {});
     }
   }).catch(() => {/* ignore */});

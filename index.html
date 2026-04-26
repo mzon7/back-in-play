@@ -35,9 +35,12 @@
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.getRegistrations().then(function(regs) {
           regs.forEach(function(r) {
-            // Unregister stale SW registrations directly. Do NOT call r.update()
-            // first — that starts a new sw.js fetch which we immediately abort via
-            // unregister(), potentially creating another "Script load failed" error.
+            // Proactively catch the update promise before unregistering.
+            // The browser's internal SW update check creates an unhandled promise
+            // rejection if the fetch fails. By explicitly calling update() and
+            // attaching .catch(), we ensure ANY rejection (ours or the browser's
+            // internal one) is handled before unregister() removes the registration.
+            try { if (r.update) r.update().catch(function() {}); } catch(e) {}
             r.unregister().catch(function() {});
           });
         }).catch(function() {});
