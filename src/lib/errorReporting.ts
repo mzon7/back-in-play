@@ -36,7 +36,9 @@ export function reportSelfHealError(
     msgLower.includes("sw.js") ||
     msgLower.includes("registersw") ||
     msgLower.includes("workbox") ||
-    msgLower === "load failed" ||
+    msgLower.includes("load failed") ||
+    msgLower.includes("networkerror when attempting to fetch") ||
+    msgLower.includes("an unknown error occurred when fetching the script") ||
     /script\s+https?:\/\/\S+\s+load\s+failed/i.test(payload.errorMessage)
   ) return;
   // Empty-message unhandledrejection events are browser-internal artifacts (SW updates,
@@ -210,6 +212,10 @@ export function installFrontendErrorCapture(
       allText.includes("service-worker") ||
       // "Load failed" (Safari) or "Script ... load failed" (Chrome/Firefox) for SW update checks
       /load\s+failed/.test(allText) ||
+      // Firefox: "NetworkError when attempting to fetch resource" (no URL in message)
+      allText.includes("networkerror when attempting to fetch") ||
+      // Safari: "An unknown error occurred when fetching the script"
+      allText.includes("unknown error occurred when fetching the script") ||
       // "Failed to update a ServiceWorker" (Chrome verbose message)
       /failed.*update.*service\s*worker/i.test(allText) ||
       // "Failed to register a ServiceWorker" — Safari/Firefox where String(DOMException)

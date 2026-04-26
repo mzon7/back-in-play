@@ -112,7 +112,8 @@
                  /load\s+failed/.test(parts) ||
                  /failed.*update.*service/.test(parts) ||
                  /failed.*register.*service/.test(parts) ||
-                 parts.indexOf('unknown error occurred when fetching the script') !== -1;
+                 parts.indexOf('unknown error occurred when fetching the script') !== -1 ||
+               parts.indexOf('networkerror when attempting to fetch') !== -1;
         } catch(e) { return false; }
       }
       window.addEventListener('unhandledrejection', function(e) {
