@@ -37,6 +37,13 @@ export function reportSelfHealError(
     msgLower.includes("registersw") ||
     msgLower.includes("workbox") ||
     msgLower.includes("load failed") ||
+    // Stale-deploy chunk hash errors — browser has old HTML referencing a chunk that
+    // no longer exists after a new deploy. The reload logic in index.html and
+    // lazyWithReload handles recovery; suppress the report here as a final guard.
+    msgLower.includes("importing a module script failed") ||
+    msgLower.includes("error loading dynamically imported module") ||
+    msgLower.includes("failed to fetch dynamically imported module") ||
+    msgLower.includes("unable to preload css") ||
     msgLower.includes("networkerror when attempting to fetch") ||
     msgLower.includes("an unknown error occurred when fetching the script") ||
     /script\s+https?:\/\/\S+\s+load\s+failed/i.test(payload.errorMessage)
