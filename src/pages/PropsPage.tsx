@@ -97,7 +97,8 @@ const SORT_OPTIONS = [
 
 type SortMode = typeof SORT_OPTIONS[number]["value"];
 
-const SOURCE_LABELS: Record<string, string> = {
+// @ts-ignore unused
+const _SOURCE_LABELS: Record<string, string> = {
   draftkings: "DraftKings",
   fanduel: "FanDuel",
   betrivers: "BetRivers",
@@ -1899,7 +1900,8 @@ export default function PropsPage() {
   const orderedLeagues = LEAGUE_ORDER.filter((l) => activeLeagues.includes(l));
 
   // Get unique sources
-  const activeSources = Array.from(new Set(players.flatMap((p) => p.props.map((pr) => pr.source)))).filter(Boolean);
+  // @ts-ignore unused
+  const _activeSources = Array.from(new Set(players.flatMap((p) => p.props.map((pr) => pr.source)))).filter(Boolean);
 
   // Fall back: consensus → fanduel → all
   useEffect(() => {

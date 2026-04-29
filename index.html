@@ -55,9 +55,43 @@
         var now = Date.now();
         if (!last || (now - parseInt(last, 10)) > 30000) {
           sessionStorage.setItem(key, String(now));
-          window.location.reload();
+          // Use a cache-busting URL param so the browser is forced to make a
+          // fresh HTTP request for the HTML rather than serving a cached copy.
+          // This ensures the reloaded page references the latest chunk hashes.
+          var base = window.location.href.split('?')[0].split('#')[0];
+          var hash = window.location.hash || '';
+          window.location.replace(base + '?_cr=' + now + hash);
         }
       }
+      // Intercept window.onerror via defineProperty so that any future
+      // assignment (e.g. by the SDK's installFrontendErrorCapture) chains
+      // through our chunk-error filter instead of overwriting it.
+      // stopImmediatePropagation() on addEventListener does NOT prevent
+      // window.onerror from firing, so this is the only reliable guard.
+      (function () {
+        var _inner = null;
+        function _isChunkMsg(m) {
+          var s = String(m || '').toLowerCase();
+          return s.indexOf('importing a module script failed') !== -1 ||
+                 s.indexOf('failed to fetch dynamically imported module') !== -1 ||
+                 s.indexOf('error loading dynamically imported module') !== -1;
+        }
+        try {
+          Object.defineProperty(window, 'onerror', {
+            configurable: true,
+            enumerable: true,
+            get: function () { return _inner; },
+            set: function (fn) {
+              _inner = fn
+                ? function (msg, src, line, col, err) {
+                    if (_isChunkMsg(msg)) { _triggerChunkReload(null); return true; }
+                    return fn.call(window, msg, src, line, col, err);
+                  }
+                : null;
+            }
+          });
+        } catch (e2) { /* defineProperty not supported — not critical */ }
+      })();
       window.addEventListener('error', function(e) {
         // Path 1: resource load error on a SCRIPT or LINK element.
         if (e.target && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK')) {

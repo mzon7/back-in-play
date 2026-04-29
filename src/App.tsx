@@ -1,8 +1,7 @@
 // @refresh reset
-import React, { Fragment, Suspense } from "react";
+import { Fragment, Suspense } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { OAuthCallback } from "./components/OAuthCallback";
-import { supabase } from "./lib/supabase";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
 import HomePage from "./features/home-page-injury-snapshots/components/HomePage";

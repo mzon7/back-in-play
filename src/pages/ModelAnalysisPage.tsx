@@ -406,7 +406,8 @@ function useBacktestSummaries() {
 }
 
 /** Lazy-load bets for a specific league key (for bankroll chart) */
-function useBacktestBetsForLeague(leagueKey: string | null) {
+// @ts-ignore unused
+function _useBacktestBetsForLeague(leagueKey: string | null) {
   return useQuery<BacktestBet[]>({
     queryKey: ["backtest-bets", leagueKey],
     enabled: !!leagueKey,
@@ -1284,7 +1285,8 @@ function LeagueStatTable({ allData, modelMeta, summaries }: { allData: Record<st
   );
 }
 
-function HistoricalBacktest() {
+// @ts-ignore unused
+function _HistoricalBacktest() {
   const { data, isLoading: betsLoading } = useBacktestBets();
   const allBetsRaw = data?.bets ?? [];
   const [minEv, setMinEv] = useState(0);
@@ -1652,7 +1654,8 @@ function useAllModelPredictions() {
   });
 }
 
-const MODEL_CONFIG_PASSWORD = "sonic_77";
+// @ts-ignore unused
+const _MODEL_CONFIG_PASSWORD = "sonic_77";
 
 function TodaysBets() {
   const { data: allPredictions = [], isLoading } = useAllModelPredictions();

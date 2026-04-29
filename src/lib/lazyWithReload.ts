@@ -7,7 +7,7 @@ import type React from "react";
  * broken blank screen.  Uses the same 30-second throttle as the index.html
  * inline handler so rapid reload loops are avoided.
  */
-export function lazyWithReload<T extends React.ComponentType<unknown>>(
+export function lazyWithReload<T extends React.ComponentType<any>>(
   factory: () => Promise<{ default: T }>,
 ) {
   return lazy(() =>
