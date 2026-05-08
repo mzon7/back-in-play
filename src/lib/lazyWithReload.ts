@@ -17,7 +17,11 @@ export function lazyWithReload<T extends React.ComponentType<any>>(
       const now = Date.now();
       if (!last || now - parseInt(last, 10) > 30000) {
         sessionStorage.setItem(key, String(now));
-        window.location.reload();
+        // Use a cache-busting URL so the browser is forced to fetch fresh HTML
+        // with updated chunk hashes instead of serving the stale cached page.
+        const base = window.location.href.split("?")[0].split("#")[0];
+        const hash = window.location.hash || "";
+        window.location.replace(base + "?_cr=" + now + hash);
       }
       // Never resolves — reload fires before React needs the module.
       return new Promise<{ default: T }>(() => {});

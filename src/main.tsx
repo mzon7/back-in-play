@@ -16,9 +16,16 @@ import "./index.css";
 // Returns a cleanup function — called once at module load (not in a component).
 installFrontendErrorCapture(supabase, "back_in_play_");
 
-// The main bundle loaded successfully — clear the stale-deploy reload throttle
-// so any future chunk-load failure in a new session gets a fresh reload attempt.
-try { sessionStorage.removeItem("bip_chunk_reload"); } catch (_) {}
+// The main bundle loaded successfully.  Only clear the stale-deploy reload
+// throttle if sufficient time has passed (> 30 s), so a cache-busting reload
+// that re-serves the same stale HTML cannot spin in an infinite reload loop.
+try {
+  const _ck = "bip_chunk_reload";
+  const _last = sessionStorage.getItem(_ck);
+  if (_last && Date.now() - parseInt(_last, 10) > 30000) {
+    sessionStorage.removeItem(_ck);
+  }
+} catch (_) {}
 
 // Unregister any stale service worker registrations left over from the previous
 // VitePWA-based deployment. Call update() first with a catch so the browser's
