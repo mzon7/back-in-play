@@ -96,6 +96,9 @@
         // Path 1: resource load error on a SCRIPT or LINK element.
         if (e.target && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK')) {
           var src = e.target.src || e.target.href || '';
+          // Trigger reload for any /assets/ chunk or any module script failure.
+          // This covers both the stable main.js entry and legacy hashed chunks that
+          // may be referenced by browsers with old cached HTML.
           if (src.indexOf('/assets/') !== -1 || (e.target.tagName === 'SCRIPT' && e.target.type === 'module')) {
             _triggerChunkReload(e);
             return;
