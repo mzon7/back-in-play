@@ -56,3 +56,6 @@
 
 ## Learned: index-BDYRx88a.js (2026-05-08)
 - The code diff shows concrete changes in `lazyWithReload.ts` and `main.tsx` that address the error by ensuring the page reloads correctly and preventing an infinite loop caused by stale HTML.
+
+## Learned: index-BDYRx88a.js (2026-05-15)
+- The code diff shows a change in the order of rules in `vercel.json`, which directly addresses the caching issue causing the TypeError.

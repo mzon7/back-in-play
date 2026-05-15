@@ -248,3 +248,8 @@
 - Error: Error messages (most recent):
 - Attempted: 1 fix(es), verdict: The code diff shows concrete changes in `lazyWithReload.ts` and `main.tsx` that address the error by ensuring the page reloads correctly and preventing an infinite loop caused by stale HTML.
 - Status: unresolved
+
+## [2026-05-15 12:34] Unresolved: index-BDYRx88a.js
+- Error: Error messages (most recent):
+- Attempted: 1 fix(es), verdict: The code diff shows a change in the order of rules in `vercel.json`, which directly addresses the caching issue causing the TypeError.
+- Status: unresolved
