@@ -59,3 +59,6 @@
 
 ## Learned: index-BDYRx88a.js (2026-05-15)
 - The code diff shows a change in the order of rules in `vercel.json`, which directly addresses the caching issue causing the TypeError.
+
+## Learned: unhandledrejection (2026-05-19)
+- The code diff shows that new error suppression guards were added to handle the `isAcquireTimeout` error, addressing the original issue.
