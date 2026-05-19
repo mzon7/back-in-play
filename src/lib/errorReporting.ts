@@ -48,6 +48,9 @@ export function reportSelfHealError(
     msgLower.includes("an unknown error occurred when fetching the script") ||
     /script\s+https?:\/\/\S+\s+load\s+failed/i.test(payload.errorMessage)
   ) return;
+  // Supabase realtime pool tries to set `isAcquireTimeout` on a frozen error object.
+  // This is a third-party library bug — suppress it everywhere.
+  if (msgLower.includes("isacquiretimeout")) return;
   // Empty-message unhandledrejection events are browser-internal artifacts (SW updates,
   // aborted navigations). Real app errors always have a non-empty message.
   if (!payload.errorMessage.trim() && payload.source === "unhandledrejection") return;
@@ -238,6 +241,14 @@ export function installFrontendErrorCapture(
       allText.includes("failed to fetch dynamically imported module") ||
       allText.includes("unable to preload css")
     ) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    // Suppress Supabase realtime connection pool timeout errors. The library tries to
+    // set `isAcquireTimeout = true` on a frozen/non-extensible Error object, which
+    // throws a TypeError. This is a third-party library bug, not an application error.
+    if (message.includes("isAcquireTimeout") || allText.includes("isacquiretimeout")) {
       event.preventDefault();
       event.stopImmediatePropagation();
       return;
